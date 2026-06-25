@@ -142,7 +142,7 @@ export default function App() {
 
   const fetchGames = async () => {
     setIsLoading(true);
-    // Added currency and chip_value to select query
+    // Added poker_now_url and is_active to select query
     const { data, error } = await supabase
       .from('sessions')
       .select(`
@@ -150,6 +150,8 @@ export default function App() {
         date,
         currency,
         chip_value,
+        poker_now_url,
+        is_active,
         ledger ( player_name, buy_in, cash_out, currency, is_bank )
       `)
       .order('date', { ascending: false });
@@ -162,6 +164,8 @@ export default function App() {
         date: session.date,
         currency: session.currency || 'USD',
         chipValue: Number(session.chip_value) || 1,
+        pokerNowUrl: session.poker_now_url || '',
+        isActive: session.is_active !== false,
         entries: session.ledger.map(entry => ({
           name: entry.player_name,
           buyIn: Number(entry.buy_in),
@@ -213,7 +217,7 @@ export default function App() {
     
     const { data: sessionData, error: sessionError } = await supabase
       .from('sessions')
-      .insert([{ date, currency: globalCurrency, chip_value: 1 }])
+      .insert([{ date, currency: globalCurrency, chip_value: 1, is_active: true }])
       .select()
       .single();
 
@@ -244,7 +248,7 @@ export default function App() {
       
       const { data: sessionData, error: sessionError } = await supabase
         .from('sessions')
-        .insert([{ date, currency: globalCurrency, chip_value: 1 }])
+        .insert([{ date, currency: globalCurrency, chip_value: 1, is_active: false }])
         .select()
         .single();
         
@@ -276,7 +280,13 @@ export default function App() {
     setGames(games.map(g => g.id === updatedGame.id ? updatedGame : g));
 
     await supabase.from('sessions')
-      .update({ date: updatedGame.date, currency: updatedGame.currency, chip_value: updatedGame.chipValue })
+      .update({ 
+        date: updatedGame.date, 
+        currency: updatedGame.currency, 
+        chip_value: updatedGame.chipValue,
+        poker_now_url: updatedGame.pokerNowUrl,
+        is_active: updatedGame.isActive
+      })
       .eq('id', updatedGame.id);
       
     await supabase.from('ledger').delete().eq('session_id', updatedGame.id);
@@ -657,9 +667,10 @@ function GamesList({ games, onCreate, onFileUpload, onEdit, exchangeRates, globa
             <div 
               key={game.id} 
               onClick={() => onEdit(game.id)}
-              className="bg-slate-900 border border-slate-800 p-5 rounded-xl cursor-pointer hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-900/10 transition-all group"
+              className="bg-slate-900 border border-slate-800 p-5 rounded-xl cursor-pointer hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-900/10 transition-all group relative overflow-hidden"
             >
-              <div className="flex justify-between items-start mb-4">
+              <div className={`absolute top-0 left-0 w-1 h-full ${game.isActive ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]' : 'bg-slate-700'}`}></div>
+              <div className="flex justify-between items-start mb-4 ml-2">
                 <div>
                   <h3 className="font-bold text-slate-200">{new Date(game.date).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}</h3>
                   <div className="flex items-center gap-2 mt-1">
@@ -675,7 +686,7 @@ function GamesList({ games, onCreate, onFileUpload, onEdit, exchangeRates, globa
                   <AlertCircle className="w-5 h-5 text-rose-500" />
                 )}
               </div>
-              <div className="flex justify-between items-center text-sm mt-6 pt-4 border-t border-slate-800/50">
+              <div className="flex justify-between items-center text-sm mt-6 pt-4 border-t border-slate-800/50 ml-2">
                 <div className="flex flex-col">
                   <span className="text-xs text-slate-500 uppercase tracking-wider">Pot Size</span>
                   <span className="font-semibold text-slate-200">{formatFiat(potFiat, globalCurrency)}</span>
@@ -904,7 +915,7 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
   };
 
   const handleAddRow = () => {
-    const newEntries = [...entries, { name: '', buyIn: 0, buyOut: 0, stack: 0 }];
+    const newEntries = [...entries, { name: '', buyIn: 0, buyOut: 0, stack: 0, currency: 'USD' }];
     setEntries(newEntries);
   };
 
@@ -923,6 +934,11 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
     const newValue = Math.max(0, currentValue + amount); 
     handleEntryChange(index, field, newValue);
   };
+
+  const activeCurrenciesInGame = useMemo(() => {
+     const set = new Set(entries.filter(e => e.name.trim() !== '').map(e => e.currency || gameCurrency));
+     return Array.from(set);
+  }, [entries, gameCurrency]);
 
   return (
     <div className="space-y-6 animate-in slide-in-from-right-4 duration-300 relative">
@@ -1020,6 +1036,17 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
                       </div>
                     </div>
                   </div>
+                  
+                  <div className="pt-4 border-t border-slate-800">
+                    <label className="block text-xs font-medium text-slate-500 mb-1">Poker Now Link</label>
+                    <input 
+                      type="url"
+                      placeholder="https://www.pokernow.club/games/..."
+                      value={game.pokerNowUrl || ''}
+                      onChange={(e) => onSave({ ...game, pokerNowUrl: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm outline-none focus:border-emerald-500"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -1074,36 +1101,56 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
       )}
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-4"> 
         <div className="flex items-center gap-4">
-          <button onClick={handleSaveAndClose} className="p-2 bg-emerald-600/20 hover:bg-emerald-600/40 rounded-full transition-colors text-emerald-400">
+          <button onClick={handleSaveAndClose} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors text-slate-300">
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-bold text-slate-100">Session Ledger</h2>
-            <button 
-              onClick={() => setShowSettings(true)}
-              className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-md transition-colors"
-              title="Settings"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
+          <div>
+            <div className="flex items-center gap-3">
+              <h2 className="text-2xl font-bold text-slate-100">Session Ledger</h2>
+              {/* Poker Now Link & Glow */}
+              {game.pokerNowUrl && (
+                <a
+                  href={game.pokerNowUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`transition-all duration-500 flex items-center justify-center p-1.5 rounded-lg ${
+                    game.isActive 
+                      ? 'text-emerald-400 bg-emerald-500/10 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)]' 
+                      : 'text-rose-400 bg-rose-500/10 drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]'
+                  }`}
+                  title={game.isActive ? "Open Poker Now Table (Active)" : "Open Poker Now Table (Closed)"}
+                >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+                      <path d="M12 12l2.5-3.5A2.5 2.5 0 0 0 12 6a2.5 2.5 0 0 0-2.5 2.5L12 12z"></path>
+                    </svg>
+                  </a>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-3 self-start sm:self-auto">
+
+          <div className="flex items-center gap-3">
+          {/* Active Session Slider */}
+          <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg">
+             <span className={`text-sm font-semibold transition-colors ${game.isActive ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {game.isActive ? 'Live' : 'Closed'}
+             </span>
+             <button
+                onClick={() => onSave({ ...game, isActive: !game.isActive })}
+                className={`w-12 h-6 rounded-full transition-colors relative ${game.isActive ? 'bg-emerald-500' : 'bg-rose-500'}`}
+              >
+                <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${game.isActive ? 'translate-x-7' : 'translate-x-1'}`} />
+              </button>
+          </div>
+
           <button 
-            onClick={handleSaveAndClose}
-            className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+            onClick={() => setShowSettings(!showSettings)}
+            className={`p-2.5 rounded-lg transition-colors border ${showSettings ? 'bg-indigo-500/20 border-indigo-500 text-indigo-400' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'}`}
           >
-            <CheckCircle2 className="w-4 h-4" />
-            Save Session
-          </button>
-          <button 
-            onClick={onDelete}
-            className="text-rose-400 hover:text-rose-300 hover:bg-rose-400/10 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
-          >
-            <Trash2 className="w-4 h-4" />
-            Delete
+            <Settings className="w-5 h-5" />
           </button>
         </div>
       </div>
@@ -1141,15 +1188,18 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
           </div>
           
           <div className="overflow-x-auto">
+            <style>{`
+              input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+            `}</style>
             <table className="w-full text-left">
               <thead>
-                <tr className="bg-slate-900 text-slate-400 text-sm border-b border-slate-800">
-                  <th className="p-4 font-medium min-w-[150px]">Player Name</th>
-                  <th className="p-4 font-medium text-center min-w-[140px]" title="Chips Bought In">Buy Ins (🪙)</th>
-                  <th className="p-4 font-medium text-center min-w-[140px]" title="Chips removed mid-game">Buy Outs (🪙)</th>
-                  <th className="p-4 font-medium text-center min-w-[100px]" title="Chips held at end of game">Current Stack</th>
-                  <th className="p-4 font-medium text-right min-w-[80px]">Net Chips</th>
-                  <th className="p-4 w-10"></th>
+                <tr className="bg-slate-900 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                  <th className="p-3 font-medium min-w-[150px]">Player Name</th>
+                  <th className="p-3 font-medium text-center min-w-[140px]" title="Chips Bought In">Buy Ins (🪙)</th>
+                  <th className="p-3 font-medium text-center min-w-[140px]" title="Chips removed mid-game">Buy Outs (🪙)</th>
+                  <th className="p-3 font-medium text-center min-w-[100px]" title="Chips held at end of game">Current Stack</th>
+                  <th className="p-3 font-medium text-right min-w-[80px]">Net Chips</th>
+                  <th className="p-3 w-10"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
@@ -1159,14 +1209,23 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
                   
                   return (
                     <tr key={index} className="hover:bg-slate-800/20 group">
-                      <td className="p-3">
-                        <input 
-                          type="text" 
-                          placeholder="Player name..."
-                          value={entry.name}
-                          onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
-                        />
+                      <td className="p-3 min-w-[200px]">
+                        <div className="relative flex items-center">
+                          <input 
+                            type="text" 
+                            placeholder="Player name..."
+                            value={entry.name}
+                            onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-3 pr-16 py-2 text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
+                          />
+                          <select
+                            value={entry.currency || 'USD'}
+                            onChange={(e) => handleEntryChange(index, 'currency', e.target.value)}
+                            className="absolute right-2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 rounded text-[10px] font-bold px-1.5 py-1 outline-none cursor-pointer appearance-none hover:bg-indigo-500/20 transition-colors uppercase"
+                          >
+                            {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-slate-900 text-slate-200">{c}</option>)}
+                          </select>
+                        </div>
                       </td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-1">
@@ -1254,7 +1313,7 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
 
         {/* Settlement Panel */}
         <div className="lg:col-span-1">
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl h-full flex flex-col">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl h-full flex flex-col min-h-[400px]">
             <div className="p-5 border-b border-slate-800 bg-slate-950/50 flex flex-col gap-4">
               <div className="flex justify-between items-start gap-2">
                 <div>
