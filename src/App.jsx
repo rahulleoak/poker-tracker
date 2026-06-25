@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import { 
   LayoutDashboard, 
   History, 
@@ -15,28 +16,10 @@ import {
   TrendingDown
 } from 'lucide-react';
 
-// --- MOCK DATA ---
-const INITIAL_GAMES = [
-  {
-    id: 'game-1',
-    date: '2026-06-15',
-    entries: [
-      { name: 'Mike', buyIn: 100, cashOut: 350 },
-      { name: 'Sarah', buyIn: 100, cashOut: 0 },
-      { name: 'John', buyIn: 200, cashOut: 50 },
-      { name: 'Emma', buyIn: 50, cashOut: 50 },
-    ]
-  },
-  {
-    id: 'game-2',
-    date: '2026-06-22',
-    entries: [
-      { name: 'Mike', buyIn: 200, cashOut: 0 },
-      { name: 'Sarah', buyIn: 100, cashOut: 450 },
-      { name: 'John', buyIn: 150, cashOut: 0 },
-    ]
-  }
-];
+// --- SUPABASE INIT ---
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // --- POKER NOW CSV PARSER ---
 function parsePokerNowCSV(text) {
@@ -106,10 +89,44 @@ function parsePokerNowCSV(text) {
 }
 
 export default function App() {
-  const [games, setGames] = useState(INITIAL_GAMES);
+  const [games, setGames] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+
+  // --- FETCH DATA ---
+  useEffect(() => {
+    fetchGames();
+  }, []);
+
+  const fetchGames = async () => {
+    setIsLoading(true);
+    const { data, error } = await supabase
+      .from('sessions')
+      .select(`
+        id,
+        date,
+        ledger ( player_name, buy_in, cash_out )
+      `)
+      .order('date', { ascending: false });
+
+    if (error) {
+      console.error("Error fetching data:", error);
+    } else {
+      const formattedGames = data.map(session => ({
+        id: session.id,
+        date: session.date,
+        entries: session.ledger.map(entry => ({
+          name: entry.player_name,
+          buyIn: Number(entry.buy_in),
+          cashOut: Number(entry.cash_out)
+        }))
+      }));
+      setGames(formattedGames);
+    }
+    setIsLoading(false);
+  };
 
   // --- DERIVED STATS (ALL-TIME) ---
   const playerStats = useMemo(() => {
@@ -133,17 +150,29 @@ export default function App() {
   }, [games]);
 
   // --- HANDLERS ---
-  const handleCreateGame = () => {
-    const newGame = {
-      id: `game-${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
-      entries: [
-        { name: '', buyIn: 0, cashOut: 0 },
-        { name: '', buyIn: 0, cashOut: 0 }
-      ]
-    };
-    setGames([newGame, ...games]);
-    setEditingGameId(newGame.id);
+  const handleCreateGame = async () => {
+    const date = new Date().toISOString().split('T')[0];
+    
+    // 1. Insert new session
+    const { data: sessionData, error: sessionError } = await supabase
+      .from('sessions')
+      .insert([{ date }])
+      .select()
+      .single();
+
+    if (sessionError) return console.error(sessionError);
+
+    // 2. Insert blank ledger entries linked to the session
+    const initialEntries = [
+      { session_id: sessionData.id, player_name: 'Player 1', buy_in: 0, cash_out: 0 },
+      { session_id: sessionData.id, player_name: 'Player 2', buy_in: 0, cash_out: 0 }
+    ];
+
+    await supabase.from('ledger').insert(initialEntries);
+    
+    // 3. Reload and switch to edit mode
+    await fetchGames();
+    setEditingGameId(sessionData.id);
     setSelectedPlayer(null);
   };
 
@@ -152,37 +181,88 @@ export default function App() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const text = e.target.result;
       const parsedEntries = parsePokerNowCSV(text);
       
-      const newGame = {
-        id: `game-${Date.now()}`,
-        date: file.lastModified ? new Date(file.lastModified).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-        entries: parsedEntries.length > 0 ? parsedEntries : [
-          { name: '', buyIn: 0, cashOut: 0 },
-          { name: '', buyIn: 0, cashOut: 0 }
-        ]
-      };
+      const date = file.lastModified ? new Date(file.lastModified).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
       
-      setGames([newGame, ...games]);
-      setEditingGameId(newGame.id);
+      // 1. Create Session
+      const { data: sessionData, error: sessionError } = await supabase
+        .from('sessions')
+        .insert([{ date }])
+        .select()
+        .single();
+        
+      if(sessionError) return console.error(sessionError);
+
+      // 2. Create Ledger Entries
+      const dbEntries = (parsedEntries.length > 0 ? parsedEntries : [
+        { name: 'Player 1', buyIn: 0, cashOut: 0 },
+        { name: 'Player 2', buyIn: 0, cashOut: 0 }
+      ]).map(entry => ({
+        session_id: sessionData.id,
+        player_name: entry.name.trim() || 'Unknown',
+        buy_in: entry.buyIn || 0,
+        cash_out: entry.cashOut || 0
+      }));
+
+      await supabase.from('ledger').insert(dbEntries);
+      
+      // 3. Reload
+      await fetchGames();
+      setEditingGameId(sessionData.id);
       setSelectedPlayer(null);
     };
     reader.readAsText(file);
     event.target.value = null;
   };
 
-  const handleUpdateGame = (updatedGame) => {
+  const handleUpdateGame = async (updatedGame) => {
+    // Optimistic UI update
     setGames(games.map(g => g.id === updatedGame.id ? updatedGame : g));
+
+    // 1. Update session date
+    await supabase.from('sessions').update({ date: updatedGame.date }).eq('id', updatedGame.id);
+
+    // 2. Overwrite ledger: Delete old, insert new
+    await supabase.from('ledger').delete().eq('session_id', updatedGame.id);
+    
+    const validEntries = updatedGame.entries
+      .filter(e => e.name.trim() !== '' || e.buyIn > 0 || e.cashOut > 0)
+      .map(e => ({
+        session_id: updatedGame.id,
+        player_name: e.name.trim() || 'Unknown Player',
+        buy_in: e.buyIn || 0,
+        cash_out: e.cashOut || 0
+      }));
+
+    if (validEntries.length > 0) {
+      await supabase.from('ledger').insert(validEntries);
+    }
   };
 
-  const handleDeleteGame = (id) => {
+  const handleDeleteGame = async (id) => {
+    // Optimistic UI update
     setGames(games.filter(g => g.id !== id));
     if (editingGameId === id) setEditingGameId(null);
+
+    // Delete from DB (Ledger entries cascade delete automatically)
+    await supabase.from('sessions').delete().eq('id', id);
   };
 
   // --- RENDERERS ---
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-emerald-400">
+        <div className="animate-pulse flex flex-col items-center gap-4">
+          <DollarSign className="w-12 h-12" />
+          <p className="font-bold tracking-widest uppercase">Syncing with Supabase...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
       {/* Navbar */}
@@ -360,7 +440,6 @@ function PlayerProfile({ playerName, games, onBack }) {
     </div>
   );
 }
-
 
 // ==========================================
 // COMPONENT: DASHBOARD
@@ -594,24 +673,25 @@ function GameEditor({ game, onSave, onBack, onDelete }) {
     const newEntries = [...entries];
     newEntries[index][field] = value;
     setEntries(newEntries);
-    onSave({ ...game, date, entries: newEntries });
   };
 
   const handleAddRow = () => {
     const newEntries = [...entries, { name: '', buyIn: 0, cashOut: 0 }];
     setEntries(newEntries);
-    onSave({ ...game, date, entries: newEntries });
   };
 
   const handleRemoveRow = (index) => {
     const newEntries = entries.filter((_, i) => i !== index);
     setEntries(newEntries);
-    onSave({ ...game, date, entries: newEntries });
   };
 
   const handleDateChange = (e) => {
     setDate(e.target.value);
-    onSave({ ...game, date: e.target.value, entries });
+  };
+
+  const handleSaveAndClose = () => {
+    onSave({ ...game, date, entries });
+    onBack();
   };
 
   return (
@@ -620,7 +700,7 @@ function GameEditor({ game, onSave, onBack, onDelete }) {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-slate-200">
+          <button onClick={handleSaveAndClose} className="p-2 bg-emerald-600/20 hover:bg-emerald-600/40 rounded-full transition-colors text-emerald-400">
             <ChevronLeft className="w-5 h-5" />
           </button>
           <div>
@@ -635,13 +715,22 @@ function GameEditor({ game, onSave, onBack, onDelete }) {
             </div>
           </div>
         </div>
-        <button 
-          onClick={onDelete}
-          className="text-rose-400 hover:text-rose-300 hover:bg-rose-400/10 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 self-start sm:self-auto"
-        >
-          <Trash2 className="w-4 h-4" />
-          Delete Session
-        </button>
+        <div className="flex items-center gap-3 self-start sm:self-auto">
+          <button 
+            onClick={handleSaveAndClose}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            Save Session
+          </button>
+          <button 
+            onClick={onDelete}
+            className="text-rose-400 hover:text-rose-300 hover:bg-rose-400/10 px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -701,7 +790,7 @@ function GameEditor({ game, onSave, onBack, onDelete }) {
                         <input 
                           type="number" 
                           min="0"
-                          value={entry.buyIn || ''}
+                          value={entry.buyIn === 0 ? '' : entry.buyIn}
                           onChange={(e) => handleEntryChange(index, 'buyIn', e.target.value === '' ? 0 : Number(e.target.value))}
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 outline-none focus:border-emerald-500 transition-all"
                         />
@@ -710,13 +799,13 @@ function GameEditor({ game, onSave, onBack, onDelete }) {
                         <input 
                           type="number" 
                           min="0"
-                          value={entry.cashOut || ''}
+                          value={entry.cashOut === 0 ? '' : entry.cashOut}
                           onChange={(e) => handleEntryChange(index, 'cashOut', e.target.value === '' ? 0 : Number(e.target.value))}
                           className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 outline-none focus:border-emerald-500 transition-all"
                         />
                       </td>
                       <td className={`p-3 text-right font-bold ${net > 0 ? 'text-emerald-400' : net < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
-                        {net > 0 ? '+' : ''}{net}
+                        {net > 0 ? '+' : ''}{net === 0 ? '$0' : net}
                       </td>
                       <td className="p-3 text-right">
                         <button 
