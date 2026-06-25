@@ -10,7 +10,9 @@ import {
   ArrowRight,
   Trash2,
   ChevronLeft,
-  Upload
+  Upload,
+  TrendingUp,
+  TrendingDown
 } from 'lucide-react';
 
 // --- MOCK DATA ---
@@ -44,7 +46,6 @@ function parsePokerNowCSV(text) {
   const players = {}; 
 
   const getPlayer = (rawName) => {
-    // Poker now names are often "Name @ hashID", we just want the name
     const cleanName = rawName.split(' @ ')[0].trim();
     if (!players[cleanName]) {
       players[cleanName] = { buyIn: 0, cashOut: 0 };
@@ -54,9 +55,7 @@ function parsePokerNowCSV(text) {
 
   const header = lines[0].toLowerCase();
   
-  // STRATEGY 1: POKER NOW LEDGER EXPORT
   if (header.includes('player_nickname') && header.includes('buy_in')) {
-    // Regex splits by comma but ignores commas inside quotes
     const headerCols = lines[0].toLowerCase().split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
     const nameIdx = headerCols.indexOf('player_nickname');
     const buyInIdx = headerCols.indexOf('buy_in');
@@ -76,33 +75,19 @@ function parsePokerNowCSV(text) {
         }
       }
     }
-  } 
-  // STRATEGY 2: POKER NOW HAND HISTORY LOG EXPORT
-  else {
+  } else {
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
-      
-      // Approvals (Initial buy in)
       let m = line.match(/approved the player "([^"]+)" participation with a stack of (\d+)/i);
       if (m) getPlayer(m[1]).buyIn += parseInt(m[2], 10);
-
-      // Add-ons (Requested stack)
       m = line.match(/approved the player "([^"]+)" requested stack of (\d+)/i);
       if (m) getPlayer(m[1]).buyIn += parseInt(m[2], 10);
-
-      // Sits down (Buy in)
       m = line.match(/player "([^"]+)" sits down with a stack of (\d+)/i);
       if (m) getPlayer(m[1]).buyIn += parseInt(m[2], 10);
-
-      // Quits (Cash out)
       m = line.match(/player "([^"]+)" quits the game with a stack of (\d+)/i);
       if (m) getPlayer(m[1]).cashOut += parseInt(m[2], 10);
-
-      // Stands up (Cash out)
       m = line.match(/player "([^"]+)" stands up with a stack of (\d+)/i);
       if (m) getPlayer(m[1]).cashOut += parseInt(m[2], 10);
-
-      // Admin manual stack update
       m = line.match(/updated the player "([^"]+)" stack from (\d+) to (\d+)/i);
       if (m) {
         const from = parseInt(m[2], 10);
@@ -124,6 +109,7 @@ export default function App() {
   const [games, setGames] = useState(INITIAL_GAMES);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
 
   // --- DERIVED STATS (ALL-TIME) ---
   const playerStats = useMemo(() => {
@@ -158,6 +144,7 @@ export default function App() {
     };
     setGames([newGame, ...games]);
     setEditingGameId(newGame.id);
+    setSelectedPlayer(null);
   };
 
   const handleFileUpload = (event) => {
@@ -171,7 +158,6 @@ export default function App() {
       
       const newGame = {
         id: `game-${Date.now()}`,
-        // Use file creation date if available, otherwise today
         date: file.lastModified ? new Date(file.lastModified).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
         entries: parsedEntries.length > 0 ? parsedEntries : [
           { name: '', buyIn: 0, cashOut: 0 },
@@ -181,9 +167,10 @@ export default function App() {
       
       setGames([newGame, ...games]);
       setEditingGameId(newGame.id);
+      setSelectedPlayer(null);
     };
     reader.readAsText(file);
-    event.target.value = null; // reset input
+    event.target.value = null;
   };
 
   const handleUpdateGame = (updatedGame) => {
@@ -207,16 +194,16 @@ export default function App() {
           </div>
           <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
             <button 
-              onClick={() => { setActiveTab('dashboard'); setEditingGameId(null); }}
+              onClick={() => { setActiveTab('dashboard'); setEditingGameId(null); setSelectedPlayer(null); }}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                activeTab === 'dashboard' && !editingGameId ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                activeTab === 'dashboard' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
               }`}
             >
               <LayoutDashboard className="w-4 h-4" />
               <span className="hidden sm:inline">Dashboard</span>
             </button>
             <button 
-              onClick={() => { setActiveTab('games'); setEditingGameId(null); }}
+              onClick={() => { setActiveTab('games'); setEditingGameId(null); setSelectedPlayer(null); }}
               className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
                 (activeTab === 'games' || editingGameId) ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
               }`}
@@ -236,8 +223,14 @@ export default function App() {
             onBack={() => setEditingGameId(null)}
             onDelete={() => handleDeleteGame(editingGameId)}
           />
+        ) : selectedPlayer ? (
+          <PlayerProfile 
+            playerName={selectedPlayer} 
+            games={games} 
+            onBack={() => setSelectedPlayer(null)} 
+          />
         ) : activeTab === 'dashboard' ? (
-          <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlay} />
+          <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlay} onPlayerClick={setSelectedPlayer} />
         ) : (
           <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} />
         )}
@@ -247,16 +240,138 @@ export default function App() {
 }
 
 // ==========================================
+// COMPONENT: PLAYER PROFILE
+// ==========================================
+function PlayerProfile({ playerName, games, onBack }) {
+  // Extract all sessions this player participated in
+  const playerHistory = useMemo(() => {
+    return games
+      .map(game => {
+        const entry = game.entries.find(e => e.name === playerName);
+        if (entry) {
+          return {
+            date: game.date,
+            gameId: game.id,
+            buyIn: entry.buyIn,
+            cashOut: entry.cashOut,
+            net: entry.cashOut - entry.buyIn
+          };
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.date) - new Date(a.date)); // Newest first
+  }, [playerName, games]);
+
+  const totalNet = playerHistory.reduce((sum, s) => sum + s.net, 0);
+  const totalBuyIn = playerHistory.reduce((sum, s) => sum + s.buyIn, 0);
+  const avgBuyIn = playerHistory.length > 0 ? (totalBuyIn / playerHistory.length).toFixed(0) : 0;
+  
+  const bestSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => (prev.net > current.net) ? prev : current) : null;
+  const worstSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => (prev.net < current.net) ? prev : current) : null;
+
+  return (
+    <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+      <div className="flex items-center gap-4">
+        <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-slate-200">
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <div>
+          <h2 className="text-3xl font-bold text-slate-100">{playerName}'s Profile</h2>
+          <p className="text-slate-500">Player Analytics & History</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <MetricCard 
+          title="All-Time Net" 
+          value={totalNet === 0 ? '$0' : totalNet > 0 ? `+$${totalNet}` : `-$${Math.abs(totalNet)}`} 
+          valueColor={totalNet > 0 ? "text-emerald-400" : totalNet < 0 ? "text-rose-400" : "text-slate-200"}
+          icon={totalNet > 0 ? <TrendingUp className="w-5 h-5 text-emerald-400" /> : <TrendingDown className="w-5 h-5 text-rose-400" />} 
+        />
+        <MetricCard title="Games Played" value={playerHistory.length} icon={<History className="w-5 h-5 text-blue-400" />} />
+        <MetricCard title="Avg. Buy-in" value={`$${avgBuyIn}`} icon={<DollarSign className="w-5 h-5 text-slate-400" />} />
+        <MetricCard 
+          title="Total ROI" 
+          value={totalBuyIn > 0 ? `${((totalNet / totalBuyIn) * 100).toFixed(1)}%` : '0%'} 
+          valueColor={totalNet > 0 ? "text-emerald-400" : totalNet < 0 ? "text-rose-400" : "text-slate-200"}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+          <div className="p-5 border-b border-slate-800 bg-slate-950/50">
+            <h3 className="font-bold text-slate-100">Session History</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-slate-900 text-slate-400 text-sm border-b border-slate-800">
+                  <th className="p-4 font-medium">Date</th>
+                  <th className="p-4 font-medium text-right">Buy In</th>
+                  <th className="p-4 font-medium text-right">Cash Out</th>
+                  <th className="p-4 font-medium text-right">Net</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/50">
+                {playerHistory.map((session, index) => (
+                  <tr key={index} className="hover:bg-slate-800/20 transition-colors">
+                    <td className="p-4 font-medium text-slate-300">
+                      {new Date(session.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                    </td>
+                    <td className="p-4 text-right text-slate-400">${session.buyIn}</td>
+                    <td className="p-4 text-right text-slate-400">${session.cashOut}</td>
+                    <td className={`p-4 text-right font-bold ${session.net > 0 ? 'text-emerald-400' : session.net < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                      {session.net > 0 ? '+' : ''}{session.net}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
+            <h3 className="font-bold text-slate-100 mb-4 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-emerald-400" /> Best Session
+            </h3>
+            {bestSession ? (
+              <div>
+                <p className="text-3xl font-bold text-emerald-400 mb-1">+{bestSession.net}</p>
+                <p className="text-sm text-slate-500">{new Date(bestSession.date).toLocaleDateString()}</p>
+              </div>
+            ) : <p className="text-slate-500">No data.</p>}
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
+            <h3 className="font-bold text-slate-100 mb-4 flex items-center gap-2">
+              <TrendingDown className="w-5 h-5 text-rose-400" /> Worst Session
+            </h3>
+            {worstSession ? (
+              <div>
+                <p className="text-3xl font-bold text-rose-400 mb-1">{worstSession.net}</p>
+                <p className="text-sm text-slate-500">{new Date(worstSession.date).toLocaleDateString()}</p>
+              </div>
+            ) : <p className="text-slate-500">No data.</p>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ==========================================
 // COMPONENT: DASHBOARD
 // ==========================================
-function Dashboard({ stats, totalSessions, totalMoney }) {
+function Dashboard({ stats, totalSessions, totalMoney, onPlayerClick }) {
   const topWinner = stats.length > 0 && stats[0].net > 0 ? stats[0] : null;
   const topLoser = stats.length > 0 && stats[stats.length - 1].net < 0 ? stats[stats.length - 1] : null;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       
-      {/* Top Level Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard title="Total Sessions" value={totalSessions} icon={<History className="w-5 h-5 text-blue-400" />} />
         <MetricCard title="Total Money Wagered" value={`$${totalMoney}`} icon={<DollarSign className="w-5 h-5 text-emerald-400" />} />
@@ -275,10 +390,10 @@ function Dashboard({ stats, totalSessions, totalMoney }) {
         />
       </div>
 
-      {/* Leaderboard */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
         <div className="p-6 border-b border-slate-800 flex justify-between items-center">
           <h2 className="text-lg font-bold text-slate-100">All-Time Leaderboard</h2>
+          <p className="text-xs text-slate-500">Click a player for details</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -299,9 +414,15 @@ function Dashboard({ stats, totalSessions, totalMoney }) {
                 </tr>
               ) : (
                 stats.map((player, index) => (
-                  <tr key={player.name} className="hover:bg-slate-800/20 transition-colors">
+                  <tr 
+                    key={player.name} 
+                    onClick={() => onPlayerClick(player.name)}
+                    className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                  >
                     <td className="p-4 font-medium text-slate-500">#{index + 1}</td>
-                    <td className="p-4 font-semibold text-slate-200">{player.name}</td>
+                    <td className="p-4 font-semibold text-slate-200 group-hover:text-emerald-400 transition-colors flex items-center gap-2">
+                      {player.name}
+                    </td>
                     <td className="p-4 text-right text-slate-400">{player.gamesPlayed}</td>
                     <td className="p-4 text-right text-slate-400">${player.buyIn}</td>
                     <td className="p-4 text-right text-slate-400">${player.cashOut}</td>
