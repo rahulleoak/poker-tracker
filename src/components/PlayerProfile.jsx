@@ -1,0 +1,128 @@
+import React, { useMemo } from 'react';
+import { ChevronLeft, TrendingUp, TrendingDown, History, DollarSign } from 'lucide-react';
+import MetricCard from './MetricCard';
+import { formatFiat } from '../utils/formatters';
+
+export default function PlayerProfile({ playerName, games, exchangeRates, globalCurrency, onBack }) {
+  const playerHistory = useMemo(() => {
+    return games
+      .map(game => {
+        const entry = game.entries.find(e => e.name === playerName);
+        if (entry) {
+          const totalCashOutChips = entry.buyOut + entry.stack;
+          const netChips = totalCashOutChips - entry.buyIn;
+          
+          const rateToGlobal = exchangeRates ? (exchangeRates[globalCurrency] / exchangeRates[game.currency]) : 1;
+          const multiplier = game.chipValue * rateToGlobal;
+
+          return {
+            date: game.date,
+            gameId: game.id,
+            buyInFiat: entry.buyIn * multiplier,
+            cashOutFiat: totalCashOutChips * multiplier,
+            netFiat: netChips * multiplier
+          };
+        }
+        return null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.date) - new Date(a.date)); 
+  }, [playerName, games, exchangeRates, globalCurrency]);
+
+  const totalNet = playerHistory.reduce((sum, s) => sum + s.netFiat, 0);
+  const totalBuyIn = playerHistory.reduce((sum, s) => sum + s.buyInFiat, 0);
+  const avgBuyIn = playerHistory.length > 0 ? (totalBuyIn / playerHistory.length) : 0;
+  
+  const bestSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => (prev.netFiat > current.netFiat) ? prev : current) : null;
+  const worstSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => (prev.netFiat < current.netFiat) ? prev : current) : null;
+
+  return (
+    <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
+      <div className="flex items-center gap-4">
+        <button onClick={onBack} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400 hover:text-slate-200">
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <div>
+          <h2 className="text-3xl font-bold text-slate-100">{playerName}'s Profile</h2>
+          <p className="text-slate-500">All values converted to {globalCurrency}</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <MetricCard 
+          title="All-Time Net" 
+          value={formatFiat(totalNet, globalCurrency)} 
+          valueColor={totalNet > 0 ? "text-emerald-400" : totalNet < 0 ? "text-rose-400" : "text-slate-200"}
+          icon={totalNet > 0 ? <TrendingUp className="w-5 h-5 text-emerald-400" /> : <TrendingDown className="w-5 h-5 text-rose-400" />} 
+        />
+        <MetricCard title="Games Played" value={playerHistory.length} icon={<History className="w-5 h-5 text-blue-400" />} />
+        <MetricCard title="Avg. Buy-in" value={formatFiat(avgBuyIn, globalCurrency)} icon={<DollarSign className="w-5 h-5 text-slate-400" />} />
+        <MetricCard 
+          title="Total ROI" 
+          value={totalBuyIn > 0 ? `${((totalNet / totalBuyIn) * 100).toFixed(1)}%` : '0%'} 
+          valueColor={totalNet > 0 ? "text-emerald-400" : totalNet < 0 ? "text-rose-400" : "text-slate-200"}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+          <div className="p-5 border-b border-slate-800 bg-slate-950/50">
+            <h3 className="font-bold text-slate-100">Session History</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-slate-900 text-slate-400 text-sm border-b border-slate-800">
+                  <th className="p-4 font-medium">Date</th>
+                  <th className="p-4 font-medium text-right">Buy In</th>
+                  <th className="p-4 font-medium text-right">Cash Out</th>
+                  <th className="p-4 font-medium text-right">Net</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/50">
+                {playerHistory.map((session, index) => (
+                  <tr key={index} className="hover:bg-slate-800/20 transition-colors">
+                    <td className="p-4 font-medium text-slate-300">
+                      {new Date(session.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                    </td>
+                    <td className="p-4 text-right text-slate-400">{formatFiat(session.buyInFiat, globalCurrency)}</td>
+                    <td className="p-4 text-right text-slate-400">{formatFiat(session.cashOutFiat, globalCurrency)}</td>
+                    <td className={`p-4 text-right font-bold ${session.netFiat > 0 ? 'text-emerald-400' : session.netFiat < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                      {session.netFiat > 0 ? '+' : ''}{formatFiat(session.netFiat, globalCurrency)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
+            <h3 className="font-bold text-slate-100 mb-4 flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-emerald-400" /> Best Session
+            </h3>
+            {bestSession ? (
+              <div>
+                <p className="text-3xl font-bold text-emerald-400 mb-1">+{formatFiat(bestSession.netFiat, globalCurrency)}</p>
+                <p className="text-sm text-slate-500">{new Date(bestSession.date).toLocaleDateString()}</p>
+              </div>
+            ) : <p className="text-slate-500">No data.</p>}
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
+            <h3 className="font-bold text-slate-100 mb-4 flex items-center gap-2">
+              <TrendingDown className="w-5 h-5 text-rose-400" /> Worst Session
+            </h3>
+            {worstSession ? (
+              <div>
+                <p className="text-3xl font-bold text-rose-400 mb-1">{formatFiat(worstSession.netFiat, globalCurrency)}</p>
+                <p className="text-sm text-slate-500">{new Date(worstSession.date).toLocaleDateString()}</p>
+              </div>
+            ) : <p className="text-slate-500">No data.</p>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

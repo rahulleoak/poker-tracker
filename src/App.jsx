@@ -142,7 +142,6 @@ export default function App() {
 
   const fetchGames = async () => {
     setIsLoading(true);
-    // Added poker_now_url and is_active to select query
     const { data, error } = await supabase
       .from('sessions')
       .select(`
@@ -184,7 +183,6 @@ export default function App() {
   const playerStats = useMemo(() => {
     const stats = {};
     games.forEach(game => {
-      // Calculate exchange rate multiplier for this specific game to the global dashboard currency
       const rateToGlobal = exchangeRates ? (exchangeRates[globalCurrency] / exchangeRates[game.currency]) : 1;
       const chipToFiatMultiplier = game.chipValue * rateToGlobal;
 
@@ -712,17 +710,20 @@ function GamesList({ games, onCreate, onFileUpload, onEdit, exchangeRates, globa
 // COMPONENT: GAME EDITOR & SETTLEMENTS
 // ==========================================
 function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete }) {
+  // Local state to manage edits without hitting DB on every keystroke
   const [date, setDate] = useState(game.date);
   const [gameCurrency, setGameCurrency] = useState(game.currency);
+  const [isActive, setIsActive] = useState(game.isActive);
+  const [pokerNowUrl, setPokerNowUrl] = useState(game.pokerNowUrl || '');
+  const [entries, setEntries] = useState(game.entries);
   
   const [ratioChips, setRatioChips] = useState(() => {
     if (game.chipValue === 1) return 1;
     if (game.chipValue > 0) {
       const inv = 1 / game.chipValue;
-      // If 1/chipValue is a clean integer (e.g. 0.01 -> 100), use it visually
       if (Math.abs(inv - Math.round(inv)) < 0.001) return Math.round(inv);
     }
-    return 1000; // Default multiplier for complex fractions
+    return 1000;
   });
   
   const [ratioFiat, setRatioFiat] = useState(() => {
@@ -736,11 +737,38 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
 
   const chipValue = ratioChips > 0 ? ratioFiat / ratioChips : 0;
 
-  const [entries, setEntries] = useState(game.entries);
   const [showSettings, setShowSettings] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState('general');
   const [settlementCurrency, setSettlementCurrency] = useState(game.currency);
   const [useBankBuddies, setUseBankBuddies] = useState(false);
+
+  // --- AUTO-SAVE EFFECT ---
+  const isMounted = useRef(false);
+  const onSaveRef = useRef(onSave);
+  
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
+
+  useEffect(() => {
+    if (!isMounted.current) {
+      isMounted.current = true;
+      return;
+    }
+    const timer = setTimeout(() => {
+      onSaveRef.current({
+        ...game,
+        date,
+        currency: gameCurrency,
+        chipValue,
+        isActive,
+        pokerNowUrl,
+        entries
+      });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [date, gameCurrency, chipValue, isActive, pokerNowUrl, entries, game]);
+
 
   // Derived calculations for the current session
   const { totalBuyIn, totalCashOut, isBalanced, settlements, chipsOnTable } = useMemo(() => {
@@ -770,11 +798,9 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
 
     // Calculate Settlement in Target Fiat Currency
     if (balanced) {
-      // 1. Calculate the conversion rate multiplier for Fiat cash
       const fxRate = exchangeRates ? (exchangeRates[settlementCurrency] / exchangeRates[gameCurrency]) : 1;
       const chipToTargetFiatMultiplier = chipValue * fxRate;
 
-      // 2. Map players to their Fiat balances and regional config
       let playersFiat = nets.map(p => ({
          ...p,
          fiatAmount: p.netChips * chipToTargetFiatMultiplier,
@@ -783,7 +809,6 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
       }));
       
       if (useBankBuddies) {
-          // --- TWO-PHASE BANK BUDDY ALGORITHM ---
           const zones = {};
           playersFiat.forEach(p => {
               if (!zones[p.currency]) zones[p.currency] = { currency: p.currency, players: [], bankBuddy: null, net: 0 };
@@ -795,13 +820,11 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
           const interZoneDebtors = [];
           const interZoneCreditors = [];
 
-          // Separate zones into Macro Debtors & Creditors
           Object.values(zones).forEach(zone => {
               if (zone.bankBuddy) {
                   if (zone.net < -0.01) interZoneDebtors.push({ name: zone.bankBuddy, amount: Math.abs(zone.net) });
                   else if (zone.net > 0.01) interZoneCreditors.push({ name: zone.bankBuddy, amount: zone.net });
               } else {
-                  // Fallback: If no bank buddy assigned for this zone, players settle globally as individuals
                   zone.players.forEach(p => {
                       if (p.fiatAmount < -0.01) interZoneDebtors.push({ name: p.name, amount: Math.abs(p.fiatAmount) });
                       else if (p.fiatAmount > 0.01) interZoneCreditors.push({ name: p.name, amount: p.fiatAmount });
@@ -809,7 +832,6 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
               }
           });
 
-          // PHASE 1: Cross-Border Greedy Settlement
           interZoneDebtors.sort((a,b) => b.amount - a.amount);
           interZoneCreditors.sort((a,b) => b.amount - a.amount);
 
@@ -825,15 +847,14 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
               debtor.amount -= amount;
               creditor.amount -= amount;
 
-              // Adjust the Bank Buddy's personal balance for Phase 2 based on the global payment they just made/received
               Object.values(zones).forEach(z => {
                   if (z.bankBuddy === debtor.name) {
                       const bb = z.players.find(p => p.name === debtor.name);
-                      if (bb) bb.fiatAmount += amount; // Paid out of pocket, so the zone owes them more
+                      if (bb) bb.fiatAmount += amount;
                   }
                   if (z.bankBuddy === creditor.name) {
                       const bb = z.players.find(p => p.name === creditor.name);
-                      if (bb) bb.fiatAmount -= amount; // Received global funds, so they owe the zone more
+                      if (bb) bb.fiatAmount -= amount;
                   }
               });
 
@@ -841,7 +862,6 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
               if (creditor.amount < 0.01) c++;
           }
 
-          // PHASE 2: Local Intra-Zone Greedy Settlement
           Object.values(zones).forEach(zone => {
               if (zone.bankBuddy) { 
                   let intraDebtors = zone.players.filter(p => p.fiatAmount < -0.01).map(p => ({...p, amount: Math.abs(p.fiatAmount)})).sort((a,b) => b.amount - a.amount);
@@ -866,7 +886,6 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
           });
 
       } else {
-          // --- STANDARD GREEDY ALGORITHM (Global) ---
           let debtors = playersFiat.filter(p => p.fiatAmount < -0.01).map(p => ({ ...p, amount: Math.abs(p.fiatAmount) })).sort((a,b) => b.amount - a.amount);
           let creditors = playersFiat.filter(p => p.fiatAmount > 0.01).map(p => ({ ...p, amount: p.fiatAmount })).sort((a,b) => b.amount - a.amount);
           
@@ -876,16 +895,13 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
           while (d < debtors.length && c < creditors.length) {
             let debtor = debtors[d];
             let creditor = creditors[c];
-            
             let amount = Math.min(debtor.amount, creditor.amount);
             
             if (amount > 0.01) {
               trans.push({ from: debtor.name, to: creditor.name, amount });
             }
-            
             debtor.amount -= amount;
             creditor.amount -= amount;
-            
             if (debtor.amount < 0.01) d++;
             if (creditor.amount < 0.01) c++;
           }
@@ -894,6 +910,7 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
 
     return { totalBuyIn: tBuyIn, totalCashOut: tCashOut, isBalanced: balanced, settlements: trans, chipsOnTable };
   }, [entries, chipValue, gameCurrency, settlementCurrency, exchangeRates, useBankBuddies]);
+
 
   // Handlers
   const handleEntryChange = (index, field, value) => {
@@ -905,7 +922,6 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
   const handleBankChange = (index, isBank, currency) => {
     const newEntries = [...entries];
     if (isBank) {
-        // Enforce only one bank buddy per currency region
         newEntries.forEach(e => {
             if ((e.currency || gameCurrency) === currency) e.isBank = false;
         });
@@ -915,17 +931,18 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
   };
 
   const handleAddRow = () => {
-    const newEntries = [...entries, { name: '', buyIn: 0, buyOut: 0, stack: 0, currency: 'USD' }];
-    setEntries(newEntries);
+    setEntries([...entries, { name: '', buyIn: 0, buyOut: 0, stack: 0, currency: gameCurrency, isBank: false }]);
   };
 
   const handleRemoveRow = (index) => {
-    const newEntries = entries.filter((_, i) => i !== index);
-    setEntries(newEntries);
+    setEntries(entries.filter((_, i) => i !== index));
   };
 
-  const handleSaveAndClose = () => {
-    onSave({ ...game, date, currency: gameCurrency, chipValue, entries });
+  const handleBack = () => {
+    // Force one final save just in case they click back before the debounce completes
+    onSaveRef.current({
+      ...game, date, currency: gameCurrency, chipValue, isActive, pokerNowUrl, entries
+    });
     onBack();
   };
 
@@ -1042,8 +1059,8 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
                     <input 
                       type="url"
                       placeholder="https://www.pokernow.club/games/..."
-                      value={game.pokerNowUrl || ''}
-                      onChange={(e) => onSave({ ...game, pokerNowUrl: e.target.value })}
+                      value={pokerNowUrl}
+                      onChange={(e) => setPokerNowUrl(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm outline-none focus:border-emerald-500"
                     />
                   </div>
@@ -1100,57 +1117,66 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
         </div>
       )}
 
-      {/* Header */}
+      {/* Main Single Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center gap-4"> 
         <div className="flex items-center gap-4">
-          <button onClick={handleSaveAndClose} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors text-slate-300">
+          <button onClick={handleBack} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors text-slate-300">
             <ChevronLeft className="w-5 h-5" />
           </button>
           <div>
             <div className="flex items-center gap-3">
               <h2 className="text-2xl font-bold text-slate-100">Session Ledger</h2>
               {/* Poker Now Link & Glow */}
-              {game.pokerNowUrl && (
+              {pokerNowUrl && (
                 <a
-                  href={game.pokerNowUrl}
+                  href={pokerNowUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className={`transition-all duration-500 flex items-center justify-center p-1.5 rounded-lg ${
-                    game.isActive 
+                    isActive 
                       ? 'text-emerald-400 bg-emerald-500/10 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)]' 
                       : 'text-rose-400 bg-rose-500/10 drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]'
                   }`}
-                  title={game.isActive ? "Open Poker Now Table (Active)" : "Open Poker Now Table (Closed)"}
+                  title={isActive ? "Open Poker Now Table (Active)" : "Open Poker Now Table (Closed)"}
                 >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
-                      <path d="M12 12l2.5-3.5A2.5 2.5 0 0 0 12 6a2.5 2.5 0 0 0-2.5 2.5L12 12z"></path>
-                    </svg>
-                  </a>
-                )}
-              </div>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="4" y="2" width="16" height="20" rx="2" ry="2"></rect>
+                    <path d="M12 12l2.5-3.5A2.5 2.5 0 0 0 12 6a2.5 2.5 0 0 0-2.5 2.5L12 12z"></path>
+                  </svg>
+                </a>
+              )}
             </div>
           </div>
+        </div>
 
-          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 self-start sm:self-auto">
           {/* Active Session Slider */}
           <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 px-3 py-1.5 rounded-lg">
-             <span className={`text-sm font-semibold transition-colors ${game.isActive ? 'text-emerald-400' : 'text-slate-500'}`}>
-                {game.isActive ? 'Live' : 'Closed'}
+             <span className={`text-sm font-semibold transition-colors ${isActive ? 'text-emerald-400' : 'text-slate-500'}`}>
+                {isActive ? 'Live' : 'Closed'}
              </span>
              <button
-                onClick={() => onSave({ ...game, isActive: !game.isActive })}
-                className={`w-12 h-6 rounded-full transition-colors relative ${game.isActive ? 'bg-emerald-500' : 'bg-rose-500'}`}
+                onClick={() => setIsActive(!isActive)}
+                className={`w-12 h-6 rounded-full transition-colors relative ${isActive ? 'bg-emerald-500' : 'bg-rose-500'}`}
               >
-                <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${game.isActive ? 'translate-x-7' : 'translate-x-1'}`} />
+                <div className={`w-4 h-4 rounded-full bg-white absolute top-1 transition-transform ${isActive ? 'translate-x-7' : 'translate-x-1'}`} />
               </button>
           </div>
 
           <button 
             onClick={() => setShowSettings(!showSettings)}
             className={`p-2.5 rounded-lg transition-colors border ${showSettings ? 'bg-indigo-500/20 border-indigo-500 text-indigo-400' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'}`}
+            title="Settings"
           >
             <Settings className="w-5 h-5" />
+          </button>
+
+          <button 
+            onClick={onDelete}
+            className="p-2.5 bg-slate-800 hover:bg-rose-500/20 border border-slate-700 hover:border-rose-500/50 rounded-lg text-slate-400 hover:text-rose-400 transition-colors"
+            title="Delete Session"
+          >
+            <Trash2 className="w-5 h-5" />
           </button>
         </div>
       </div>
@@ -1361,14 +1387,14 @@ function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, 
               ) : (
                 <div className="space-y-3">
                   {settlements.map((tx, i) => (
-                    <div key={i} className="flex items-center justify-between p-3 bg-slate-950 border border-slate-800 rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-rose-400 text-sm truncate max-w-[80px]">{tx.from}</span>
-                        <ArrowRight className="w-4 h-4 text-slate-600 shrink-0" />
-                        <span className="font-semibold text-emerald-400 text-sm truncate max-w-[80px]">{tx.to}</span>
+                    <div key={i} className="flex items-center justify-between p-3 bg-slate-950 border border-slate-800 rounded-lg gap-3">
+                      <div className="flex items-center gap-1 sm:gap-2 flex-1 min-w-0">
+                        <span className="font-semibold text-rose-400 text-sm truncate block" title={tx.from}>{tx.from}</span>
+                        <ArrowRight className="w-3 h-3 sm:w-4 sm:h-4 text-slate-600 shrink-0" />
+                        <span className="font-semibold text-emerald-400 text-sm truncate block" title={tx.to}>{tx.to}</span>
                       </div>
-                      <div className="flex flex-col items-end">
-                        <span className="font-bold text-slate-200">{formatFiat(tx.amount, settlementCurrency)}</span>
+                      <div className="flex flex-col items-end shrink-0 pl-2">
+                        <span className="font-bold text-slate-200 text-sm">{formatFiat(tx.amount, settlementCurrency)}</span>
                         {useBankBuddies && tx.type && (
                           <span className={`text-[9px] uppercase font-bold tracking-wider mt-0.5 ${tx.type === 'Cross-Border' ? 'text-amber-500' : 'text-blue-400'}`}>
                              {tx.type}
