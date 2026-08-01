@@ -1,5 +1,3 @@
-
-
 export default function MetricCard({ title, value, subtitle, icon, valueColor = "text-slate-100" }) {
   return (
     <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-lg relative overflow-hidden group">

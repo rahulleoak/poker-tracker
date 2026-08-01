@@ -1,5 +1,4 @@
 import { useState, useMemo, useEffect } from "react";
-
 import { LayoutDashboard, Coins, Globe, History } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { parsePokerNowCSV } from './utils/csvParser';
