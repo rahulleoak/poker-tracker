@@ -41,7 +41,7 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
       const inv = 1 / game.chipValue;
       if (Math.abs(inv - Math.round(inv)) < 0.001) return 1;
     }
-    return 1;
+    return Number((game.chipValue * 1000).toFixed(2));
   });
 
   const chipValue = ratioChips > 0 ? ratioFiat / ratioChips : 0;

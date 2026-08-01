@@ -23,6 +23,10 @@ export default function App() {
 
   const fetchGames = async () => {
     setIsLoading(true);
+    if (!supabase) {
+      setIsLoading(false);
+      return;
+    }
     const { data, error } = await supabase
       .from('sessions')
       .select(`
@@ -107,6 +111,7 @@ export default function App() {
 
   // --- HANDLERS ---
   const handleCreateGame = async () => {
+    if (!supabase) return;
     const date = new Date().toISOString().split('T')[0];
     
     const { data: sessionData, error: sessionError } = await supabase
@@ -130,6 +135,7 @@ export default function App() {
   };
 
   const handleFileUpload = (event) => {
+    if (!supabase) return;
     const file = event.target.files[0];
     if (!file) return;
 
@@ -172,6 +178,7 @@ export default function App() {
 
   const handleUpdateGame = async (updatedGame) => {
     setGames(games.map(g => g.id === updatedGame.id ? updatedGame : g));
+    if (!supabase) return;
 
     await supabase.from('sessions')
       .update({ 
@@ -204,6 +211,7 @@ export default function App() {
   const handleDeleteGame = async (id) => {
     setGames(games.filter(g => g.id !== id));
     if (editingGameId === id) setEditingGameId(null);
+    if (!supabase) return;
     await supabase.from('sessions').delete().eq('id', id);
   };
 
