@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { History, DollarSign, Users } from 'lucide-react';
 import MetricCard from './MetricCard';
 import { formatFiat } from '../utils/formatters';

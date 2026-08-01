@@ -1,6 +1,5 @@
 export function parsePokerNowCSV(text) {
-  const lines = text.split('
-').map(l => l.trim()).filter(l => l);
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   if (lines.length === 0) return [];
   const players = {}; 
 

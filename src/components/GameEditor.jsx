@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from "react";
+
 import { 
   ChevronLeft, 
   Settings, 
@@ -129,10 +130,8 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
     handleEntryChange(index, field, newValue);
   };
 
-  const activeCurrenciesInGame = useMemo(() => {
-     const set = new Set(entries.filter(e => e.name.trim() !== '').map(e => e.currency || gameCurrency));
-     return Array.from(set);
-  }, [entries, gameCurrency]);
+
+
 
   return (
     <div className="space-y-6 animate-in slide-in-from-right-4 duration-300 relative">
