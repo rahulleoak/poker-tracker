@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { ChevronLeft, TrendingUp, TrendingDown, History, DollarSign } from 'lucide-react';
 import MetricCard from './MetricCard';
 import { formatFiat } from '../utils/formatters';

@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { Upload, Plus, CheckCircle2, AlertCircle, ArrowRight, Globe } from 'lucide-react';
 import { formatFiat } from '../utils/formatters';
 
