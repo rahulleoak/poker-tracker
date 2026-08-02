@@ -36,7 +36,7 @@ export default function App() {
         chip_value,
         poker_now_url,
         is_active,
-        ledger ( player_name, buy_in, cash_out, currency, is_bank )
+        ledger ( player_name, buy_in, cash_out, currency, is_bank, hands_played, vpip_hands, pfr_hands, three_bet_opps, three_bet_hands )
       `)
       .order('date', { ascending: false });
 
@@ -56,7 +56,12 @@ export default function App() {
           buyOut: 0,
           stack: Number(entry.cash_out),
           currency: entry.currency || session.currency || 'USD',
-          isBank: Boolean(entry.is_bank)
+          isBank: Boolean(entry.is_bank),
+          handsPlayed: Number(entry.hands_played) || 0,
+          vpipHands: Number(entry.vpip_hands) || 0,
+          pfrHands: Number(entry.pfr_hands) || 0,
+          threeBetOpps: Number(entry.three_bet_opps) || 0,
+          threeBetHands: Number(entry.three_bet_hands) || 0
         }))
       }));
       setGames(formattedGames);
@@ -88,7 +93,18 @@ export default function App() {
 
       game.entries.forEach(entry => {
         if (!stats[entry.name]) {
-          stats[entry.name] = { name: entry.name, buyInFiat: 0, cashOutFiat: 0, gamesPlayed: 0, netFiat: 0 };
+          stats[entry.name] = { 
+            name: entry.name, 
+            buyInFiat: 0, 
+            cashOutFiat: 0, 
+            gamesPlayed: 0, 
+            netFiat: 0,
+            handsPlayed: 0,
+            vpipHands: 0,
+            pfrHands: 0,
+            threeBetOpps: 0,
+            threeBetHands: 0
+          };
         }
         const totalCashOutChips = entry.buyOut + entry.stack;
         
@@ -96,6 +112,12 @@ export default function App() {
         stats[entry.name].cashOutFiat += (totalCashOutChips * chipToFiatMultiplier);
         stats[entry.name].netFiat += ((totalCashOutChips - entry.buyIn) * chipToFiatMultiplier);
         stats[entry.name].gamesPlayed += 1;
+
+        stats[entry.name].handsPlayed += entry.handsPlayed || 0;
+        stats[entry.name].vpipHands += entry.vpipHands || 0;
+        stats[entry.name].pfrHands += entry.pfrHands || 0;
+        stats[entry.name].threeBetOpps += entry.threeBetOpps || 0;
+        stats[entry.name].threeBetHands += entry.threeBetHands || 0;
       });
     });
     return Object.values(stats).sort((a, b) => b.netFiat - a.netFiat);
@@ -163,7 +185,12 @@ export default function App() {
         buy_in: entry.buyIn || 0,
         cash_out: (entry.buyOut || 0) + (entry.stack || 0),
         currency: globalCurrency,
-        is_bank: false
+        is_bank: false,
+        hands_played: entry.handsPlayed || 0,
+        vpip_hands: entry.vpipHands || 0,
+        pfr_hands: entry.pfrHands || 0,
+        three_bet_opps: entry.threeBetOpps || 0,
+        three_bet_hands: entry.threeBetHands || 0
       }));
 
       await supabase.from('ledger').insert(dbEntries);
@@ -200,7 +227,12 @@ export default function App() {
         buy_in: e.buyIn || 0,
         cash_out: (e.buyOut || 0) + (e.stack || 0),
         currency: e.currency || updatedGame.currency,
-        is_bank: e.isBank || false
+        is_bank: e.isBank || false,
+        hands_played: e.handsPlayed || 0,
+        vpip_hands: e.vpipHands || 0,
+        pfr_hands: e.pfrHands || 0,
+        three_bet_opps: e.threeBetOpps || 0,
+        three_bet_hands: e.threeBetHands || 0
       }));
 
     if (validEntries.length > 0) {

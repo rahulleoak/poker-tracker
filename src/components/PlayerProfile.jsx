@@ -29,6 +29,40 @@ export default function PlayerProfile({ playerName, games, exchangeRates, global
       .sort((a, b) => new Date(b.date) - new Date(a.date)); 
   }, [playerName, games, exchangeRates, globalCurrency]);
 
+  const advancedStats = useMemo(() => {
+    let handsPlayed = 0;
+    let vpipHands = 0;
+    let pfrHands = 0;
+    let threeBetOpps = 0;
+    let threeBetHands = 0;
+
+    games.forEach(game => {
+      const entry = game.entries.find(e => e.name === playerName);
+      if (entry) {
+        handsPlayed += entry.handsPlayed || 0;
+        vpipHands += entry.vpipHands || 0;
+        pfrHands += entry.pfrHands || 0;
+        threeBetOpps += entry.threeBetOpps || 0;
+        threeBetHands += entry.threeBetHands || 0;
+      }
+    });
+
+    const vpipPct = handsPlayed > 0 ? `${((vpipHands / handsPlayed) * 100).toFixed(1)}%` : '-';
+    const pfrPct = handsPlayed > 0 ? `${((pfrHands / handsPlayed) * 100).toFixed(1)}%` : '-';
+    const threeBetPct = threeBetOpps > 0 ? `${((threeBetHands / threeBetOpps) * 100).toFixed(1)}%` : '-';
+
+    return {
+      handsPlayed,
+      vpipPct,
+      pfrPct,
+      threeBetPct,
+      vpipHands,
+      pfrHands,
+      threeBetOpps,
+      threeBetHands
+    };
+  }, [playerName, games]);
+
   const totalNet = playerHistory.reduce((sum, s) => sum + s.netFiat, 0);
   const totalBuyIn = playerHistory.reduce((sum, s) => sum + s.buyInFiat, 0);
   const avgBuyIn = playerHistory.length > 0 ? (totalBuyIn / playerHistory.length) : 0;
@@ -62,6 +96,27 @@ export default function PlayerProfile({ playerName, games, exchangeRates, global
           value={totalBuyIn > 0 ? `${((totalNet / totalBuyIn) * 100).toFixed(1)}%` : '0%'} 
           valueColor={totalNet > 0 ? "text-emerald-400" : totalNet < 0 ? "text-rose-400" : "text-slate-200"}
         />
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-xl">
+        <h3 className="font-bold text-slate-100 mb-4 text-sm uppercase tracking-wider text-slate-400">Pre-flop Statistics</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <MetricCard 
+            title="VPIP" 
+            value={advancedStats.vpipPct} 
+            subtitle={advancedStats.handsPlayed > 0 ? `${advancedStats.vpipHands} / ${advancedStats.handsPlayed} hands` : 'No hands tracked'}
+          />
+          <MetricCard 
+            title="PFR" 
+            value={advancedStats.pfrPct} 
+            subtitle={advancedStats.handsPlayed > 0 ? `${advancedStats.pfrHands} / ${advancedStats.handsPlayed} hands` : 'No hands tracked'}
+          />
+          <MetricCard 
+            title="3-Bet Frequency" 
+            value={advancedStats.threeBetPct} 
+            subtitle={advancedStats.threeBetOpps > 0 ? `${advancedStats.threeBetHands} / ${advancedStats.threeBetOpps} opportunities` : 'No opportunities faced'}
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
