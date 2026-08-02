@@ -264,5 +264,5 @@ export function parsePokerNowCSV(text) {
     pfrHands: data.pfrHands || 0,
     threeBetOpps: data.threeBetOpps || 0,
     threeBetHands: data.threeBetHands || 0
-  })).filter(p => p.buyIn > 0 || p.stack > 0 || p.buyOut > 0);
+  })).filter(p => p.buyIn > 0 || p.stack > 0 || p.buyOut > 0 || p.handsPlayed > 0);
 }
