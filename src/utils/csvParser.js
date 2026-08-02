@@ -1,3 +1,10 @@
+/**
+ * Parses PokerNow CSV log lines chronologically to compute pre-flop player statistics.
+ * Tracks total hands played, VPIP hands, PFR hands, 3-Bet opportunities, and 3-Bet hands.
+ *
+ * @param {string} csvText - Raw CSV content from a PokerNow log export.
+ * @returns {Record<string, { handsPlayed: number, vpipHands: number, pfrHands: number, threeBetOpps: number, threeBetHands: number }>}
+ */
 export function parsePokerNowLogStats(csvText) {
   const lines = csvText.split('\n').map(l => l.trim()).filter(l => l);
   if (lines.length === 0) return {};
@@ -171,6 +178,13 @@ export function parsePokerNowLogStats(csvText) {
   return playerStats;
 }
 
+/**
+ * Parses a PokerNow CSV file (either standard ledger CSV or log history CSV)
+ * into player financial entries and aggregated pre-flop statistics.
+ *
+ * @param {string} text - Raw CSV content.
+ * @returns {Array<{ name: string, buyIn: number, buyOut: number, stack: number, handsPlayed: number, vpipHands: number, pfrHands: number, threeBetOpps: number, threeBetHands: number }>}
+ */
 export function parsePokerNowCSV(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   if (lines.length === 0) return [];
