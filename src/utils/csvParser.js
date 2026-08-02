@@ -18,17 +18,21 @@ export function parsePokerNowCSV(text) {
     const nameIdx = headerCols.indexOf('player_nickname');
     const buyInIdx = headerCols.indexOf('buy_in');
     const buyOutIdx = headerCols.indexOf('buy_out');
+    const stackIdx = headerCols.indexOf('stack');
 
     if (nameIdx > -1 && buyInIdx > -1) {
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
-        if (cols.length > Math.max(nameIdx, buyInIdx, buyOutIdx)) {
-          const buyIn = parseFloat(cols[buyInIdx]) || 0;
-          const cashOut = parseFloat(cols[buyOutIdx]) || 0;
-          if (buyIn > 0 || cashOut > 0) {
+        if (cols.length > nameIdx) {
+          const buyIn = (buyInIdx > -1 && cols.length > buyInIdx) ? (parseFloat(cols[buyInIdx]) || 0) : 0;
+          const buyOut = (buyOutIdx > -1 && cols.length > buyOutIdx) ? (parseFloat(cols[buyOutIdx]) || 0) : 0;
+          const stack = (stackIdx > -1 && cols.length > stackIdx) ? (parseFloat(cols[stackIdx]) || 0) : 0;
+
+          if (buyIn > 0 || buyOut > 0 || stack > 0) {
             const p = getPlayer(cols[nameIdx]);
             p.buyIn += buyIn;
-            p.stack += cashOut;
+            p.buyOut += buyOut;
+            p.stack += stack;
           }
         }
       }
