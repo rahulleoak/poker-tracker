@@ -1,6 +1,9 @@
 import { useState, useMemo, useEffect, Component } from "react";
 import { LayoutDashboard, Coins, Globe, History, Play } from 'lucide-react';
 import { supabase } from './utils/supabase';
+import { AuthProvider } from './components/AuthContext';
+import UserMenu from './components/UserMenu';
+import AuthModal from './components/AuthModal';
 import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
 import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries } from './utils/sessionMapper';
@@ -50,12 +53,13 @@ class ErrorBoundary extends Component {
   }
 }
 
-export default function App() {
+export function AppContent() {
   const [games, setGames] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   
   // FX Rates & Global Config
   const [exchangeRates, setExchangeRates] = useState(null);
@@ -462,6 +466,8 @@ export default function App() {
                   <span className="hidden sm:inline">Hand Replayer</span>
                 </button>
               </div>
+
+              <UserMenu onOpenAuthModal={() => setAuthModalOpen(true)} />
             </div>
           </div>
         </nav>
@@ -493,7 +499,16 @@ export default function App() {
             <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
           )}
         </main>
+        <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
       </div>
     </ErrorBoundary>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
