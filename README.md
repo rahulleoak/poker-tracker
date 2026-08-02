@@ -25,6 +25,17 @@ A premium, interactive poker session tracker featuring a sleek, dark card-based 
 * **Playback Controls**: Step through manually (Next/Prev), restart, or use the automated autoplay feature to watch the action unfold.
 * Complete live action log and hand commentary panels for key stage breakdowns.
 
+### 🔐 Supabase User Authentication
+* Secure sign-in and account creation via Email/Password, Magic Link tokens, or OAuth providers (Google, Discord).
+* User profiles with customizable avatars and display names.
+
+### 🔗 External Player ID Linking & Ledger Backfilling
+* Claim and link external player handles across platforms (PokerNow, ClubGG, PokerStars).
+* Automatic backfilling of historical ledger stats to your authenticated profile upon claiming an ID.
+
+### 🛡️ Row-Level Security (RLS) & Session Privacy
+* Database-level security ensuring sessions and hands are private to participants, group members, or owners.
+
 ---
 
 ## Getting Started
@@ -40,7 +51,18 @@ A premium, interactive poker session tracker featuring a sleek, dark card-based 
    npm install
    ```
 
-2. Run the development server:
+2. Configure Supabase Environment Variables:
+   Create a `.env` file in the root directory with your Supabase project credentials:
+   ```env
+   VITE_SUPABASE_URL=your_supabase_project_url
+   VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+   *(Note: If Supabase variables are omitted, the app runs in local offline mode.)*
+
+3. Database Setup:
+   Run the SQL migration script located in `supabase_schema.sql` on your Supabase project database to set up profiles, external player IDs, aliases, and Row-Level Security (RLS) policies.
+
+4. Run the development server:
    ```bash
    npm run dev
    ```
