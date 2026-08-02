@@ -1,3 +1,10 @@
+/**
+ * Parses PokerNow CSV ledger files or log files to extract player buy-ins, buy-outs, and stacks.
+ * It correctly identifies and parses 'player_nickname', 'buy_in', 'buy_out', and 'stack' columns.
+ *
+ * @param {string} text - The raw CSV or log text from PokerNow.
+ * @returns {Array<{name: string, buyIn: number, buyOut: number, stack: number}>} Array of player stats.
+ */
 export function parsePokerNowCSV(text) {
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   if (lines.length === 0) return [];
