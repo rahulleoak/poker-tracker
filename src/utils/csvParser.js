@@ -1,3 +1,111 @@
+function parseCSVLine(line) {
+  if (!line) return [];
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+function normalizeHeader(str) {
+  return str.replace(/^["'\s]+|["'\s]+$/g, '').toLowerCase();
+}
+
+function findColIndexInHeaders(headersNormalized, aliases) {
+  return headersNormalized.findIndex(col => aliases.includes(col));
+}
+
+function getLogEntryText(parsedCols, rawLine, logTextIdx) {
+  if (logTextIdx > -1 && parsedCols[logTextIdx] !== undefined) {
+    return parsedCols[logTextIdx];
+  }
+  const matchCol = parsedCols.find(col =>
+    /-- starting hand|Player stacks:|folds|checks|calls|raises|approved|sits down|quits|stands up|cashed out|updated the player/i.test(col)
+  );
+  if (matchCol !== undefined) return matchCol;
+  return parsedCols[1] || parsedCols[0] || rawLine;
+}
+
+function parseLogStructure(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) {
+    return { chronoLines: [], logTextIdx: -1 };
+  }
+
+  const firstLineCols = parseCSVLine(lines[0]);
+  const firstLineColsNorm = firstLineCols.map(normalizeHeader);
+
+  const logTextIdx = findColIndexInHeaders(firstLineColsNorm, ['entry', 'action', 'text', 'log', 'log_entry', 'message', 'entry_text']);
+  const timeIdx = findColIndexInHeaders(firstLineColsNorm, ['created_at', 'at', 'timestamp', 'date', 'time']);
+  const idIdx = findColIndexInHeaders(firstLineColsNorm, ['entry_id', 'id', 'order']);
+
+  const isHeader = logTextIdx > -1 || timeIdx > -1 || idIdx > -1 ||
+    firstLineColsNorm.some(c => ['buy_in', 'buyin', 'player', 'nickname', 'player_nickname'].includes(c));
+
+  const dataLines = isHeader ? lines.slice(1) : lines;
+  if (dataLines.length === 0) {
+    return { chronoLines: [], logTextIdx };
+  }
+
+  let isReverse = true;
+  if (dataLines.length >= 2) {
+    const firstCols = parseCSVLine(dataLines[0]);
+    const lastCols = parseCSVLine(dataLines[dataLines.length - 1]);
+
+    let determined = false;
+    if (timeIdx > -1 && firstCols[timeIdx] !== undefined && lastCols[timeIdx] !== undefined) {
+      const t1 = Date.parse(firstCols[timeIdx]);
+      const t2 = Date.parse(lastCols[timeIdx]);
+      if (!isNaN(t1) && !isNaN(t2) && t1 !== t2) {
+        isReverse = t1 > t2;
+        determined = true;
+      }
+    }
+    if (!determined && idIdx > -1 && firstCols[idIdx] !== undefined && lastCols[idIdx] !== undefined) {
+      const id1 = parseFloat(firstCols[idIdx]);
+      const id2 = parseFloat(lastCols[idIdx]);
+      if (!isNaN(id1) && !isNaN(id2) && id1 !== id2) {
+        isReverse = id1 > id2;
+        determined = true;
+      }
+    }
+    if (!determined) {
+      const firstText = dataLines[0];
+      const lastText = dataLines[dataLines.length - 1];
+      if (/quits|stands up|Player stacks/i.test(firstText) && /participation|sits down|requested stack/i.test(lastText)) {
+        isReverse = true;
+      } else if (/participation|sits down|requested stack/i.test(firstText) && /quits|stands up|Player stacks/i.test(lastText)) {
+        isReverse = false;
+      } else {
+        const h1 = firstText.match(/-- starting hand #(\d+)/i);
+        const h2 = lastText.match(/-- starting hand #(\d+)/i);
+        if (h1 && h2) {
+          isReverse = parseInt(h1[1], 10) > parseInt(h2[1], 10);
+        }
+      }
+    }
+  }
+
+  const chronoLines = isReverse ? dataLines.slice().reverse() : dataLines.slice();
+  return { chronoLines, logTextIdx };
+}
+
 /**
  * Parses PokerNow CSV log lines chronologically to compute pre-flop player statistics.
  * Tracks total hands played, VPIP hands, PFR hands, 3-Bet opportunities, and 3-Bet hands.
@@ -8,16 +116,14 @@
 export function parsePokerNowLogStats(csvText) {
   if (!csvText || typeof csvText !== 'string') return {};
 
-  const lines = csvText.split('\n').map(l => l.trim()).filter(l => l);
-  if (lines.length === 0) return {};
+  const { chronoLines, logTextIdx } = parseLogStructure(csvText);
+  if (chronoLines.length === 0) return {};
 
-  // Reverse the logs so we process them in chronological order
-  const dataLines = lines.slice(1).reverse();
   const playerStats = {};
 
   const getPlayer = (name) => {
     if (!name || typeof name !== 'string') return null;
-    const cleanName = name.trim();
+    const cleanName = name.split(' @ ')[0].replace(/^"|"$/g, '').trim();
     if (!cleanName) return null;
 
     if (!playerStats[cleanName]) {
@@ -42,39 +148,11 @@ export function parsePokerNowLogStats(csvText) {
   const threeBetInHand = new Set();
   const actedPreflop3Bet = new Set();
 
-  // Robust CSV line parser
-  const parseCSVLine = (line) => {
-    if (!line) return [];
-    const result = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (char === ',' && !inQuotes) {
-        result.push(current);
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    result.push(current);
-    return result;
-  };
+  for (const rawLine of chronoLines) {
+    const cols = parseCSVLine(rawLine);
+    const entry = getLogEntryText(cols, rawLine, logTextIdx);
 
-  for (const line of dataLines) {
-    const cols = parseCSVLine(line);
-    if (cols.length < 1) continue;
-    const entry = cols[0] || '';
-
-    // Hand starts
-    const startingMatch = entry.match(/-- starting hand #(\d+) \(id: ([^)]+)\)/);
+    const startingMatch = entry.match(/-- starting hand #(\d+)(?:\s+\(id: ([^)]+)\))?/i);
     if (startingMatch) {
       handActive = true;
       preflop = true;
@@ -87,11 +165,11 @@ export function parsePokerNowLogStats(csvText) {
       continue;
     }
 
-    // Capture active players
-    if (handActive && entry.startsWith('Player stacks:')) {
-      const parts = entry.substring('Player stacks:'.length).split('|').map(p => p.trim());
+    if (handActive && entry.includes('Player stacks:')) {
+      const entryPart = entry.substring(entry.indexOf('Player stacks:') + 'Player stacks:'.length);
+      const parts = entryPart.split('|').map(p => p.trim());
       for (const part of parts) {
-        const match = part.match(/#\d+\s+"?(.+?)\s+@\s+([^"\s()]+)"?/);
+        const match = part.match(/#\d+\s+"?(.+?)(?:\s+@\s+[^\s"()]+)?"?\s*\(([-+]?\d+)\)/);
         if (match) {
           const name = match[1].replace(/^"|"$/g, '').trim();
           const p = getPlayer(name);
@@ -101,13 +179,12 @@ export function parsePokerNowLogStats(csvText) {
       continue;
     }
 
-    // Determine street shifts
     if (handActive && preflop) {
-      if (entry.startsWith('Flop:') || 
-          entry.startsWith('Turn:') || 
-          entry.startsWith('River:') ||
-          entry.startsWith('Undealt cards:') ||
-          entry.startsWith('-- ending hand') ||
+      if (entry.includes('Flop:') || 
+          entry.includes('Turn:') || 
+          entry.includes('River:') ||
+          entry.includes('Undealt cards:') ||
+          entry.includes('-- ending hand') ||
           entry.includes('shows a ') ||
           entry.includes('collected ') ||
           entry.includes('returned to ')) {
@@ -115,8 +192,7 @@ export function parsePokerNowLogStats(csvText) {
       }
     }
 
-    // Hand ends
-    if (handActive && entry.startsWith('-- ending hand')) {
+    if (handActive && entry.includes('-- ending hand')) {
       for (const name of vpipInHand) {
         const p = getPlayer(name);
         if (p) p.vpipHands++;
@@ -137,9 +213,8 @@ export function parsePokerNowLogStats(csvText) {
       continue;
     }
 
-    // Parse preflop actions
     if (handActive && preflop) {
-      const foldMatch = entry.match(/^"?(.+?)\s+@\s+([^"\s]+)"?\s+folds/);
+      const foldMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+folds/i);
       if (foldMatch) {
         const name = foldMatch[1].replace(/^"|"$/g, '').trim();
         if (raiseCount === 2 && !actedPreflop3Bet.has(name)) {
@@ -149,7 +224,7 @@ export function parsePokerNowLogStats(csvText) {
         continue;
       }
 
-      const checkMatch = entry.match(/^"?(.+?)\s+@\s+([^"\s]+)"?\s+checks/);
+      const checkMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+checks/i);
       if (checkMatch) {
         const name = checkMatch[1].replace(/^"|"$/g, '').trim();
         if (raiseCount === 2 && !actedPreflop3Bet.has(name)) {
@@ -159,7 +234,7 @@ export function parsePokerNowLogStats(csvText) {
         continue;
       }
 
-      const callMatch = entry.match(/^"?(.+?)\s+@\s+([^"\s]+)"?\s+calls\s+(\d+)/);
+      const callMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+calls\s+(\d+)/i);
       if (callMatch) {
         const name = callMatch[1].replace(/^"|"$/g, '').trim();
         vpipInHand.add(name);
@@ -170,7 +245,7 @@ export function parsePokerNowLogStats(csvText) {
         continue;
       }
 
-      const raiseMatch = entry.match(/^"?(.+?)\s+@\s+([^"\s]+)"?\s+raises\s+to\s+(\d+)/);
+      const raiseMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+raises\s+to\s+(\d+)/i);
       if (raiseMatch) {
         const name = raiseMatch[1].replace(/^"|"$/g, '').trim();
         vpipInHand.add(name);
@@ -200,7 +275,7 @@ export function parsePokerNowLogStats(csvText) {
 export function parsePokerNowCSV(text) {
   if (!text || typeof text !== 'string') return [];
 
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   if (lines.length === 0) return [];
   const players = {}; 
 
@@ -225,57 +300,20 @@ export function parsePokerNowCSV(text) {
     return players[cleanName];
   };
 
-  const normalizeHeader = (str) => str.replace(/^["'\s]+|["'\s]+$/g, '').toLowerCase();
-
-  // Check if header line contains comma-separated columns or matches ledger columns
-  const parseCSVLine = (line) => {
-    if (!line) return [];
-    const result = [];
-    let current = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      if (char === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (char === ',' && !inQuotes) {
-        result.push(current);
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    result.push(current);
-    return result;
-  };
-
-  const headerColsRaw = lines[0].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+  const headerColsRaw = parseCSVLine(lines[0]);
   const headerColsNormalized = headerColsRaw.map(normalizeHeader);
 
-  // Column aliases mapping
-  const findColIndex = (aliases) => {
-    return headerColsNormalized.findIndex(col => aliases.includes(col));
-  };
+  const nameIdx = findColIndexInHeaders(headerColsNormalized, ['player_nickname', 'nickname', 'player', 'name', 'player_name']);
+  const buyInIdx = findColIndexInHeaders(headerColsNormalized, ['buy_in', 'buyin', 'buy_ins']);
+  const buyOutIdx = findColIndexInHeaders(headerColsNormalized, ['buy_out', 'buyout', 'cash_out', 'cashout', 'buy_outs']);
+  const stackIdx = findColIndexInHeaders(headerColsNormalized, ['stack', 'current_stack', 'ending_stack', 'net', 'ending_stack_amount']);
 
-  const nameIdx = findColIndex(['player_nickname', 'nickname', 'player', 'name', 'player_name']);
-  const buyInIdx = findColIndex(['buy_in', 'buyin', 'buy_ins']);
-  const buyOutIdx = findColIndex(['buy_out', 'buyout', 'cash_out', 'cashout', 'buy_outs']);
-  const stackIdx = findColIndex(['stack', 'current_stack', 'ending_stack', 'net', 'ending_stack_amount']);
-  const logTextIdx = findColIndex(['entry', 'action', 'text', 'log', 'log_entry', 'message', 'entry_text']);
-
-  // Only treat as a ledger CSV if header has columns matching player name AND buy_in/buy_out/stack, and NOT entry_id/entry/action
   const hasLogColumns = headerColsNormalized.some(col => col === 'entry' || col === 'entry_id' || col === 'action' || col === 'created_at');
   const isLedgerCSV = !hasLogColumns && headerColsRaw.length > 1 && nameIdx > -1 && (buyInIdx > -1 || buyOutIdx > -1 || stackIdx > -1);
 
   if (isLedgerCSV) {
-    const parseCols = (line) => line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
-
     for (let i = 1; i < lines.length; i++) {
-      const cols = parseCols(lines[i]);
+      const cols = parseCSVLine(lines[i]).map(c => c.replace(/^"|"$/g, '').trim());
       if (cols.length > nameIdx) {
         const buyIn = (buyInIdx > -1 && cols.length > buyInIdx) ? (parseFloat(cols[buyInIdx]) || 0) : 0;
         const buyOut = (buyOutIdx > -1 && cols.length > buyOutIdx) ? (parseFloat(cols[buyOutIdx]) || 0) : 0;
@@ -292,58 +330,12 @@ export function parsePokerNowCSV(text) {
       }
     }
   } else {
-    // Determine whether log CSV is in reverse chronological order (newest first)
-    const rawDataLines = lines.slice(1);
-    const timeIdx = findColIndex(['created_at', 'at', 'timestamp', 'date', 'time']);
-    const idIdx = findColIndex(['entry_id', 'id', 'order']);
-    
-    let isReverse = true;
-    if (rawDataLines.length >= 2) {
-      const firstCols = parseCSVLine(rawDataLines[0]);
-      const lastCols = parseCSVLine(rawDataLines[rawDataLines.length - 1]);
-      
-      let determined = false;
-      if (timeIdx > -1 && firstCols[timeIdx] !== undefined && lastCols[timeIdx] !== undefined) {
-        const t1 = Date.parse(firstCols[timeIdx]);
-        const t2 = Date.parse(lastCols[timeIdx]);
-        if (!isNaN(t1) && !isNaN(t2) && t1 !== t2) {
-          isReverse = t1 > t2;
-          determined = true;
-        }
-      }
-      if (!determined && idIdx > -1 && firstCols[idIdx] !== undefined && lastCols[idIdx] !== undefined) {
-        const id1 = parseFloat(firstCols[idIdx]);
-        const id2 = parseFloat(lastCols[idIdx]);
-        if (!isNaN(id1) && !isNaN(id2) && id1 !== id2) {
-          isReverse = id1 > id2;
-          determined = true;
-        }
-      }
-      if (!determined) {
-        const firstText = rawDataLines[0];
-        const lastText = rawDataLines[rawDataLines.length - 1];
-        if (/quits|stands up|Player stacks/i.test(firstText) && /participation|sits down|requested stack/i.test(lastText)) {
-          isReverse = true;
-        } else if (/participation|sits down|requested stack/i.test(firstText) && /quits|stands up|Player stacks/i.test(lastText)) {
-          isReverse = false;
-        }
-      }
-    }
-
-    const logLines = isReverse ? rawDataLines.reverse() : rawDataLines;
+    const { chronoLines, logTextIdx } = parseLogStructure(text);
     const currentTableStack = {};
     
-    for (const rawLine of logLines) {
+    for (const rawLine of chronoLines) {
       const parsedCols = parseCSVLine(rawLine);
-      let line = rawLine;
-      if (logTextIdx > -1 && parsedCols[logTextIdx] !== undefined) {
-        line = parsedCols[logTextIdx];
-      } else {
-        const matchCol = parsedCols.find(col =>
-          /approved|player|sits down|quits|stands up|cashed out|Player stacks:|updated the player/i.test(col)
-        );
-        line = matchCol !== undefined ? matchCol : (parsedCols[1] || parsedCols[0] || rawLine);
-      }
+      const line = getLogEntryText(parsedCols, rawLine, logTextIdx);
 
       let m = line.match(/approved the player "?([^"]+?)"? participation with a stack of (\d+)/i);
       if (m) {
@@ -378,7 +370,6 @@ export function parsePokerNowCSV(text) {
         continue;
       }
 
-      // Cash-out / Buy-out requests & actions
       m = line.match(/approved the player "?([^"]+?)"? cash out request (?:for|of) (\d+)/i) ||
           line.match(/approved the player "?([^"]+?)"? cash out request.*stack of (\d+)/i) ||
           line.match(/player "?([^"]+?)"? cashed out with (\d+)/i) ||
@@ -432,13 +423,11 @@ export function parsePokerNowCSV(text) {
         continue;
       }
 
-      // Capture final player stacks from the final "Player stacks:" entry in chronological log
       if (line.includes('Player stacks:')) {
         const entryPart = line.substring(line.indexOf('Player stacks:') + 'Player stacks:'.length);
         const parts = entryPart.split('|').map(p => p.trim());
         for (const part of parts) {
-          // Format: #1 "Name @ ID" (stack) or #1 Name @ ID (stack)
-          const match = part.match(/#\d+\s+"?(.+?)(?:\s+@\s+[^"\s()]+)?"?\s*\(([-+]?\d+)\)/);
+          const match = part.match(/#\d+\s+"?(.+?)(?:\s+@\s+[^\s"()]+)?"?\s*\(([-+]?\d+)\)/);
           if (match) {
             const name = match[1].replace(/^"|"$/g, '').trim();
             const stackVal = parseInt(match[2], 10);
@@ -458,7 +447,6 @@ export function parsePokerNowCSV(text) {
     }
   }
 
-  // Also extract log stats if log lines are present in the text
   if (text.includes('-- starting hand') || text.includes('Player stacks:')) {
     const stats = parsePokerNowLogStats(text);
     for (const [cleanName, s] of Object.entries(stats)) {

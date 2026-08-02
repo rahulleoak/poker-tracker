@@ -165,3 +165,44 @@ test('parsePokerNowLogStats handles invalid input gracefully', () => {
   assert.deepStrictEqual(parsePokerNowLogStats(''), {});
   assert.deepStrictEqual(parsePokerNowLogStats(42), {});
 });
+
+test('parsePokerNowLogStats with entry in column 1 and timestamps', () => {
+  const logCSV = `entry_id,entry,created_at
+3,"-- ending hand #1",2023-01-01T01:05:00Z
+2,"Alice @ a1 calls 10",2023-01-01T01:02:00Z
+1,"Player stacks: #1 ""Alice @ a1"" (100)",2023-01-01T01:01:00Z
+0,"-- starting hand #1 (id: h1)",2023-01-01T01:00:00Z
+`;
+  const stats = parsePokerNowLogStats(logCSV);
+  assert.ok(stats.Alice);
+  assert.strictEqual(stats.Alice.handsPlayed, 1);
+  assert.strictEqual(stats.Alice.vpipHands, 1);
+});
+
+test('parsePokerNowLogStats with player actions lacking player_id suffix', () => {
+  const logCSV = `entry,created_at
+"-- ending hand #1",2023-01-01T01:05:00Z
+"Bob calls 10",2023-01-01T01:02:00Z
+"Player stacks: #1 Bob (100)",2023-01-01T01:01:00Z
+"-- starting hand #1 (id: h1)",2023-01-01T01:00:00Z
+`;
+  const stats = parsePokerNowLogStats(logCSV);
+  assert.ok(stats.Bob);
+  assert.strictEqual(stats.Bob.handsPlayed, 1);
+  assert.strictEqual(stats.Bob.vpipHands, 1);
+});
+
+test('parsePokerNowLogStats with chronological log input', () => {
+  const logCSV = `entry_id,entry,created_at
+0,"-- starting hand #1 (id: h1)",2023-01-01T01:00:00Z
+1,"Player stacks: #1 ""Charlie @ c1"" (100)",2023-01-01T01:01:00Z
+2,"Charlie @ c1 raises to 30",2023-01-01T01:02:00Z
+3,"-- ending hand #1",2023-01-01T01:05:00Z
+`;
+  const stats = parsePokerNowLogStats(logCSV);
+  assert.ok(stats.Charlie);
+  assert.strictEqual(stats.Charlie.handsPlayed, 1);
+  assert.strictEqual(stats.Charlie.vpipHands, 1);
+  assert.strictEqual(stats.Charlie.pfrHands, 1);
+});
+
