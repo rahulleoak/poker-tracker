@@ -24,7 +24,11 @@ function parseCSVLine(line) {
 }
 
 function normalizeHeader(str) {
-  return str.replace(/^["'\s]+|["'\s]+$/g, '').toLowerCase();
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 function findColIndexInHeaders(headersNormalized, aliases) {
@@ -371,10 +375,10 @@ export function parsePokerNowCSV(text) {
       }
 
       m = line.match(/approved the player "?([^"]+?)"? cash out request (?:for|of) (\d+)/i) ||
-          line.match(/approved the player "?([^"]+?)"? cash out request.*stack of (\d+)/i) ||
+          line.match(/approved the player "?([^"]+?)"? cash out request.*?stack of (\d+)/i) ||
           line.match(/player "?([^"]+?)"? cashed out with (\d+)/i) ||
           line.match(/player "?([^"]+?)"? cashed out for (\d+)/i) ||
-          line.match(/player "?([^"]+?)"? cashed out.*(\d+)/i);
+          line.match(/player "?([^"]+?)"? cashed out\D*(\d+)/i);
       if (m) {
         const p = getPlayer(m[1]);
         if (p) {

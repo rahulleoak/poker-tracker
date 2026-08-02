@@ -206,3 +206,40 @@ test('parsePokerNowLogStats with chronological log input', () => {
   assert.strictEqual(stats.Charlie.pfrHands, 1);
 });
 
+test('parsePokerNowCSV handles spaced and hyphenated column headers', () => {
+  const csv = `"Player Nickname","Buy In","Cash Out","Ending Stack"
+"Alice @ 123",100,50,60
+`;
+  const results = parsePokerNowCSV(csv);
+  assert.strictEqual(results.length, 1);
+  const alice = results[0];
+  assert.strictEqual(alice.name, 'Alice');
+  assert.strictEqual(alice.buyIn, 100);
+  assert.strictEqual(alice.buyOut, 50);
+  assert.strictEqual(alice.stack, 60);
+
+  const hyphenCsv = `player-nickname,buy-in,buy-out,current-stack
+"Bob @ 456",200,30,170
+`;
+  const hyphenResults = parsePokerNowCSV(hyphenCsv);
+  assert.strictEqual(hyphenResults.length, 1);
+  const bob = hyphenResults[0];
+  assert.strictEqual(bob.name, 'Bob');
+  assert.strictEqual(bob.buyIn, 200);
+  assert.strictEqual(bob.buyOut, 30);
+  assert.strictEqual(bob.stack, 170);
+});
+
+test('parsePokerNowCSV parses multi-digit cash out amounts in log entries', () => {
+  const logCSV = `entry_id,entry,created_at
+2,"player ""Alice @ a1"" cashed out 200",2023-01-01T01:30:00Z
+1,"approved the player ""Alice @ a1"" participation with a stack of 300",2023-01-01T01:00:00Z
+`;
+  const results = parsePokerNowCSV(logCSV);
+  assert.strictEqual(results.length, 1);
+  const alice = results[0];
+  assert.strictEqual(alice.name, 'Alice');
+  assert.strictEqual(alice.buyIn, 300);
+  assert.strictEqual(alice.buyOut, 200);
+});
+
