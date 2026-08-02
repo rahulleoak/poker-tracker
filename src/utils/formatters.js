@@ -4,15 +4,20 @@ export const TOP_CURRENCIES = [
 ];
 
 // Helper to format fiat money safely
-export const formatFiat = (amount, currencyCode) => {
+export const formatFiat = (amount, currencyCode = 'USD') => {
+  const num = Number(amount);
+  const safeAmount = isNaN(num) || !isFinite(num) ? 0 : num;
+  const safeCurrency = currencyCode || 'USD';
   try {
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: currencyCode }).format(amount);
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: safeCurrency }).format(safeAmount);
   } catch {
-    return `${currencyCode} ${amount.toFixed(2)}`;
+    return `${safeCurrency} ${safeAmount.toFixed(2)}`;
   }
 };
 
 // Helper to format chips safely
 export const formatChips = (amount) => {
-  return new Intl.NumberFormat('en-US').format(amount);
+  const num = Number(amount);
+  const safeAmount = isNaN(num) || !isFinite(num) ? 0 : num;
+  return new Intl.NumberFormat('en-US').format(safeAmount);
 };

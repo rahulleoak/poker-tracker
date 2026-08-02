@@ -3,22 +3,32 @@ import { ChevronLeft, TrendingUp, TrendingDown, History, DollarSign } from 'luci
 import MetricCard from './MetricCard';
 import { formatFiat } from '../utils/formatters';
 
-export default function PlayerProfile({ playerName, games, exchangeRates, globalCurrency, onBack }) {
+export default function PlayerProfile({ playerName, games = [], exchangeRates, globalCurrency = 'USD', onBack }) {
   const playerHistory = useMemo(() => {
-    return games
+    const safeGames = Array.isArray(games) ? games : [];
+    return safeGames
       .map(game => {
-        const entry = game.entries.find(e => e.name === playerName);
+        if (!game) return null;
+        const entries = Array.isArray(game.entries) ? game.entries : [];
+        const entry = entries.find(e => e && e.name === playerName);
         if (entry) {
-          const totalCashOutChips = entry.buyOut + entry.stack;
-          const netChips = totalCashOutChips - entry.buyIn;
+          const buyIn = Number(entry.buyIn) || 0;
+          const buyOut = Number(entry.buyOut) || 0;
+          const stack = Number(entry.stack) || 0;
+          const totalCashOutChips = buyOut + stack;
+          const netChips = totalCashOutChips - buyIn;
           
-          const rateToGlobal = exchangeRates ? (exchangeRates[globalCurrency] / exchangeRates[game.currency]) : 1;
-          const multiplier = game.chipValue * rateToGlobal;
+          const gameCurrency = game.currency || 'USD';
+          const chipValue = Number(game.chipValue) || 1;
+          const rateToGlobal = (exchangeRates && exchangeRates[globalCurrency] && exchangeRates[gameCurrency]) 
+            ? (exchangeRates[globalCurrency] / exchangeRates[gameCurrency]) 
+            : 1;
+          const multiplier = chipValue * rateToGlobal;
 
           return {
             date: game.date,
             gameId: game.id,
-            buyInFiat: entry.buyIn * multiplier,
+            buyInFiat: buyIn * multiplier,
             cashOutFiat: totalCashOutChips * multiplier,
             netFiat: netChips * multiplier
           };
@@ -30,20 +40,23 @@ export default function PlayerProfile({ playerName, games, exchangeRates, global
   }, [playerName, games, exchangeRates, globalCurrency]);
 
   const advancedStats = useMemo(() => {
+    const safeGames = Array.isArray(games) ? games : [];
     let handsPlayed = 0;
     let vpipHands = 0;
     let pfrHands = 0;
     let threeBetOpps = 0;
     let threeBetHands = 0;
 
-    games.forEach(game => {
-      const entry = game.entries.find(e => e.name === playerName);
+    safeGames.forEach(game => {
+      if (!game) return;
+      const entries = Array.isArray(game.entries) ? game.entries : [];
+      const entry = entries.find(e => e && e.name === playerName);
       if (entry) {
-        handsPlayed += entry.handsPlayed || 0;
-        vpipHands += entry.vpipHands || 0;
-        pfrHands += entry.pfrHands || 0;
-        threeBetOpps += entry.threeBetOpps || 0;
-        threeBetHands += entry.threeBetHands || 0;
+        handsPlayed += Number(entry.handsPlayed) || 0;
+        vpipHands += Number(entry.vpipHands) || 0;
+        pfrHands += Number(entry.pfrHands) || 0;
+        threeBetOpps += Number(entry.threeBetOpps) || 0;
+        threeBetHands += Number(entry.threeBetHands) || 0;
       }
     });
 
@@ -63,12 +76,12 @@ export default function PlayerProfile({ playerName, games, exchangeRates, global
     };
   }, [playerName, games]);
 
-  const totalNet = playerHistory.reduce((sum, s) => sum + s.netFiat, 0);
-  const totalBuyIn = playerHistory.reduce((sum, s) => sum + s.buyInFiat, 0);
+  const totalNet = playerHistory.reduce((sum, s) => sum + (s?.netFiat || 0), 0);
+  const totalBuyIn = playerHistory.reduce((sum, s) => sum + (s?.buyInFiat || 0), 0);
   const avgBuyIn = playerHistory.length > 0 ? (totalBuyIn / playerHistory.length) : 0;
   
-  const bestSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => (prev.netFiat > current.netFiat) ? prev : current) : null;
-  const worstSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => (prev.netFiat < current.netFiat) ? prev : current) : null;
+  const bestSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => ((prev?.netFiat || 0) > (current?.netFiat || 0)) ? prev : current) : null;
+  const worstSession = playerHistory.length > 0 ? playerHistory.reduce((prev, current) => ((prev?.netFiat || 0) < (current?.netFiat || 0)) ? prev : current) : null;
 
   return (
     <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-500">
@@ -135,18 +148,26 @@ export default function PlayerProfile({ playerName, games, exchangeRates, global
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
-                {playerHistory.map((session, index) => (
-                  <tr key={index} className="hover:bg-slate-800/20 transition-colors">
-                    <td className="p-4 font-medium text-slate-300">
-                      {new Date(session.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
-                    </td>
-                    <td className="p-4 text-right text-slate-400">{formatFiat(session.buyInFiat, globalCurrency)}</td>
-                    <td className="p-4 text-right text-slate-400">{formatFiat(session.cashOutFiat, globalCurrency)}</td>
-                    <td className={`p-4 text-right font-bold ${session.netFiat > 0 ? 'text-emerald-400' : session.netFiat < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
-                      {session.netFiat > 0 ? '+' : ''}{formatFiat(session.netFiat, globalCurrency)}
-                    </td>
-                  </tr>
-                ))}
+                {playerHistory.map((session, index) => {
+                  if (!session) return null;
+                  const sessionDate = session.date ? new Date(session.date) : new Date();
+                  const formattedDate = !isNaN(sessionDate.getTime()) 
+                    ? sessionDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+                    : 'Unknown Date';
+
+                  return (
+                    <tr key={index} className="hover:bg-slate-800/20 transition-colors">
+                      <td className="p-4 font-medium text-slate-300">
+                        {formattedDate}
+                      </td>
+                      <td className="p-4 text-right text-slate-400">{formatFiat(session.buyInFiat, globalCurrency)}</td>
+                      <td className="p-4 text-right text-slate-400">{formatFiat(session.cashOutFiat, globalCurrency)}</td>
+                      <td className={`p-4 text-right font-bold ${session.netFiat > 0 ? 'text-emerald-400' : session.netFiat < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                        {session.netFiat > 0 ? '+' : ''}{formatFiat(session.netFiat, globalCurrency)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -160,7 +181,11 @@ export default function PlayerProfile({ playerName, games, exchangeRates, global
             {bestSession ? (
               <div>
                 <p className="text-3xl font-bold text-emerald-400 mb-1">+{formatFiat(bestSession.netFiat, globalCurrency)}</p>
-                <p className="text-sm text-slate-500">{new Date(bestSession.date).toLocaleDateString()}</p>
+                <p className="text-sm text-slate-500">
+                  {bestSession.date && !isNaN(new Date(bestSession.date).getTime()) 
+                    ? new Date(bestSession.date).toLocaleDateString() 
+                    : 'Unknown Date'}
+                </p>
               </div>
             ) : <p className="text-slate-500">No data.</p>}
           </div>
@@ -172,7 +197,11 @@ export default function PlayerProfile({ playerName, games, exchangeRates, global
             {worstSession ? (
               <div>
                 <p className="text-3xl font-bold text-rose-400 mb-1">{formatFiat(worstSession.netFiat, globalCurrency)}</p>
-                <p className="text-sm text-slate-500">{new Date(worstSession.date).toLocaleDateString()}</p>
+                <p className="text-sm text-slate-500">
+                  {worstSession.date && !isNaN(new Date(worstSession.date).getTime()) 
+                    ? new Date(worstSession.date).toLocaleDateString() 
+                    : 'Unknown Date'}
+                </p>
               </div>
             ) : <p className="text-slate-500">No data.</p>}
           </div>

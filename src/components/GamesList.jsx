@@ -2,9 +2,10 @@ import { useRef, useState } from 'react';
 import { Upload, Plus, CheckCircle2, AlertCircle, ArrowRight, Globe } from 'lucide-react';
 import { formatFiat } from '../utils/formatters';
 
-export default function GamesList({ games, onCreate, onFileUpload, onEdit, exchangeRates, globalCurrency }) {
+export default function GamesList({ games = [], onCreate, onFileUpload, onEdit, exchangeRates, globalCurrency = 'USD' }) {
   const fileInputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
+  const safeGames = Array.isArray(games) ? games : [];
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -19,9 +20,9 @@ export default function GamesList({ games, onCreate, onFileUpload, onEdit, excha
     e.preventDefault();
     setIsDragging(false);
     
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+    if (e.dataTransfer?.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
-      if (file.name.toLowerCase().endsWith(".csv")) {
+      if (file.name.toLowerCase().endsWith(".csv") && onFileUpload) {
         // Construct a synthetic event to match existing onFileUpload format
         const syntheticEvent = {
           target: {
@@ -97,30 +98,40 @@ export default function GamesList({ games, onCreate, onFileUpload, onEdit, excha
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {games.map(game => {
-          const totalBuyInChips = game.entries.reduce((sum, e) => sum + e.buyIn, 0);
-          const totalCashOutChips = game.entries.reduce((sum, e) => sum + (e.buyOut + e.stack), 0);
+        {safeGames.map(game => {
+          if (!game) return null;
+          const entries = Array.isArray(game.entries) ? game.entries : [];
+          const totalBuyInChips = entries.reduce((sum, e) => sum + (Number(e?.buyIn) || 0), 0);
+          const totalCashOutChips = entries.reduce((sum, e) => sum + ((Number(e?.buyOut) || 0) + (Number(e?.stack) || 0)), 0);
           const isBalanced = totalBuyInChips === totalCashOutChips;
           
-          // Show pot in the global dashboard currency
-          const rateToGlobal = exchangeRates ? (exchangeRates[globalCurrency] / exchangeRates[game.currency]) : 1;
-          const potFiat = totalBuyInChips * game.chipValue * rateToGlobal;
+          const gameCurrency = game.currency || 'USD';
+          const chipValue = Number(game.chipValue) || 1;
+          const rateToGlobal = (exchangeRates && exchangeRates[globalCurrency] && exchangeRates[gameCurrency]) 
+            ? (exchangeRates[globalCurrency] / exchangeRates[gameCurrency]) 
+            : 1;
+          const potFiat = totalBuyInChips * chipValue * rateToGlobal;
+
+          const gameDate = game.date ? new Date(game.date) : new Date();
+          const formattedDate = !isNaN(gameDate.getTime()) 
+            ? gameDate.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })
+            : 'Unknown Date';
 
           return (
             <div 
               key={game.id} 
-              onClick={() => onEdit(game.id)}
+              onClick={() => onEdit && onEdit(game.id)}
               className="bg-slate-900 border border-slate-800 p-5 rounded-xl cursor-pointer hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-900/10 transition-all group relative overflow-hidden"
             >
               <div className={`absolute top-0 left-0 w-1 h-full ${game.isActive ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.8)]' : 'bg-slate-700'}`}></div>
               <div className="flex justify-between items-start mb-4 ml-2">
                 <div>
-                  <h3 className="font-bold text-slate-200">{new Date(game.date).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}</h3>
+                  <h3 className="font-bold text-slate-200">{formattedDate}</h3>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="inline-flex items-center gap-1 text-xs font-medium bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full border border-slate-700">
-                      <Globe className="w-3 h-3" /> {game.currency}
+                      <Globe className="w-3 h-3" /> {gameCurrency}
                     </span>
-                    <p className="text-sm text-slate-500">{game.entries.length} Players</p>
+                    <p className="text-sm text-slate-500">{entries.length} Players</p>
                   </div>
                 </div>
                 {isBalanced ? (
@@ -141,7 +152,7 @@ export default function GamesList({ games, onCreate, onFileUpload, onEdit, excha
             </div>
           );
         })}
-        {games.length === 0 && (
+        {safeGames.length === 0 && (
           <div className="col-span-full py-12 text-center border-2 border-dashed border-slate-800 rounded-xl text-slate-500">
             No sessions logged yet. Create your first game!
           </div>
