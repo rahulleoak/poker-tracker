@@ -123,6 +123,34 @@ test('parsePokerNowCSV log parsing with ending stacks and cash outs', () => {
   assert.ok(charlie);
   assert.strictEqual(charlie.buyOut, 300);
 });
+
+test('parsePokerNowCSV log parsing when entry is in column 0', () => {
+  const logCSV = `entry,created_at
+"Player stacks: #1 ""Alice @ a1"" (200)",2023-01-01T02:00:00Z
+"approved the player ""Alice @ a1"" participation with a stack of 100",2023-01-01T01:00:00Z
+`;
+  const results = parsePokerNowCSV(logCSV);
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].name, 'Alice');
+  assert.strictEqual(results[0].buyIn, 100);
+  assert.strictEqual(results[0].stack, 200);
+});
+
+test('parsePokerNowCSV log parsing quitting without double counting and mid-session rejoin', () => {
+  const logCSV = `entry_id,entry,created_at
+4,"Player stacks: #1 ""Alice @ a1"" (300)",2023-01-01T03:00:00Z
+3,"approved the player ""Alice @ a1"" participation with a stack of 100",2023-01-01T02:30:00Z
+2,"player ""Alice @ a1"" stands up with a stack of 250",2023-01-01T02:00:00Z
+1.5,"Player stacks: #1 ""Alice @ a1"" (250)",2023-01-01T01:30:00Z
+1,"approved the player ""Alice @ a1"" participation with a stack of 100",2023-01-01T01:00:00Z
+`;
+  const results = parsePokerNowCSV(logCSV);
+  assert.strictEqual(results.length, 1);
+  const alice = results[0];
+  assert.strictEqual(alice.name, 'Alice');
+  assert.strictEqual(alice.buyIn, 200);
+  assert.strictEqual(alice.stack, 550);
+});
 test('parsePokerNowCSV handles null, undefined, empty, and invalid input without crashing', () => {
   assert.deepStrictEqual(parsePokerNowCSV(null), []);
   assert.deepStrictEqual(parsePokerNowCSV(undefined), []);

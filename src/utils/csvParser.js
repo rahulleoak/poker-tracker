@@ -211,6 +211,7 @@ export function parsePokerNowCSV(text) {
 
     if (!players[cleanName]) {
       players[cleanName] = { 
+        name: cleanName,
         buyIn: 0, 
         buyOut: 0, 
         stack: 0,
@@ -264,6 +265,7 @@ export function parsePokerNowCSV(text) {
   const buyInIdx = findColIndex(['buy_in', 'buyin', 'buy_ins']);
   const buyOutIdx = findColIndex(['buy_out', 'buyout', 'cash_out', 'cashout', 'buy_outs']);
   const stackIdx = findColIndex(['stack', 'current_stack', 'ending_stack', 'net', 'ending_stack_amount']);
+  const logTextIdx = findColIndex(['entry', 'action', 'text', 'log', 'log_entry', 'message', 'entry_text']);
 
   // Only treat as a ledger CSV if header has columns matching player name AND buy_in/buy_out/stack, and NOT entry_id/entry/action
   const hasLogColumns = headerColsNormalized.some(col => col === 'entry' || col === 'entry_id' || col === 'action' || col === 'created_at');
@@ -290,24 +292,91 @@ export function parsePokerNowCSV(text) {
       }
     }
   } else {
-    // Process logs chronologically (lines are in reverse chronological order in PokerNow log CSV exports)
-    // We reverse lines from index 1 to end so we go from oldest entry to newest entry
-    const logLines = lines.slice(1).reverse();
+    // Determine whether log CSV is in reverse chronological order (newest first)
+    const rawDataLines = lines.slice(1);
+    const timeIdx = findColIndex(['created_at', 'at', 'timestamp', 'date', 'time']);
+    const idIdx = findColIndex(['entry_id', 'id', 'order']);
+    
+    let isReverse = true;
+    if (rawDataLines.length >= 2) {
+      const firstCols = parseCSVLine(rawDataLines[0]);
+      const lastCols = parseCSVLine(rawDataLines[rawDataLines.length - 1]);
+      
+      let determined = false;
+      if (timeIdx > -1 && firstCols[timeIdx] !== undefined && lastCols[timeIdx] !== undefined) {
+        const t1 = Date.parse(firstCols[timeIdx]);
+        const t2 = Date.parse(lastCols[timeIdx]);
+        if (!isNaN(t1) && !isNaN(t2) && t1 !== t2) {
+          isReverse = t1 > t2;
+          determined = true;
+        }
+      }
+      if (!determined && idIdx > -1 && firstCols[idIdx] !== undefined && lastCols[idIdx] !== undefined) {
+        const id1 = parseFloat(firstCols[idIdx]);
+        const id2 = parseFloat(lastCols[idIdx]);
+        if (!isNaN(id1) && !isNaN(id2) && id1 !== id2) {
+          isReverse = id1 > id2;
+          determined = true;
+        }
+      }
+      if (!determined) {
+        const firstText = rawDataLines[0];
+        const lastText = rawDataLines[rawDataLines.length - 1];
+        if (/quits|stands up|Player stacks/i.test(firstText) && /participation|sits down|requested stack/i.test(lastText)) {
+          isReverse = true;
+        } else if (/participation|sits down|requested stack/i.test(firstText) && /quits|stands up|Player stacks/i.test(lastText)) {
+          isReverse = false;
+        }
+      }
+    }
+
+    const logLines = isReverse ? rawDataLines.reverse() : rawDataLines;
+    const currentTableStack = {};
     
     for (const rawLine of logLines) {
       const parsedCols = parseCSVLine(rawLine);
-      const line = parsedCols[1] || parsedCols[0] || rawLine;
-      let m = line.match(/approved the player "?([^"]+?)"? participation with a stack of (\d+)/i) ||
-              line.match(/approved the player "([^"]+)" participation with a stack of (\d+)/i);
-      if (m) { const p = getPlayer(m[1]); if (p) p.buyIn += parseInt(m[2], 10); continue; }
+      let line = rawLine;
+      if (logTextIdx > -1 && parsedCols[logTextIdx] !== undefined) {
+        line = parsedCols[logTextIdx];
+      } else {
+        const matchCol = parsedCols.find(col =>
+          /approved|player|sits down|quits|stands up|cashed out|Player stacks:|updated the player/i.test(col)
+        );
+        line = matchCol !== undefined ? matchCol : (parsedCols[1] || parsedCols[0] || rawLine);
+      }
+
+      let m = line.match(/approved the player "?([^"]+?)"? participation with a stack of (\d+)/i);
+      if (m) {
+        const p = getPlayer(m[1]);
+        if (p) {
+          const amt = parseInt(m[2], 10);
+          p.buyIn += amt;
+          currentTableStack[p.name] = (currentTableStack[p.name] || 0) + amt;
+        }
+        continue;
+      }
       
-      m = line.match(/approved the player "?([^"]+?)"? requested stack of (\d+)/i) ||
-          line.match(/approved the player "([^"]+)" requested stack of (\d+)/i);
-      if (m) { const p = getPlayer(m[1]); if (p) p.buyIn += parseInt(m[2], 10); continue; }
+      m = line.match(/approved the player "?([^"]+?)"? requested stack of (\d+)/i);
+      if (m) {
+        const p = getPlayer(m[1]);
+        if (p) {
+          const amt = parseInt(m[2], 10);
+          p.buyIn += amt;
+          currentTableStack[p.name] = (currentTableStack[p.name] || 0) + amt;
+        }
+        continue;
+      }
       
-      m = line.match(/player "?([^"]+?)"? sits down with a stack of (\d+)/i) ||
-          line.match(/player "([^"]+)" sits down with a stack of (\d+)/i);
-      if (m) { const p = getPlayer(m[1]); if (p) p.buyIn += parseInt(m[2], 10); continue; }
+      m = line.match(/player "?([^"]+?)"? sits down with a stack of (\d+)/i);
+      if (m) {
+        const p = getPlayer(m[1]);
+        if (p) {
+          const amt = parseInt(m[2], 10);
+          p.buyIn += amt;
+          currentTableStack[p.name] = (currentTableStack[p.name] || 0) + amt;
+        }
+        continue;
+      }
 
       // Cash-out / Buy-out requests & actions
       m = line.match(/approved the player "?([^"]+?)"? cash out request (?:for|of) (\d+)/i) ||
@@ -317,15 +386,33 @@ export function parsePokerNowCSV(text) {
           line.match(/player "?([^"]+?)"? cashed out.*(\d+)/i);
       if (m) {
         const p = getPlayer(m[1]);
-        if (p) p.buyOut += parseInt(m[2], 10);
+        if (p) {
+          const amt = parseInt(m[2], 10);
+          p.buyOut += amt;
+          currentTableStack[p.name] = Math.max(0, (currentTableStack[p.name] || 0) - amt);
+        }
         continue;
       }
 
       m = line.match(/player "?([^"]+?)"? quits the game with a stack of (\d+)/i);
-      if (m) { const p = getPlayer(m[1]); if (p) p.stack += parseInt(m[2], 10); continue; }
+      if (m) {
+        const p = getPlayer(m[1]);
+        if (p) {
+          p.stack += parseInt(m[2], 10);
+          currentTableStack[p.name] = 0;
+        }
+        continue;
+      }
       
       m = line.match(/player "?([^"]+?)"? stands up with a stack of (\d+)/i);
-      if (m) { const p = getPlayer(m[1]); if (p) p.stack += parseInt(m[2], 10); continue; }
+      if (m) {
+        const p = getPlayer(m[1]);
+        if (p) {
+          p.stack += parseInt(m[2], 10);
+          currentTableStack[p.name] = 0;
+        }
+        continue;
+      }
       
       m = line.match(/updated the player "?([^"]+?)"? stack from (\d+) to (\d+)/i);
       if (m) {
@@ -333,8 +420,14 @@ export function parsePokerNowCSV(text) {
         const to = parseInt(m[3], 10);
         const p = getPlayer(m[1]);
         if (p) {
-          if (to > from) p.buyIn += (to - from);
-          if (from > to) p.stack += (from - to);
+          if (to > from) {
+            p.buyIn += (to - from);
+            currentTableStack[p.name] = (currentTableStack[p.name] || 0) + (to - from);
+          }
+          if (from > to) {
+            p.stack += (from - to);
+            currentTableStack[p.name] = Math.max(0, (currentTableStack[p.name] || 0) - (from - to));
+          }
         }
         continue;
       }
@@ -351,10 +444,16 @@ export function parsePokerNowCSV(text) {
             const stackVal = parseInt(match[2], 10);
             const p = getPlayer(name);
             if (p) {
-              p.stack = stackVal; // update stack to latest known stack in chronological order
+              currentTableStack[p.name] = stackVal;
             }
           }
         }
+      }
+    }
+
+    for (const p of Object.values(players)) {
+      if (currentTableStack[p.name] > 0) {
+        p.stack += currentTableStack[p.name];
       }
     }
   }
