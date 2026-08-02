@@ -89,6 +89,9 @@ export default function Dashboard({ stats, totalSessions, totalMoney, globalCurr
                 <th className="p-4 font-medium">Rank</th>
                 <th className="p-4 font-medium">Player</th>
                 <th className="p-4 font-medium text-right">Games</th>
+                <th className="p-4 font-medium text-right">VPIP</th>
+                <th className="p-4 font-medium text-right">PFR</th>
+                <th className="p-4 font-medium text-right">3-Bet</th>
                 <th className="p-4 font-medium text-right">Total In</th>
                 <th className="p-4 font-medium text-right">Total Out</th>
                 <th className="p-4 font-medium text-right">Net Profit</th>
@@ -97,27 +100,36 @@ export default function Dashboard({ stats, totalSessions, totalMoney, globalCurr
             <tbody className="divide-y divide-slate-800/50">
               {stats.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="p-8 text-center text-slate-500">No data available yet. Play some games!</td>
+                  <td colSpan="9" className="p-8 text-center text-slate-500">No data available yet. Play some games!</td>
                 </tr>
               ) : (
-                stats.map((player, index) => (
-                  <tr 
-                    key={player.name} 
-                    onClick={() => onPlayerClick(player.name)}
-                    className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
-                  >
-                    <td className="p-4 font-medium text-slate-500">#{index + 1}</td>
-                    <td className="p-4 font-semibold text-slate-200 group-hover:text-emerald-400 transition-colors flex items-center gap-2">
-                      {player.name}
-                    </td>
-                    <td className="p-4 text-right text-slate-400">{player.gamesPlayed}</td>
-                    <td className="p-4 text-right text-slate-400">{formatFiat(player.buyInFiat, globalCurrency)}</td>
-                    <td className="p-4 text-right text-slate-400">{formatFiat(player.cashOutFiat, globalCurrency)}</td>
-                    <td className={`p-4 text-right font-bold ${player.netFiat > 0 ? 'text-emerald-400' : player.netFiat < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-                      {player.netFiat > 0 ? '+' : ''}{formatFiat(player.netFiat, globalCurrency)}
-                    </td>
-                  </tr>
-                ))
+                stats.map((player, index) => {
+                  const vpipPct = player.handsPlayed > 0 ? `${((player.vpipHands / player.handsPlayed) * 100).toFixed(1)}%` : '-';
+                  const pfrPct = player.handsPlayed > 0 ? `${((player.pfrHands / player.handsPlayed) * 100).toFixed(1)}%` : '-';
+                  const threeBetPct = player.threeBetOpps > 0 ? `${((player.threeBetHands / player.threeBetOpps) * 100).toFixed(1)}%` : '-';
+                  
+                  return (
+                    <tr 
+                      key={player.name} 
+                      onClick={() => onPlayerClick(player.name)}
+                      className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                    >
+                      <td className="p-4 font-medium text-slate-500">#{index + 1}</td>
+                      <td className="p-4 font-semibold text-slate-200 group-hover:text-emerald-400 transition-colors flex items-center gap-2">
+                        {player.name}
+                      </td>
+                      <td className="p-4 text-right text-slate-400">{player.gamesPlayed}</td>
+                      <td className="p-4 text-right text-slate-400">{vpipPct}</td>
+                      <td className="p-4 text-right text-slate-400">{pfrPct}</td>
+                      <td className="p-4 text-right text-slate-400">{threeBetPct}</td>
+                      <td className="p-4 text-right text-slate-400">{formatFiat(player.buyInFiat, globalCurrency)}</td>
+                      <td className="p-4 text-right text-slate-400">{formatFiat(player.cashOutFiat, globalCurrency)}</td>
+                      <td className={`p-4 text-right font-bold ${player.netFiat > 0 ? 'text-emerald-400' : player.netFiat < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                        {player.netFiat > 0 ? '+' : ''}{formatFiat(player.netFiat, globalCurrency)}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
