@@ -17,37 +17,39 @@ import {
 import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
 import { calculateSettlement } from '../utils/settlement';
 
-export default function GameEditor({ game, globalIncrement, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete }) {
+export default function GameEditor({ game, globalIncrement = 100, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete }) {
   // Local state to manage edits without hitting DB on every keystroke
-  const [date, setDate] = useState(game.date);
-  const [gameCurrency, setGameCurrency] = useState(game.currency);
-  const [isActive, setIsActive] = useState(game.isActive);
-  const [pokerNowUrl, setPokerNowUrl] = useState(game.pokerNowUrl || '');
-  const [entries, setEntries] = useState(game.entries);
+  const [date, setDate] = useState(() => game?.date || new Date().toISOString().split('T')[0]);
+  const [gameCurrency, setGameCurrency] = useState(() => game?.currency || 'USD');
+  const [isActive, setIsActive] = useState(() => game?.isActive !== false);
+  const [pokerNowUrl, setPokerNowUrl] = useState(() => game?.pokerNowUrl || '');
+  const [entries, setEntries] = useState(() => Array.isArray(game?.entries) ? game.entries : []);
   
   const [ratioChips, setRatioChips] = useState(() => {
-    if (game.chipValue === 1) return 1;
-    if (game.chipValue > 0) {
-      const inv = 1 / game.chipValue;
+    const chipVal = Number(game?.chipValue) || 1;
+    if (chipVal === 1) return 1;
+    if (chipVal > 0) {
+      const inv = 1 / chipVal;
       if (Math.abs(inv - Math.round(inv)) < 0.001) return Math.round(inv);
     }
     return 1000;
   });
   
   const [ratioFiat, setRatioFiat] = useState(() => {
-    if (game.chipValue === 1) return 1;
-    if (game.chipValue > 0) {
-      const inv = 1 / game.chipValue;
+    const chipVal = Number(game?.chipValue) || 1;
+    if (chipVal === 1) return 1;
+    if (chipVal > 0) {
+      const inv = 1 / chipVal;
       if (Math.abs(inv - Math.round(inv)) < 0.001) return 1;
     }
-    return Number((game.chipValue * 1000).toFixed(2));
+    return Number((chipVal * 1000).toFixed(2));
   });
 
   const chipValue = ratioChips > 0 ? ratioFiat / ratioChips : 0;
 
   const [showSettings, setShowSettings] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState('general');
-  const [settlementCurrency, setSettlementCurrency] = useState(game.currency);
+  const [settlementCurrency, setSettlementCurrency] = useState(() => game?.currency || 'USD');
   const [useBankBuddies, setUseBankBuddies] = useState(false);
 
   // --- AUTO-SAVE EFFECT ---
@@ -63,16 +65,19 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
       isMounted.current = true;
       return;
     }
+    if (!game) return;
     const timer = setTimeout(() => {
-      onSaveRef.current({
-        ...game,
-        date,
-        currency: gameCurrency,
-        chipValue,
-        isActive,
-        pokerNowUrl,
-        entries
-      });
+      if (onSaveRef.current) {
+        onSaveRef.current({
+          ...game,
+          date,
+          currency: gameCurrency,
+          chipValue,
+          isActive,
+          pokerNowUrl,
+          entries
+        });
+      }
     }, 1000);
     return () => clearTimeout(timer);
   }, [date, gameCurrency, chipValue, isActive, pokerNowUrl, entries, game]);
@@ -89,26 +94,59 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
     });
   }, [entries, chipValue, gameCurrency, settlementCurrency, exchangeRates, useBankBuddies]);
 
+  if (!game) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 p-8 rounded-xl text-center space-y-4">
+        <h3 className="text-xl font-bold text-slate-200">Session Not Found</h3>
+        <p className="text-sm text-slate-400">The requested poker session could not be found or loaded.</p>
+        <button 
+          onClick={onBack}
+          className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+        >
+          Return to Sessions List
+        </button>
+      </div>
+    );
+  }
+
   // Handlers
   const handleEntryChange = (index, field, value) => {
     const newEntries = [...entries];
-    newEntries[index][field] = value;
-    setEntries(newEntries);
+    if (newEntries[index]) {
+      newEntries[index] = { ...newEntries[index], [field]: value };
+      setEntries(newEntries);
+    }
   };
 
   const handleBankChange = (index, isBank, currency) => {
     const newEntries = [...entries];
     if (isBank) {
-        newEntries.forEach(e => {
-            if ((e.currency || gameCurrency) === currency) e.isBank = false;
+        newEntries.forEach((e, i) => {
+            if ((e.currency || gameCurrency) === currency && newEntries[i]) {
+              newEntries[i] = { ...newEntries[i], isBank: false };
+            }
         });
     }
-    newEntries[index].isBank = isBank;
-    setEntries(newEntries);
+    if (newEntries[index]) {
+      newEntries[index] = { ...newEntries[index], isBank };
+      setEntries(newEntries);
+    }
   };
 
   const handleAddRow = () => {
-    setEntries([...entries, { name: '', buyIn: 0, buyOut: 0, stack: 0, currency: gameCurrency, isBank: false }]);
+    setEntries([...entries, { 
+      name: '', 
+      buyIn: 0, 
+      buyOut: 0, 
+      stack: 0, 
+      currency: gameCurrency, 
+      isBank: false,
+      handsPlayed: 0,
+      vpipHands: 0,
+      pfrHands: 0,
+      threeBetOpps: 0,
+      threeBetHands: 0
+    }]);
   };
 
   const handleRemoveRow = (index) => {
@@ -116,16 +154,19 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
   };
 
   const handleBack = () => {
-    // Force one final save just in case they click back before the debounce completes
-    onSaveRef.current({
-      ...game, date, currency: gameCurrency, chipValue, isActive, pokerNowUrl, entries
-    });
+    // Force one final save
+    if (onSaveRef.current) {
+      onSaveRef.current({
+        ...game, date, currency: gameCurrency, chipValue, isActive, pokerNowUrl, entries
+      });
+    }
     onBack();
   };
 
   const adjustValue = (index, field, amount) => {
+    if (!entries[index]) return;
     const currentValue = Number(entries[index][field]) || 0;
-    const newValue = Math.max(0, currentValue + amount); 
+    const newValue = Math.max(0, currentValue + (Number(amount) || 0)); 
     handleEntryChange(index, field, newValue);
   };
 
@@ -219,7 +260,7 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
                         <input 
                           type="number" 
                           value={globalIncrement}
-                          onChange={(e) => setGlobalIncrement(Number(e.target.value) || 0)}
+                          onChange={(e) => setGlobalIncrement && setGlobalIncrement(Number(e.target.value) || 0)}
                           className="w-full bg-slate-900 border border-slate-700 text-slate-200 rounded-lg pl-9 pr-3 py-2 outline-none focus:border-emerald-500 transition-colors [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
                         />
                       </div>
@@ -245,7 +286,7 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
                      Assign regional currencies and designate a <strong className="text-emerald-400">Bank Buddy</strong>. The algorithm will consolidate cross-border debts so players only transfer money locally.
                    </p>
                    <div className="space-y-2">
-                     {entries.filter(e => e.name.trim() !== '').map((entry, idx) => {
+                     {entries.filter(e => e && (e.name || '').trim() !== '').map((entry, idx) => {
                         const trueIdx = entries.indexOf(entry);
                         const pCurrency = entry.currency || gameCurrency;
                         return (
@@ -402,6 +443,7 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
               </thead>
               <tbody className="divide-y divide-slate-800/50">
                 {entries.map((entry, index) => {
+                  if (!entry) return null;
                   const sessionCashOut = (Number(entry.buyOut) || 0) + (Number(entry.stack) || 0);
                   const net = sessionCashOut - (Number(entry.buyIn) || 0);
                   
@@ -412,7 +454,7 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
                           <input 
                             type="text" 
                             placeholder="Player name..."
-                            value={entry.name}
+                            value={entry.name || ''}
                             onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
                             className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-3 pr-16 py-2 text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
                           />
@@ -580,7 +622,7 @@ export default function GameEditor({ game, globalIncrement, setGlobalIncrement, 
                     <div className="mt-6 pt-4 border-t border-slate-800">
                       <p className="text-[10px] text-slate-500 flex items-center gap-1.5 justify-center">
                         <Globe className="w-3 h-3 text-emerald-500/50" />
-                        Live FX: 1 {gameCurrency} = {(exchangeRates[settlementCurrency] / exchangeRates[gameCurrency]).toFixed(4)} {settlementCurrency}
+                        Live FX: 1 {gameCurrency} = {((exchangeRates[settlementCurrency] || 1) / (exchangeRates[gameCurrency] || 1)).toFixed(4)} {settlementCurrency}
                       </p>
                     </div>
                   )}

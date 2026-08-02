@@ -1,13 +1,54 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, Component } from "react";
 import { LayoutDashboard, Coins, Globe, History, Play } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
+import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries } from './utils/sessionMapper';
 import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
 import PlayerProfile from './components/PlayerProfile';
 import HandReplayer from './components/HandReplayer';
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-200 p-6">
+          <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl max-w-md w-full shadow-2xl text-center space-y-4">
+            <h2 className="text-xl font-bold text-rose-400">Something Went Wrong</h2>
+            <p className="text-sm text-slate-400">
+              An unexpected error occurred while rendering. Click below to recover.
+            </p>
+            <button
+              onClick={() => {
+                this.setState({ hasError: false, error: null });
+                window.location.reload();
+              }}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg text-sm transition-colors"
+            >
+              Reload Application
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [games, setGames] = useState([]);
@@ -27,46 +68,55 @@ export default function App() {
       setIsLoading(false);
       return;
     }
-    const { data, error } = await supabase
-      .from('sessions')
-      .select(`
-        id,
-        date,
-        currency,
-        chip_value,
-        poker_now_url,
-        is_active,
-        ledger ( player_name, buy_in, cash_out, currency, is_bank, hands_played, vpip_hands, pfr_hands, three_bet_opps, three_bet_hands )
-      `)
-      .order('date', { ascending: false });
 
-    if (error) {
-      console.error("Error fetching data:", error);
-    } else {
-      const formattedGames = data.map(session => ({
-        id: session.id,
-        date: session.date,
-        currency: session.currency || 'USD',
-        chipValue: Number(session.chip_value) || 1,
-        pokerNowUrl: session.poker_now_url || '',
-        isActive: session.is_active !== false,
-        entries: session.ledger.map(entry => ({
-          name: entry.player_name,
-          buyIn: Number(entry.buy_in),
-          buyOut: 0,
-          stack: Number(entry.cash_out),
-          currency: entry.currency || session.currency || 'USD',
-          isBank: Boolean(entry.is_bank),
-          handsPlayed: Number(entry.hands_played) || 0,
-          vpipHands: Number(entry.vpip_hands) || 0,
-          pfrHands: Number(entry.pfr_hands) || 0,
-          threeBetOpps: Number(entry.three_bet_opps) || 0,
-          threeBetHands: Number(entry.three_bet_hands) || 0
-        }))
-      }));
-      setGames(formattedGames);
+    try {
+      // 1. Try querying with all columns via ledger(*)
+      let { data, error } = await supabase
+        .from('sessions')
+        .select(`
+          id,
+          date,
+          currency,
+          chip_value,
+          poker_now_url,
+          is_active,
+          ledger ( * )
+        `)
+        .order('date', { ascending: false });
+
+      // 2. If selecting ledger(*) fails, fallback to basic columns
+      if (error) {
+        console.warn("Primary fetch error, attempting fallback query:", error);
+        const fallback = await supabase
+          .from('sessions')
+          .select(`
+            id,
+            date,
+            currency,
+            chip_value,
+            poker_now_url,
+            is_active,
+            ledger ( player_name, buy_in, cash_out, currency, is_bank )
+          `)
+          .order('date', { ascending: false });
+
+        if (fallback.error) {
+          console.error("Fallback fetch also failed:", fallback.error);
+          setIsLoading(false);
+          return;
+        }
+        data = fallback.data;
+      }
+
+      if (Array.isArray(data)) {
+        const formattedGames = mapDatabaseSessionsToGames(data);
+        setGames(formattedGames);
+      }
+    } catch (err) {
+      console.error("Unexpected error fetching games:", err);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   };
 
   // --- FETCH DATA & FX RATES ---
@@ -87,14 +137,27 @@ export default function App() {
   // --- DERIVED STATS (ALL-TIME FIAT) ---
   const playerStats = useMemo(() => {
     const stats = {};
-    games.forEach(game => {
-      const rateToGlobal = exchangeRates ? (exchangeRates[globalCurrency] / exchangeRates[game.currency]) : 1;
-      const chipToFiatMultiplier = game.chipValue * rateToGlobal;
+    const safeGames = Array.isArray(games) ? games : [];
 
-      game.entries.forEach(entry => {
-        if (!stats[entry.name]) {
-          stats[entry.name] = { 
-            name: entry.name, 
+    safeGames.forEach(game => {
+      if (!game) return;
+      const gameCurrency = game.currency || 'USD';
+      const chipValue = Number(game.chipValue) || 1;
+
+      const rateToGlobal = (exchangeRates && exchangeRates[globalCurrency] && exchangeRates[gameCurrency]) 
+        ? (exchangeRates[globalCurrency] / exchangeRates[gameCurrency]) 
+        : 1;
+      const chipToFiatMultiplier = chipValue * rateToGlobal;
+
+      const entries = Array.isArray(game.entries) ? game.entries : [];
+      entries.forEach(entry => {
+        if (!entry || !entry.name) return;
+        const name = entry.name.trim();
+        if (!name) return;
+
+        if (!stats[name]) {
+          stats[name] = { 
+            name, 
             buyInFiat: 0, 
             cashOutFiat: 0, 
             gamesPlayed: 0, 
@@ -106,145 +169,232 @@ export default function App() {
             threeBetHands: 0
           };
         }
-        const totalCashOutChips = entry.buyOut + entry.stack;
+        const buyIn = Number(entry.buyIn) || 0;
+        const buyOut = Number(entry.buyOut) || 0;
+        const stack = Number(entry.stack) || 0;
+        const totalCashOutChips = buyOut + stack;
         
-        stats[entry.name].buyInFiat += (entry.buyIn * chipToFiatMultiplier);
-        stats[entry.name].cashOutFiat += (totalCashOutChips * chipToFiatMultiplier);
-        stats[entry.name].netFiat += ((totalCashOutChips - entry.buyIn) * chipToFiatMultiplier);
-        stats[entry.name].gamesPlayed += 1;
+        stats[name].buyInFiat += (buyIn * chipToFiatMultiplier);
+        stats[name].cashOutFiat += (totalCashOutChips * chipToFiatMultiplier);
+        stats[name].netFiat += ((totalCashOutChips - buyIn) * chipToFiatMultiplier);
+        stats[name].gamesPlayed += 1;
 
-        stats[entry.name].handsPlayed += entry.handsPlayed || 0;
-        stats[entry.name].vpipHands += entry.vpipHands || 0;
-        stats[entry.name].pfrHands += entry.pfrHands || 0;
-        stats[entry.name].threeBetOpps += entry.threeBetOpps || 0;
-        stats[entry.name].threeBetHands += entry.threeBetHands || 0;
+        stats[name].handsPlayed += Number(entry.handsPlayed) || 0;
+        stats[name].vpipHands += Number(entry.vpipHands) || 0;
+        stats[name].pfrHands += Number(entry.pfrHands) || 0;
+        stats[name].threeBetOpps += Number(entry.threeBetOpps) || 0;
+        stats[name].threeBetHands += Number(entry.threeBetHands) || 0;
       });
     });
-    return Object.values(stats).sort((a, b) => b.netFiat - a.netFiat);
+    return Object.values(stats).sort((a, b) => (b.netFiat || 0) - (a.netFiat || 0));
   }, [games, exchangeRates, globalCurrency]);
 
   const totalMoneyInPlayFiat = useMemo(() => {
-    return games.reduce((sum, game) => {
-      const rateToGlobal = exchangeRates ? (exchangeRates[globalCurrency] / exchangeRates[game.currency]) : 1;
-      const gameBuyInFiat = game.entries.reduce((s, e) => s + e.buyIn, 0) * game.chipValue * rateToGlobal;
+    const safeGames = Array.isArray(games) ? games : [];
+    return safeGames.reduce((sum, game) => {
+      if (!game) return sum;
+      const gameCurrency = game.currency || 'USD';
+      const chipValue = Number(game.chipValue) || 1;
+      const rateToGlobal = (exchangeRates && exchangeRates[globalCurrency] && exchangeRates[gameCurrency]) 
+        ? (exchangeRates[globalCurrency] / exchangeRates[gameCurrency]) 
+        : 1;
+      const entries = Array.isArray(game.entries) ? game.entries : [];
+      const gameBuyInFiat = entries.reduce((s, e) => s + (Number(e?.buyIn) || 0), 0) * chipValue * rateToGlobal;
       return sum + gameBuyInFiat;
     }, 0);
   }, [games, exchangeRates, globalCurrency]);
 
   // --- HANDLERS ---
   const handleCreateGame = async () => {
-    if (!supabase) return;
-    const date = new Date().toISOString().split('T')[0];
-    
-    const { data: sessionData, error: sessionError } = await supabase
-      .from('sessions')
-      .insert([{ date, currency: globalCurrency, chip_value: 1, is_active: true }])
-      .select()
-      .single();
+    const newGame = createDefaultGame(globalCurrency);
 
-    if (sessionError) return console.error(sessionError);
-
-    const initialEntries = [
-      { session_id: sessionData.id, player_name: 'Player 1', buy_in: 0, cash_out: 0, currency: globalCurrency, is_bank: false },
-      { session_id: sessionData.id, player_name: 'Player 2', buy_in: 0, cash_out: 0, currency: globalCurrency, is_bank: false }
-    ];
-
-    await supabase.from('ledger').insert(initialEntries);
-    
-    await fetchGames();
-    setEditingGameId(sessionData.id);
+    // Immediately update local state so editingGameId resolves to a valid game
+    setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
+    setEditingGameId(newGame.id);
     setSelectedPlayer(null);
+
+    if (supabase) {
+      try {
+        const { data: sessionData, error: sessionError } = await supabase
+          .from('sessions')
+          .insert([{ date: newGame.date, currency: globalCurrency, chip_value: 1, is_active: true }])
+          .select()
+          .single();
+
+        if (sessionError) {
+          console.error("Error creating session in Supabase:", sessionError);
+        } else if (sessionData && sessionData.id) {
+          const oldId = newGame.id;
+          newGame.id = sessionData.id;
+
+          const initialEntries = newGame.entries.map(e => ({
+            session_id: sessionData.id,
+            player_name: e.name,
+            buy_in: e.buyIn,
+            cash_out: e.buyOut + e.stack,
+            currency: globalCurrency,
+            is_bank: false
+          }));
+
+          await supabase.from('ledger').insert(initialEntries);
+
+          // Update game ID in local state if it changed from generated UUID
+          setGames(prevGames => prevGames.map(g => g.id === oldId ? newGame : g));
+          setEditingGameId(sessionData.id);
+        }
+      } catch (err) {
+        console.error("Failed to sync created session to DB:", err);
+      }
+    }
   };
 
   const handleFileUpload = (event) => {
-    if (!supabase) return;
-    const file = event.target.files[0];
+    const file = event?.target?.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = async (e) => {
-      const text = e.target.result;
-      const parsedEntries = parsePokerNowCSV(text);
-      
-      const date = file.lastModified ? new Date(file.lastModified).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
-      
-      const { data: sessionData, error: sessionError } = await supabase
-        .from('sessions')
-        .insert([{ date, currency: globalCurrency, chip_value: 1, is_active: false }])
-        .select()
-        .single();
+      try {
+        const text = e.target.result;
+        const parsedEntries = parsePokerNowCSV(text);
         
-      if(sessionError) return console.error(sessionError);
+        const date = file.lastModified 
+          ? new Date(file.lastModified).toISOString().split('T')[0] 
+          : new Date().toISOString().split('T')[0];
+        
+        const newGame = createGameFromCSVEntries(parsedEntries, globalCurrency, date);
 
-      const dbEntries = (parsedEntries.length > 0 ? parsedEntries : [
-        { name: 'Player 1', buyIn: 0, buyOut: 0, stack: 0 },
-        { name: 'Player 2', buyIn: 0, buyOut: 0, stack: 0 }
-      ]).map(entry => ({
-        session_id: sessionData.id,
-        player_name: entry.name.trim() || 'Unknown',
-        buy_in: entry.buyIn || 0,
-        cash_out: (entry.buyOut || 0) + (entry.stack || 0),
-        currency: globalCurrency,
-        is_bank: false,
-        hands_played: entry.handsPlayed || 0,
-        vpip_hands: entry.vpipHands || 0,
-        pfr_hands: entry.pfrHands || 0,
-        three_bet_opps: entry.threeBetOpps || 0,
-        three_bet_hands: entry.threeBetHands || 0
-      }));
+        // Immediately update local state so editingGameId resolves to a valid game
+        setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
+        setEditingGameId(newGame.id);
+        setSelectedPlayer(null);
 
-      await supabase.from('ledger').insert(dbEntries);
-      
-      await fetchGames();
-      setEditingGameId(sessionData.id);
-      setSelectedPlayer(null);
+        if (supabase) {
+          try {
+            const { data: sessionData, error: sessionError } = await supabase
+              .from('sessions')
+              .insert([{ date: newGame.date, currency: globalCurrency, chip_value: 1, is_active: false }])
+              .select()
+              .single();
+              
+            if (sessionError) {
+              console.error("Error creating uploaded session in DB:", sessionError);
+            } else if (sessionData && sessionData.id) {
+              const oldId = newGame.id;
+              newGame.id = sessionData.id;
+
+              const dbEntriesWithStats = newGame.entries.map(entry => ({
+                session_id: sessionData.id,
+                player_name: entry.name,
+                buy_in: entry.buyIn,
+                cash_out: entry.buyOut + entry.stack,
+                currency: globalCurrency,
+                is_bank: false,
+                hands_played: entry.handsPlayed,
+                vpip_hands: entry.vpipHands,
+                pfr_hands: entry.pfrHands,
+                three_bet_opps: entry.threeBetOpps,
+                three_bet_hands: entry.threeBetHands
+              }));
+
+              const { error: ledgerError } = await supabase.from('ledger').insert(dbEntriesWithStats);
+              if (ledgerError) {
+                console.warn("Ledger insert with stats failed, attempting legacy insert:", ledgerError);
+                const legacyEntries = dbEntriesWithStats.map(e => ({
+                  session_id: e.session_id,
+                  player_name: e.player_name,
+                  buy_in: e.buy_in,
+                  cash_out: e.cash_out,
+                  currency: e.currency,
+                  is_bank: e.is_bank
+                }));
+                await supabase.from('ledger').insert(legacyEntries);
+              }
+
+              // Update game ID in local state if changed
+              setGames(prevGames => prevGames.map(g => g.id === oldId ? newGame : g));
+              setEditingGameId(sessionData.id);
+            }
+          } catch (dbErr) {
+            console.error("Failed to sync uploaded session to DB:", dbErr);
+          }
+        }
+      } catch (err) {
+        console.error("Error parsing/processing CSV file:", err);
+      }
     };
+
     reader.readAsText(file);
-    event.target.value = null;
+    if (event.target) event.target.value = null;
   };
 
   const handleUpdateGame = async (updatedGame) => {
-    setGames(games.map(g => g.id === updatedGame.id ? updatedGame : g));
+    if (!updatedGame || !updatedGame.id) return;
+    setGames(prevGames => prevGames.map(g => g.id === updatedGame.id ? updatedGame : g));
+
     if (!supabase) return;
 
-    await supabase.from('sessions')
-      .update({ 
-        date: updatedGame.date, 
-        currency: updatedGame.currency, 
-        chip_value: updatedGame.chipValue,
-        poker_now_url: updatedGame.pokerNowUrl,
-        is_active: updatedGame.isActive
-      })
-      .eq('id', updatedGame.id);
+    try {
+      await supabase.from('sessions')
+        .update({ 
+          date: updatedGame.date, 
+          currency: updatedGame.currency, 
+          chip_value: updatedGame.chipValue,
+          poker_now_url: updatedGame.pokerNowUrl,
+          is_active: updatedGame.isActive
+        })
+        .eq('id', updatedGame.id);
+        
+      await supabase.from('ledger').delete().eq('session_id', updatedGame.id);
       
-    await supabase.from('ledger').delete().eq('session_id', updatedGame.id);
-    
-    const validEntries = updatedGame.entries
-      .filter(e => e.name.trim() !== '' || e.buyIn > 0 || e.buyOut > 0 || e.stack > 0)
-      .map(e => ({
-        session_id: updatedGame.id,
-        player_name: e.name.trim() || 'Unknown Player',
-        buy_in: e.buyIn || 0,
-        cash_out: (e.buyOut || 0) + (e.stack || 0),
-        currency: e.currency || updatedGame.currency,
-        is_bank: e.isBank || false,
-        hands_played: e.handsPlayed || 0,
-        vpip_hands: e.vpipHands || 0,
-        pfr_hands: e.pfrHands || 0,
-        three_bet_opps: e.threeBetOpps || 0,
-        three_bet_hands: e.threeBetHands || 0
-      }));
+      const entries = Array.isArray(updatedGame.entries) ? updatedGame.entries : [];
+      const validEntries = entries
+        .filter(e => e && ((e.name || '').trim() !== '' || e.buyIn > 0 || e.buyOut > 0 || e.stack > 0))
+        .map(e => ({
+          session_id: updatedGame.id,
+          player_name: (e.name || '').trim() || 'Unknown Player',
+          buy_in: Number(e.buyIn) || 0,
+          cash_out: (Number(e.buyOut) || 0) + (Number(e.stack) || 0),
+          currency: e.currency || updatedGame.currency || 'USD',
+          is_bank: Boolean(e.isBank),
+          hands_played: Number(e.handsPlayed) || 0,
+          vpip_hands: Number(e.vpipHands) || 0,
+          pfr_hands: Number(e.pfrHands) || 0,
+          three_bet_opps: Number(e.threeBetOpps) || 0,
+          three_bet_hands: Number(e.threeBetHands) || 0
+        }));
 
-    if (validEntries.length > 0) {
-      await supabase.from('ledger').insert(validEntries);
+      if (validEntries.length > 0) {
+        const { error: ledgerError } = await supabase.from('ledger').insert(validEntries);
+        if (ledgerError) {
+          console.warn("Ledger update with stats failed, attempting legacy update:", ledgerError);
+          const legacyEntries = validEntries.map(e => ({
+            session_id: e.session_id,
+            player_name: e.player_name,
+            buy_in: e.buy_in,
+            cash_out: e.cash_out,
+            currency: e.currency,
+            is_bank: e.is_bank
+          }));
+          await supabase.from('ledger').insert(legacyEntries);
+        }
+      }
+    } catch (err) {
+      console.error("Error updating game in DB:", err);
     }
   };
 
   const handleDeleteGame = async (id) => {
-    setGames(games.filter(g => g.id !== id));
+    if (!id) return;
+    setGames(prevGames => prevGames.filter(g => g.id !== id));
     if (editingGameId === id) setEditingGameId(null);
+
     if (!supabase) return;
-    await supabase.from('sessions').delete().eq('id', id);
+    try {
+      await supabase.from('sessions').delete().eq('id', id);
+    } catch (err) {
+      console.error("Error deleting session from DB:", err);
+    }
   };
 
   if (isLoading || !exchangeRates) {
@@ -258,90 +408,94 @@ export default function App() {
     );
   }
 
+  const activeEditingGame = editingGameId ? games.find(g => g && g.id === editingGameId) : null;
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
-      {/* Navbar */}
-      <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-emerald-400 font-bold text-xl tracking-tight">
-            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400">
-              <Globe className="w-5 h-5" />
+    <ErrorBoundary>
+      <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
+        {/* Navbar */}
+        <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
+          <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold text-xl tracking-tight">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400">
+                <Globe className="w-5 h-5" />
+              </div>
+              <span>HomeGame Tracker</span>
             </div>
-            <span>HomeGame Tracker</span>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            <div className="hidden sm:flex items-center gap-2">
-              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Dashboard View:</label>
-              <select 
-                value={globalCurrency}
-                onChange={(e) => setGlobalCurrency(e.target.value)}
-                className="bg-slate-950 border border-slate-800 text-emerald-400 text-sm font-bold rounded-lg px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
-              >
-                {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
+            
+            <div className="flex items-center gap-4">
+              <div className="hidden sm:flex items-center gap-2">
+                <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Dashboard View:</label>
+                <select 
+                  value={globalCurrency}
+                  onChange={(e) => setGlobalCurrency(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 text-emerald-400 text-sm font-bold rounded-lg px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
+                >
+                  {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
 
-            <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
-              <button 
-                onClick={() => { setActiveTab('dashboard'); setEditingGameId(null); setSelectedPlayer(null); }}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                  activeTab === 'dashboard' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <LayoutDashboard className="w-4 h-4" />
-                <span className="hidden sm:inline">Dashboard</span>
-              </button>
-              <button 
-                onClick={() => { setActiveTab('games'); setEditingGameId(null); setSelectedPlayer(null); }}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                  (activeTab === 'games' || editingGameId) ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <History className="w-4 h-4" />
-                <span className="hidden sm:inline">Sessions</span>
-              </button>
-              <button 
-                onClick={() => { setActiveTab('replayer'); setEditingGameId(null); setSelectedPlayer(null); }}
-                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
-                  activeTab === 'replayer' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-              >
-                <Play className="w-4 h-4" />
-                <span className="hidden sm:inline">Hand Replayer</span>
-              </button>
+              <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
+                <button 
+                  onClick={() => { setActiveTab('dashboard'); setEditingGameId(null); setSelectedPlayer(null); }}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                    activeTab === 'dashboard' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <LayoutDashboard className="w-4 h-4" />
+                  <span className="hidden sm:inline">Dashboard</span>
+                </button>
+                <button 
+                  onClick={() => { setActiveTab('games'); setEditingGameId(null); setSelectedPlayer(null); }}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                    (activeTab === 'games' || editingGameId) ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <History className="w-4 h-4" />
+                  <span className="hidden sm:inline">Sessions</span>
+                </button>
+                <button 
+                  onClick={() => { setActiveTab('replayer'); setEditingGameId(null); setSelectedPlayer(null); }}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                    activeTab === 'replayer' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <Play className="w-4 h-4" />
+                  <span className="hidden sm:inline">Hand Replayer</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </nav>
+        </nav>
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
-        {editingGameId ? (
-          <GameEditor 
-            game={games.find(g => g.id === editingGameId)} 
-            globalIncrement={globalIncrement}
-            setGlobalIncrement={setGlobalIncrement}
-            exchangeRates={exchangeRates}
-            onSave={handleUpdateGame}
-            onBack={() => setEditingGameId(null)}
-            onDelete={() => handleDeleteGame(editingGameId)}
-          />
-        ) : selectedPlayer ? (
-          <PlayerProfile 
-            playerName={selectedPlayer} 
-            games={games} 
-            exchangeRates={exchangeRates}
-            globalCurrency={globalCurrency}
-            onBack={() => setSelectedPlayer(null)} 
-          />
-        ) : activeTab === 'dashboard' ? (
-          <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlayFiat} globalCurrency={globalCurrency} onPlayerClick={setSelectedPlayer} />
-        ) : activeTab === 'replayer' ? (
-          <HandReplayer />
-        ) : (
-          <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
-        )}
-      </main>
-    </div>
+        <main className="max-w-6xl mx-auto px-4 py-8">
+          {editingGameId ? (
+            <GameEditor 
+              game={activeEditingGame} 
+              globalIncrement={globalIncrement}
+              setGlobalIncrement={setGlobalIncrement}
+              exchangeRates={exchangeRates}
+              onSave={handleUpdateGame}
+              onBack={() => setEditingGameId(null)}
+              onDelete={() => handleDeleteGame(editingGameId)}
+            />
+          ) : selectedPlayer ? (
+            <PlayerProfile 
+              playerName={selectedPlayer} 
+              games={games} 
+              exchangeRates={exchangeRates}
+              globalCurrency={globalCurrency}
+              onBack={() => setSelectedPlayer(null)} 
+            />
+          ) : activeTab === 'dashboard' ? (
+            <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlayFiat} globalCurrency={globalCurrency} onPlayerClick={setSelectedPlayer} />
+          ) : activeTab === 'replayer' ? (
+            <HandReplayer />
+          ) : (
+            <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
+          )}
+        </main>
+      </div>
+    </ErrorBoundary>
   );
 }

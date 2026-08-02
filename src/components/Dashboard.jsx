@@ -2,9 +2,10 @@ import { History, DollarSign, Crown, HeartHandshake } from 'lucide-react';
 import MetricCard from './MetricCard';
 import { formatFiat } from '../utils/formatters';
 
-export default function Dashboard({ stats, totalSessions, totalMoney, globalCurrency, onPlayerClick }) {
-  const topWinner = stats.length > 0 && stats[0].netFiat > 0 ? stats[0] : null;
-  const topLoser = stats.length > 0 && stats[stats.length - 1].netFiat < 0 ? stats[stats.length - 1] : null;
+export default function Dashboard({ stats = [], totalSessions = 0, totalMoney = 0, globalCurrency = 'USD', onPlayerClick }) {
+  const safeStats = Array.isArray(stats) ? stats : [];
+  const topWinner = safeStats.length > 0 && safeStats[0]?.netFiat > 0 ? safeStats[0] : null;
+  const topLoser = safeStats.length > 0 && safeStats[safeStats.length - 1]?.netFiat < 0 ? safeStats[safeStats.length - 1] : null;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -18,7 +19,7 @@ export default function Dashboard({ stats, totalSessions, totalMoney, globalCurr
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Top Shark Podium */}
         <div 
-          onClick={() => topWinner && onPlayerClick(topWinner.name)}
+          onClick={() => topWinner && topWinner.name && onPlayerClick && onPlayerClick(topWinner.name)}
           className="bg-slate-900 border border-emerald-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-emerald-500/50 hover:shadow-emerald-500/5 transition-all duration-300"
         >
           <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl group-hover:bg-emerald-500/10 transition-colors"></div>
@@ -48,7 +49,7 @@ export default function Dashboard({ stats, totalSessions, totalMoney, globalCurr
 
         {/* Biggest Donor Podium */}
         <div 
-          onClick={() => topLoser && onPlayerClick(topLoser.name)}
+          onClick={() => topLoser && topLoser.name && onPlayerClick && onPlayerClick(topLoser.name)}
           className="bg-slate-900 border border-rose-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-rose-500/50 hover:shadow-rose-500/5 transition-all duration-300"
         >
           <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl group-hover:bg-rose-500/10 transition-colors"></div>
@@ -98,34 +99,42 @@ export default function Dashboard({ stats, totalSessions, totalMoney, globalCurr
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/50">
-              {stats.length === 0 ? (
+              {safeStats.length === 0 ? (
                 <tr>
                   <td colSpan="9" className="p-8 text-center text-slate-500">No data available yet. Play some games!</td>
                 </tr>
               ) : (
-                stats.map((player, index) => {
-                  const vpipPct = player.handsPlayed > 0 ? `${((player.vpipHands / player.handsPlayed) * 100).toFixed(1)}%` : '-';
-                  const pfrPct = player.handsPlayed > 0 ? `${((player.pfrHands / player.handsPlayed) * 100).toFixed(1)}%` : '-';
-                  const threeBetPct = player.threeBetOpps > 0 ? `${((player.threeBetHands / player.threeBetOpps) * 100).toFixed(1)}%` : '-';
+                safeStats.map((player, index) => {
+                  if (!player) return null;
+
+                  const handsPlayed = Number(player.handsPlayed) || 0;
+                  const vpipHands = Number(player.vpipHands) || 0;
+                  const pfrHands = Number(player.pfrHands) || 0;
+                  const threeBetOpps = Number(player.threeBetOpps) || 0;
+                  const threeBetHands = Number(player.threeBetHands) || 0;
+
+                  const vpipPct = handsPlayed > 0 ? `${((vpipHands / handsPlayed) * 100).toFixed(1)}%` : '-';
+                  const pfrPct = handsPlayed > 0 ? `${((pfrHands / handsPlayed) * 100).toFixed(1)}%` : '-';
+                  const threeBetPct = threeBetOpps > 0 ? `${((threeBetHands / threeBetOpps) * 100).toFixed(1)}%` : '-';
                   
                   return (
                     <tr 
-                      key={player.name} 
-                      onClick={() => onPlayerClick(player.name)}
+                      key={player.name || index} 
+                      onClick={() => player.name && onPlayerClick && onPlayerClick(player.name)}
                       className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
                     >
                       <td className="p-4 font-medium text-slate-500">#{index + 1}</td>
                       <td className="p-4 font-semibold text-slate-200 group-hover:text-emerald-400 transition-colors flex items-center gap-2">
-                        {player.name}
+                        {player.name || 'Unknown'}
                       </td>
-                      <td className="p-4 text-right text-slate-400">{player.gamesPlayed}</td>
+                      <td className="p-4 text-right text-slate-400">{player.gamesPlayed || 0}</td>
                       <td className="p-4 text-right text-slate-400">{vpipPct}</td>
                       <td className="p-4 text-right text-slate-400">{pfrPct}</td>
                       <td className="p-4 text-right text-slate-400">{threeBetPct}</td>
                       <td className="p-4 text-right text-slate-400">{formatFiat(player.buyInFiat, globalCurrency)}</td>
                       <td className="p-4 text-right text-slate-400">{formatFiat(player.cashOutFiat, globalCurrency)}</td>
-                      <td className={`p-4 text-right font-bold ${player.netFiat > 0 ? 'text-emerald-400' : player.netFiat < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-                        {player.netFiat > 0 ? '+' : ''}{formatFiat(player.netFiat, globalCurrency)}
+                      <td className={`p-4 text-right font-bold ${(player.netFiat || 0) > 0 ? 'text-emerald-400' : (player.netFiat || 0) < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                        {(player.netFiat || 0) > 0 ? '+' : ''}{formatFiat(player.netFiat, globalCurrency)}
                       </td>
                     </tr>
                   );

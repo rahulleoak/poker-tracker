@@ -1,16 +1,18 @@
 export function calculateSettlement({
-  entries,
-  chipValue,
-  gameCurrency,
-  settlementCurrency,
+  entries = [],
+  chipValue = 1,
+  gameCurrency = 'USD',
+  settlementCurrency = 'USD',
   exchangeRates,
   useBankBuddies
 }) {
   let tBuyIn = 0;
   let tCashOut = 0;
   const nets = [];
+  const safeEntries = Array.isArray(entries) ? entries : [];
 
-  entries.forEach((e, index) => {
+  safeEntries.forEach((e, index) => {
+    if (!e) return;
     const buyIn = Number(e.buyIn) || 0;
     const buyOut = Number(e.buyOut) || 0;
     const stack = Number(e.stack) || 0;
@@ -21,8 +23,9 @@ export function calculateSettlement({
     tCashOut += sessionCashOut;
     
     const netChips = sessionCashOut - buyIn;
-    if (e.name.trim() !== '') {
-      nets.push({ name: e.name, netChips, id: index });
+    const name = (e.name || '').trim();
+    if (name !== '') {
+      nets.push({ name, netChips, id: index });
     }
   });
 
@@ -31,14 +34,17 @@ export function calculateSettlement({
   let trans = [];
 
   if (balanced) {
-    const fxRate = exchangeRates ? (exchangeRates[settlementCurrency] / exchangeRates[gameCurrency]) : 1;
-    const chipToTargetFiatMultiplier = chipValue * fxRate;
+    const fxRate = (exchangeRates && exchangeRates[settlementCurrency] && exchangeRates[gameCurrency]) 
+      ? (exchangeRates[settlementCurrency] / exchangeRates[gameCurrency]) 
+      : 1;
+    const safeChipValue = Number(chipValue) || 1;
+    const chipToTargetFiatMultiplier = safeChipValue * fxRate;
 
     let playersFiat = nets.map(p => ({
        ...p,
        fiatAmount: p.netChips * chipToTargetFiatMultiplier,
-       currency: entries[p.id].currency || gameCurrency,
-       isBank: entries[p.id].isBank || false
+       currency: safeEntries[p.id]?.currency || gameCurrency || 'USD',
+       isBank: Boolean(safeEntries[p.id]?.isBank)
     }));
     
     if (useBankBuddies) {

@@ -6,6 +6,8 @@
  * @returns {Record<string, { handsPlayed: number, vpipHands: number, pfrHands: number, threeBetOpps: number, threeBetHands: number }>}
  */
 export function parsePokerNowLogStats(csvText) {
+  if (!csvText || typeof csvText !== 'string') return {};
+
   const lines = csvText.split('\n').map(l => l.trim()).filter(l => l);
   if (lines.length === 0) return {};
 
@@ -14,8 +16,12 @@ export function parsePokerNowLogStats(csvText) {
   const playerStats = {};
 
   const getPlayer = (name) => {
-    if (!playerStats[name]) {
-      playerStats[name] = {
+    if (!name || typeof name !== 'string') return null;
+    const cleanName = name.trim();
+    if (!cleanName) return null;
+
+    if (!playerStats[cleanName]) {
+      playerStats[cleanName] = {
         handsPlayed: 0,
         vpipHands: 0,
         pfrHands: 0,
@@ -23,7 +29,7 @@ export function parsePokerNowLogStats(csvText) {
         threeBetHands: 0
       };
     }
-    return playerStats[name];
+    return playerStats[cleanName];
   };
 
   let handActive = false;
@@ -38,6 +44,7 @@ export function parsePokerNowLogStats(csvText) {
 
   // Robust CSV line parser
   const parseCSVLine = (line) => {
+    if (!line) return [];
     const result = [];
     let current = '';
     let inQuotes = false;
@@ -63,8 +70,8 @@ export function parsePokerNowLogStats(csvText) {
 
   for (const line of dataLines) {
     const cols = parseCSVLine(line);
-    if (cols.length < 3) continue;
-    const entry = cols[0];
+    if (cols.length < 1) continue;
+    const entry = cols[0] || '';
 
     // Hand starts
     const startingMatch = entry.match(/-- starting hand #(\d+) \(id: ([^)]+)\)/);
@@ -87,7 +94,8 @@ export function parsePokerNowLogStats(csvText) {
         const match = part.match(/#\d+\s+"?(.+?)\s+@\s+([^"\s()]+)"?/);
         if (match) {
           const name = match[1].replace(/^"|"$/g, '').trim();
-          getPlayer(name).handsPlayed++;
+          const p = getPlayer(name);
+          if (p) p.handsPlayed++;
         }
       }
       continue;
@@ -110,16 +118,20 @@ export function parsePokerNowLogStats(csvText) {
     // Hand ends
     if (handActive && entry.startsWith('-- ending hand')) {
       for (const name of vpipInHand) {
-        getPlayer(name).vpipHands++;
+        const p = getPlayer(name);
+        if (p) p.vpipHands++;
       }
       for (const name of pfrInHand) {
-        getPlayer(name).pfrHands++;
+        const p = getPlayer(name);
+        if (p) p.pfrHands++;
       }
       for (const name of threeBetOppInHand) {
-        getPlayer(name).threeBetOpps++;
+        const p = getPlayer(name);
+        if (p) p.threeBetOpps++;
       }
       for (const name of threeBetInHand) {
-        getPlayer(name).threeBetHands++;
+        const p = getPlayer(name);
+        if (p) p.threeBetHands++;
       }
       handActive = false;
       continue;
@@ -186,12 +198,17 @@ export function parsePokerNowLogStats(csvText) {
  * @returns {Array<{ name: string, buyIn: number, buyOut: number, stack: number, handsPlayed: number, vpipHands: number, pfrHands: number, threeBetOpps: number, threeBetHands: number }>}
  */
 export function parsePokerNowCSV(text) {
+  if (!text || typeof text !== 'string') return [];
+
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
   if (lines.length === 0) return [];
   const players = {}; 
 
   const getPlayer = (rawName) => {
+    if (!rawName || typeof rawName !== 'string') return null;
     const cleanName = rawName.split(' @ ')[0].replace(/^"|"$/g, '').trim();
+    if (!cleanName) return null;
+
     if (!players[cleanName]) {
       players[cleanName] = { 
         buyIn: 0, 
@@ -210,15 +227,16 @@ export function parsePokerNowCSV(text) {
   const header = lines[0].toLowerCase();
   
   if (header.includes('player_nickname') && header.includes('buy_in')) {
-    const headerCols = lines[0].toLowerCase().split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
+    const parseCols = (line) => line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
+    const headerCols = parseCols(lines[0].toLowerCase());
     const nameIdx = headerCols.indexOf('player_nickname');
     const buyInIdx = headerCols.indexOf('buy_in');
     const buyOutIdx = headerCols.indexOf('buy_out');
     const stackIdx = headerCols.indexOf('stack');
 
-    if (nameIdx > -1 && buyInIdx > -1) {
+    if (nameIdx > -1) {
       for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
+        const cols = parseCols(lines[i]);
         if (cols.length > nameIdx) {
           const buyIn = (buyInIdx > -1 && cols.length > buyInIdx) ? (parseFloat(cols[buyInIdx]) || 0) : 0;
           const buyOut = (buyOutIdx > -1 && cols.length > buyOutIdx) ? (parseFloat(cols[buyOutIdx]) || 0) : 0;
@@ -226,9 +244,11 @@ export function parsePokerNowCSV(text) {
 
           if (buyIn > 0 || buyOut > 0 || stack > 0) {
             const p = getPlayer(cols[nameIdx]);
-            p.buyIn += buyIn;
-            p.buyOut += buyOut;
-            p.stack += stack;
+            if (p) {
+              p.buyIn += buyIn;
+              p.buyOut += buyOut;
+              p.stack += stack;
+            }
           }
         }
       }
@@ -237,46 +257,52 @@ export function parsePokerNowCSV(text) {
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
       let m = line.match(/approved the player "([^"]+)" participation with a stack of (\d+)/i);
-      if (m) getPlayer(m[1]).buyIn += parseInt(m[2], 10);
+      if (m) { const p = getPlayer(m[1]); if (p) p.buyIn += parseInt(m[2], 10); }
       m = line.match(/approved the player "([^"]+)" requested stack of (\d+)/i);
-      if (m) getPlayer(m[1]).buyIn += parseInt(m[2], 10);
+      if (m) { const p = getPlayer(m[1]); if (p) p.buyIn += parseInt(m[2], 10); }
       m = line.match(/player "([^"]+)" sits down with a stack of (\d+)/i);
-      if (m) getPlayer(m[1]).buyIn += parseInt(m[2], 10);
+      if (m) { const p = getPlayer(m[1]); if (p) p.buyIn += parseInt(m[2], 10); }
       m = line.match(/player "([^"]+)" quits the game with a stack of (\d+)/i);
-      if (m) getPlayer(m[1]).stack += parseInt(m[2], 10);
+      if (m) { const p = getPlayer(m[1]); if (p) p.stack += parseInt(m[2], 10); }
       m = line.match(/player "([^"]+)" stands up with a stack of (\d+)/i);
-      if (m) getPlayer(m[1]).stack += parseInt(m[2], 10);
+      if (m) { const p = getPlayer(m[1]); if (p) p.stack += parseInt(m[2], 10); }
       m = line.match(/updated the player "([^"]+)" stack from (\d+) to (\d+)/i);
       if (m) {
         const from = parseInt(m[2], 10);
         const to = parseInt(m[3], 10);
-        if (to > from) getPlayer(m[1]).buyIn += (to - from);
-        if (from > to) getPlayer(m[1]).stack += (from - to);
+        const p = getPlayer(m[1]);
+        if (p) {
+          if (to > from) p.buyIn += (to - from);
+          if (from > to) p.stack += (from - to);
+        }
       }
     }
+  }
 
-    if (header.includes('entry') || header.includes('at') || header.includes('order')) {
-      const stats = parsePokerNowLogStats(text);
-      for (const [cleanName, s] of Object.entries(stats)) {
-        const p = getPlayer(cleanName);
-        p.handsPlayed = s.handsPlayed;
-        p.vpipHands = s.vpipHands;
-        p.pfrHands = s.pfrHands;
-        p.threeBetOpps = s.threeBetOpps;
-        p.threeBetHands = s.threeBetHands;
+  // Also extract log stats if log lines are present in the text
+  if (text.includes('-- starting hand') || text.includes('Player stacks:')) {
+    const stats = parsePokerNowLogStats(text);
+    for (const [cleanName, s] of Object.entries(stats)) {
+      const p = getPlayer(cleanName);
+      if (p) {
+        p.handsPlayed = s.handsPlayed || 0;
+        p.vpipHands = s.vpipHands || 0;
+        p.pfrHands = s.pfrHands || 0;
+        p.threeBetOpps = s.threeBetOpps || 0;
+        p.threeBetHands = s.threeBetHands || 0;
       }
     }
   }
 
   return Object.entries(players).map(([name, data]) => ({
     name,
-    buyIn: data.buyIn,
-    buyOut: data.buyOut,
-    stack: data.stack,
-    handsPlayed: data.handsPlayed || 0,
-    vpipHands: data.vpipHands || 0,
-    pfrHands: data.pfrHands || 0,
-    threeBetOpps: data.threeBetOpps || 0,
-    threeBetHands: data.threeBetHands || 0
+    buyIn: Number(data.buyIn) || 0,
+    buyOut: Number(data.buyOut) || 0,
+    stack: Number(data.stack) || 0,
+    handsPlayed: Number(data.handsPlayed) || 0,
+    vpipHands: Number(data.vpipHands) || 0,
+    pfrHands: Number(data.pfrHands) || 0,
+    threeBetOpps: Number(data.threeBetOpps) || 0,
+    threeBetHands: Number(data.threeBetHands) || 0
   })).filter(p => p.buyIn > 0 || p.stack > 0 || p.buyOut > 0 || p.handsPlayed > 0);
 }

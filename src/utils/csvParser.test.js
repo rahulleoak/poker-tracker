@@ -1,4 +1,4 @@
-import { parsePokerNowCSV } from './csvParser.js';
+import { parsePokerNowCSV, parsePokerNowLogStats } from './csvParser.js';
 import assert from 'node:assert';
 import test from 'node:test';
 
@@ -12,11 +12,6 @@ test('parsePokerNowCSV with classic buy_in, buy_out, stack columns', () => {
 
   const results = parsePokerNowCSV(csv);
   
-  // Alice: buyIn=100, buyOut=50, stack=60
-  // Bob: buyIn=200, buyOut=0, stack=150
-  // Charlie: buyIn=50, buyOut=80, stack=0
-  // Dave: all 0, should be filtered out because filter does: p.buyIn > 0 || p.stack > 0 || p.buyOut > 0
-
   assert.strictEqual(results.length, 3);
 
   const alice = results.find(r => r.name === 'Alice');
@@ -55,8 +50,6 @@ test('parsePokerNowCSV with missing/shuffled columns', () => {
 });
 
 test('parsePokerNowCSV handles traditional/legacy logs correctly', () => {
-  // Wait, if header contains 'player_nickname' and 'buy_in', it uses the CSV parsing branch, not the legacy log parser.
-  // Let's test the legacy log parsing branch explicitly by using logs text without 'player_nickname' and 'buy_in' in the first line.
   const legacyLog = `
 entry_id,action
 approved the player "Alice" participation with a stack of 100
@@ -69,4 +62,19 @@ player "Alice" quits the game with a stack of 150
   assert.strictEqual(alice.buyIn, 100);
   assert.strictEqual(alice.buyOut, 0);
   assert.strictEqual(alice.stack, 150);
+});
+
+test('parsePokerNowCSV handles null, undefined, empty, and invalid input without crashing', () => {
+  assert.deepStrictEqual(parsePokerNowCSV(null), []);
+  assert.deepStrictEqual(parsePokerNowCSV(undefined), []);
+  assert.deepStrictEqual(parsePokerNowCSV(''), []);
+  assert.deepStrictEqual(parsePokerNowCSV(12345), []);
+  assert.deepStrictEqual(parsePokerNowCSV('random string without columns'), []);
+});
+
+test('parsePokerNowLogStats handles invalid input gracefully', () => {
+  assert.deepStrictEqual(parsePokerNowLogStats(null), {});
+  assert.deepStrictEqual(parsePokerNowLogStats(undefined), {});
+  assert.deepStrictEqual(parsePokerNowLogStats(''), {});
+  assert.deepStrictEqual(parsePokerNowLogStats(42), {});
 });
