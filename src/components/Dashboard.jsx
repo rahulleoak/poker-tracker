@@ -1,4 +1,4 @@
-import { History, DollarSign, Users } from 'lucide-react';
+import { History, DollarSign, Crown, HeartHandshake } from 'lucide-react';
 import MetricCard from './MetricCard';
 import { formatFiat } from '../utils/formatters';
 
@@ -8,22 +8,73 @@ export default function Dashboard({ stats, totalSessions, totalMoney, globalCurr
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <MetricCard title="Total Sessions" value={totalSessions} icon={<History className="w-5 h-5 text-blue-400" />} />
+      {/* Overview Metrics */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <MetricCard title="Total Sessions" value={totalSessions} icon={<History className="w-5 h-5 text-indigo-400" />} />
         <MetricCard title={`Money Wagered (${globalCurrency})`} value={formatFiat(totalMoney, globalCurrency)} icon={<DollarSign className="w-5 h-5 text-emerald-400" />} />
-        <MetricCard 
-          title="Top Shark" 
-          value={topWinner ? topWinner.name : '-'} 
-          subtitle={topWinner ? `+${formatFiat(topWinner.netFiat, globalCurrency)}` : ''}
-          icon={<Users className="w-5 h-5 text-amber-400" />} 
-        />
-        <MetricCard 
-          title="Biggest Donor" 
-          value={topLoser ? topLoser.name : '-'} 
-          subtitle={topLoser ? `${formatFiat(topLoser.netFiat, globalCurrency)}` : ''}
-          valueColor="text-rose-400"
-          icon={<Users className="w-5 h-5 text-rose-400" />} 
-        />
+      </div>
+
+      {/* Hall of Fame Podiums */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Top Shark Podium */}
+        <div 
+          onClick={() => topWinner && onPlayerClick(topWinner.name)}
+          className="bg-slate-900 border border-emerald-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-emerald-500/50 hover:shadow-emerald-500/5 transition-all duration-300"
+        >
+          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl group-hover:bg-emerald-500/10 transition-colors"></div>
+          <div className="flex items-start justify-between">
+            <div className="space-y-4">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-semibold border border-emerald-500/20">
+                🏆 Top Shark
+              </span>
+              <div>
+                <h3 className="text-3xl font-extrabold text-slate-100 group-hover:text-emerald-400 transition-colors">
+                  {topWinner ? topWinner.name : 'No Shark Yet'}
+                </h3>
+                <p className="text-slate-400 text-sm mt-1">Dominating the table</p>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-black text-emerald-400">
+                  {topWinner ? `+${formatFiat(topWinner.netFiat, globalCurrency)}` : '-'}
+                </span>
+                <span className="text-slate-500 text-xs">all-time net profit</span>
+              </div>
+            </div>
+            <div className="w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center border border-emerald-500/20 group-hover:scale-110 transition-transform duration-300 shrink-0">
+              <Crown className="w-8 h-8 text-emerald-400" />
+            </div>
+          </div>
+        </div>
+
+        {/* Biggest Donor Podium */}
+        <div 
+          onClick={() => topLoser && onPlayerClick(topLoser.name)}
+          className="bg-slate-900 border border-rose-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-rose-500/50 hover:shadow-rose-500/5 transition-all duration-300"
+        >
+          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl group-hover:bg-rose-500/10 transition-colors"></div>
+          <div className="flex items-start justify-between">
+            <div className="space-y-4">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 text-xs font-semibold border border-rose-500/20">
+                🎁 Biggest Donor
+              </span>
+              <div>
+                <h3 className="text-3xl font-extrabold text-slate-100 group-hover:text-rose-400 transition-colors">
+                  {topLoser ? topLoser.name : 'No Donor Yet'}
+                </h3>
+                <p className="text-slate-400 text-sm mt-1">Keeping the game alive</p>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-2xl font-black text-rose-400">
+                  {topLoser ? formatFiat(topLoser.netFiat, globalCurrency) : '-'}
+                </span>
+                <span className="text-slate-500 text-xs">all-time contribution</span>
+              </div>
+            </div>
+            <div className="w-16 h-16 bg-rose-500/10 rounded-2xl flex items-center justify-center border border-rose-500/20 group-hover:scale-110 transition-transform duration-300 shrink-0">
+              <HeartHandshake className="w-8 h-8 text-rose-400" />
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">

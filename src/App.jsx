@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
-import { LayoutDashboard, Coins, Globe, History } from 'lucide-react';
+import { LayoutDashboard, Coins, Globe, History, Play } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
@@ -7,6 +7,7 @@ import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
 import PlayerProfile from './components/PlayerProfile';
+import HandReplayer from './components/HandReplayer';
 
 export default function App() {
   const [games, setGames] = useState([]);
@@ -268,6 +269,15 @@ export default function App() {
                 <History className="w-4 h-4" />
                 <span className="hidden sm:inline">Sessions</span>
               </button>
+              <button 
+                onClick={() => { setActiveTab('replayer'); setEditingGameId(null); setSelectedPlayer(null); }}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                  activeTab === 'replayer' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <Play className="w-4 h-4" />
+                <span className="hidden sm:inline">Hand Replayer</span>
+              </button>
             </div>
           </div>
         </div>
@@ -294,6 +304,8 @@ export default function App() {
           />
         ) : activeTab === 'dashboard' ? (
           <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlayFiat} globalCurrency={globalCurrency} onPlayerClick={setSelectedPlayer} />
+        ) : activeTab === 'replayer' ? (
+          <HandReplayer />
         ) : (
           <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
         )}
