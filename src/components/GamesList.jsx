@@ -1,9 +1,38 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, Plus, CheckCircle2, AlertCircle, ArrowRight, Globe } from 'lucide-react';
 import { formatFiat } from '../utils/formatters';
 
 export default function GamesList({ games, onCreate, onFileUpload, onEdit, exchangeRates, globalCurrency }) {
   const fileInputRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (file.name.toLowerCase().endsWith(".csv")) {
+        // Construct a synthetic event to match existing onFileUpload format
+        const syntheticEvent = {
+          target: {
+            files: [file],
+            value: null
+          }
+        };
+        onFileUpload(syntheticEvent);
+      }
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -31,6 +60,39 @@ export default function GamesList({ games, onCreate, onFileUpload, onEdit, excha
             <Plus className="w-4 h-4" />
             Log New Session
           </button>
+        </div>
+      </div>
+
+      {/* Drag & Drop Zone */}
+      <div 
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+        className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all duration-300 relative overflow-hidden group ${
+          isDragging 
+            ? 'border-emerald-500 bg-emerald-500/10 shadow-lg shadow-emerald-500/5' 
+            : 'border-slate-800 bg-slate-900/40 hover:bg-slate-900/80 hover:border-slate-700'
+        }`}
+      >
+        <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-3xl group-hover:bg-indigo-500/10 transition-colors"></div>
+        <div className="max-w-md mx-auto flex flex-col items-center gap-3">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center border transition-all duration-300 ${
+            isDragging 
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 scale-110' 
+              : 'bg-slate-800 border-slate-700 text-slate-400 group-hover:text-slate-300'
+          }`}>
+            <Upload className="w-6 h-6 animate-bounce" style={{ animationDuration: '3s' }} />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-200">Import PokerNow CSV Session Log</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Drag & drop your PokerNow CSV log file here, or <span className="text-emerald-400 underline group-hover:text-emerald-300">browse files</span>.
+            </p>
+          </div>
+          <span className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold bg-slate-950/50 px-2.5 py-1 rounded border border-slate-800/80">
+            Supports .csv
+          </span>
         </div>
       </div>
 
