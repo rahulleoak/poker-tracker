@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Play, Pause, ChevronLeft, ChevronRight, RotateCcw, HelpCircle, Flame, Coins, Trophy } from 'lucide-react';
 
 const SAMPLE_HANDS = [
@@ -108,16 +108,36 @@ export default function HandReplayer() {
   const [selectedHandIdx, setSelectedHandIdx] = useState(0);
   const [currentStepIdx, setCurrentStepIdx] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playInterval, setPlayInterval] = useState(null);
 
   const activeHand = SAMPLE_HANDS[selectedHandIdx];
   const activeStep = activeHand.steps[currentStepIdx];
+
+  useEffect(() => {
+    let interval = null;
+    if (isPlaying) {
+      interval = setInterval(() => {
+        setCurrentStepIdx((prev) => {
+          if (prev < activeHand.steps.length - 1) {
+            return prev + 1;
+          } else {
+            setIsPlaying(false);
+            return prev;
+          }
+        });
+      }, 3000);
+    }
+    return () => {
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+  }, [isPlaying, activeHand.steps.length]);
 
   const handleNext = () => {
     if (currentStepIdx < activeHand.steps.length - 1) {
       setCurrentStepIdx(currentStepIdx + 1);
     } else {
-      handlePause();
+      setIsPlaying(false);
     }
   };
 
@@ -129,31 +149,14 @@ export default function HandReplayer() {
 
   const handleReset = () => {
     setCurrentStepIdx(0);
-    handlePause();
+    setIsPlaying(false);
   };
 
   const handlePlay = () => {
-    if (isPlaying) return;
     setIsPlaying(true);
-    const interval = setInterval(() => {
-      setCurrentStepIdx((prev) => {
-        if (prev < activeHand.steps.length - 1) {
-          return prev + 1;
-        } else {
-          clearInterval(interval);
-          setIsPlaying(false);
-          return prev;
-        }
-      });
-    }, 3000);
-    setPlayInterval(interval);
   };
 
   const handlePause = () => {
-    if (playInterval) {
-      clearInterval(playInterval);
-      setPlayInterval(null);
-    }
     setIsPlaying(false);
   };
 
@@ -165,8 +168,12 @@ export default function HandReplayer() {
 
     return (
       <div className={`w-12 h-16 rounded-lg bg-white text-slate-900 border-2 font-bold flex flex-col justify-between p-1.5 shadow-md transform hover:-translate-y-1 transition-all select-none ${
-        isRed ? 'border-rose-400 text-rose-600' : 'border-slate-300 text-slate-800'
-      } ${isDimmed ? 'opacity-30' : 'opacity-100 scale-105 shadow-xl border-emerald-500'}`}>
+        isRed ? 'text-rose-600' : 'text-slate-800'
+      } ${
+        isDimmed 
+          ? `opacity-30 ${isRed ? 'border-rose-400' : 'border-slate-300'}` 
+          : 'opacity-100 scale-105 shadow-xl border-emerald-500'
+      }`}>
         <div className="text-xs leading-none">{value}</div>
         <div className="text-center text-lg leading-none mt-1">{suit}</div>
         <div className="text-right text-xs leading-none transform rotate-180">{value}</div>
@@ -375,9 +382,9 @@ export default function HandReplayer() {
                     }}
                     className="flex flex-col items-center relative z-10 group"
                   >
-                    <div className={`w-7.5 h-7.5 rounded-full border-2 flex items-center justify-center text-[10px] font-bold transition-all duration-300 ${
+                    <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center text-[10px] font-bold transition-all duration-300 ${
                       isCurrent
-                        ? 'bg-emerald-600 border-emerald-400 text-white scale-115 shadow-lg shadow-emerald-500/20'
+                        ? 'bg-emerald-600 border-emerald-400 text-white scale-110 shadow-lg shadow-emerald-500/20'
                         : isCompleted
                         ? 'bg-slate-950 border-emerald-500 text-emerald-400'
                         : 'bg-slate-950 border-slate-800 text-slate-500 hover:border-slate-700'
