@@ -225,9 +225,8 @@ export default function App() {
           console.error("Error creating session in Supabase:", sessionError);
         } else if (sessionData && sessionData.id) {
           const oldId = newGame.id;
-          const updatedGame = { ...newGame, id: sessionData.id };
 
-          const initialEntries = updatedGame.entries.map(e => ({
+          const initialEntries = newGame.entries.map(e => ({
             session_id: sessionData.id,
             player_name: e.name,
             buy_in: e.buyIn,
@@ -239,8 +238,8 @@ export default function App() {
           await supabase.from('ledger').insert(initialEntries);
 
           // Update game ID in local state if it changed from generated UUID
-          setGames(prevGames => prevGames.map(g => g.id === oldId ? updatedGame : g));
-          setEditingGameId(sessionData.id);
+          setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
+          setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
         }
       } catch (err) {
         console.error("Failed to sync created session to DB:", err);
@@ -281,9 +280,8 @@ export default function App() {
               console.error("Error creating uploaded session in DB:", sessionError);
             } else if (sessionData && sessionData.id) {
               const oldId = newGame.id;
-              const updatedGame = { ...newGame, id: sessionData.id };
 
-              const dbEntriesWithStats = updatedGame.entries.map(entry => ({
+              const dbEntriesWithStats = newGame.entries.map(entry => ({
                 session_id: sessionData.id,
                 player_name: entry.name,
                 buy_in: entry.buyIn,
@@ -312,8 +310,8 @@ export default function App() {
               }
 
               // Update game ID in local state if changed
-              setGames(prevGames => prevGames.map(g => g.id === oldId ? updatedGame : g));
-              setEditingGameId(sessionData.id);
+              setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
+              setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
             }
           } catch (dbErr) {
             console.error("Failed to sync uploaded session to DB:", dbErr);
