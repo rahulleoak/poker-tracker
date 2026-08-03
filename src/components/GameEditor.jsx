@@ -487,10 +487,121 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
              </div>
           </div>
           
-          <div className="overflow-x-auto">
-            <style>{`
-              input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-            `}</style>
+          <style>{`
+            input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+          `}</style>
+
+          {/* Mobile Card View (< sm) */}
+          <div className="block sm:hidden divide-y divide-slate-800">
+            {entries.map((entry, index) => {
+              if (!entry) return null;
+              const sessionCashOut = (Number(entry.buyOut) || 0) + (Number(entry.stack) || 0);
+              const net = sessionCashOut - (Number(entry.buyIn) || 0);
+              return (
+                <div key={index} className="p-4 space-y-3 bg-slate-900/40">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="relative flex-1">
+                      <input 
+                        type="text" 
+                        placeholder="Player name..."
+                        value={entry.name || ''}
+                        onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-3 pr-16 py-2.5 text-slate-200 outline-none focus:border-emerald-500 text-sm"
+                      />
+                      <select
+                        value={entry.currency || 'USD'}
+                        onChange={(e) => handleEntryChange(index, 'currency', e.target.value)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 rounded text-[10px] font-bold px-1.5 py-1.5 outline-none uppercase"
+                      >
+                        {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-slate-900 text-slate-200">{c}</option>)}
+                      </select>
+                    </div>
+                    <button 
+                      onClick={() => handleRemoveRow(index)}
+                      className="p-2.5 bg-slate-800/80 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 rounded-lg transition-colors"
+                      title="Delete Player"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800 space-y-1">
+                      <span className="text-slate-500 block">Buy-In (🪙)</span>
+                      <div className="flex items-center justify-between gap-1">
+                        <button 
+                          onClick={() => adjustValue(index, 'buyIn', -globalIncrement)}
+                          className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md transition-colors"
+                        >
+                          <Minus className="w-4 h-4" />
+                        </button>
+                        <input 
+                          type="number" 
+                          min="0"
+                          value={entry.buyIn === 0 ? '' : entry.buyIn}
+                          onChange={(e) => handleEntryChange(index, 'buyIn', e.target.value === '' ? 0 : Number(e.target.value))}
+                          className="w-16 bg-slate-900 border border-slate-800 rounded-lg py-1.5 text-slate-200 text-center outline-none focus:border-emerald-500 [-moz-appearance:_textfield]"
+                        />
+                        <button 
+                          onClick={() => adjustValue(index, 'buyIn', globalIncrement)}
+                          className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md transition-colors"
+                        >
+                          <Plus className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-950/60 p-2.5 rounded-lg border border-slate-800 space-y-1">
+                      <span className="text-slate-500 block">Buy-Out (🪙)</span>
+                      <div className="flex items-center justify-between gap-1">
+                        <button 
+                          onClick={() => adjustValue(index, 'buyOut', -globalIncrement)}
+                          className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md transition-colors"
+                        >
+                          <Minus className="w-4 h-4" />
+                        </button>
+                        <input 
+                          type="number" 
+                          min="0"
+                          value={entry.buyOut === 0 ? '' : entry.buyOut}
+                          onChange={(e) => handleEntryChange(index, 'buyOut', e.target.value === '' ? 0 : Number(e.target.value))}
+                          className="w-16 bg-slate-900 border border-slate-800 rounded-lg py-1.5 text-slate-200 text-center outline-none focus:border-emerald-500 [-moz-appearance:_textfield]"
+                        />
+                        <button 
+                          onClick={() => adjustValue(index, 'buyOut', globalIncrement)}
+                          className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md transition-colors"
+                        >
+                          <Plus className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500">Current Stack:</span>
+                      <input 
+                        type="number" 
+                        min="0"
+                        value={entry.stack === 0 ? '' : entry.stack}
+                        onChange={(e) => handleEntryChange(index, 'stack', e.target.value === '' ? 0 : Number(e.target.value))}
+                        className="w-20 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-slate-200 text-center outline-none focus:border-emerald-500 [-moz-appearance:_textfield]"
+                      />
+                    </div>
+                    <div className="text-right">
+                      <span className="text-slate-500 block text-[10px]">Net Chips</span>
+                      <span className={`font-bold text-sm ${net > 0 ? 'text-emerald-400' : net < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                        {net > 0 ? '+' : ''}{net === 0 ? `0` : formatChips(net)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop Table View (sm:block) */}
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-slate-900 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
