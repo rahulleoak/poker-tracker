@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
 import { calculateSettlement } from '../utils/settlement';
+import { parsePokerNowLogStats } from '../utils/csvParser';
 
 export default function GameEditor({ game, globalIncrement = 100, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete }) {
   // Local state to manage edits without hitting DB on every keystroke
@@ -51,6 +52,7 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
   const [activeSettingsTab, setActiveSettingsTab] = useState('general');
   const [settlementCurrency, setSettlementCurrency] = useState(() => game?.currency || 'USD');
   const [useBankBuddies, setUseBankBuddies] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState(null);
 
   // --- AUTO-SAVE EFFECT ---
   const isMounted = useRef(false);
@@ -147,6 +149,77 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
       threeBetOpps: 0,
       threeBetHands: 0
     }]);
+  };
+
+  const handleHandLogUpload = (event) => {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target.result;
+        const stats = parsePokerNowLogStats(text);
+        
+        const handMatches = text.match(/-- starting hand #\d+/gi);
+        const totalHands = handMatches ? handMatches.length : Object.values(stats).reduce((max, s) => Math.max(max, s.handsPlayed || 0), 0);
+
+        const updatedEntries = entries.map(entry => {
+          const cleanEntryName = (entry.name || '').trim().toLowerCase();
+          for (const [statName, s] of Object.entries(stats)) {
+            const cleanStatName = statName.trim().toLowerCase();
+            if (cleanEntryName === cleanStatName || 
+                (entry.externalId && s.externalId && entry.externalId === s.externalId) ||
+                (entry.pokerNowId && s.pokerNowId && entry.pokerNowId === s.pokerNowId)) {
+              return {
+                ...entry,
+                handsPlayed: s.handsPlayed || 0,
+                vpipHands: s.vpipHands || 0,
+                pfrHands: s.pfrHands || 0,
+                threeBetOpps: s.threeBetOpps || 0,
+                threeBetHands: s.threeBetHands || 0,
+                externalId: entry.externalId || s.externalId || null,
+                pokerNowId: entry.pokerNowId || s.pokerNowId || null
+              };
+            }
+          }
+          return entry;
+        });
+
+        for (const [statName, s] of Object.entries(stats)) {
+          const exists = updatedEntries.some(e => {
+            const cleanE = (e.name || '').trim().toLowerCase();
+            const cleanS = statName.trim().toLowerCase();
+            return cleanE === cleanS || (e.externalId && s.externalId && e.externalId === s.externalId);
+          });
+          if (!exists && s.handsPlayed > 0) {
+            updatedEntries.push({
+              name: s.name,
+              externalId: s.externalId || null,
+              pokerNowId: s.pokerNowId || null,
+              buyIn: 0,
+              buyOut: 0,
+              stack: 0,
+              currency: gameCurrency,
+              isBank: false,
+              handsPlayed: s.handsPlayed || 0,
+              vpipHands: s.vpipHands || 0,
+              pfrHands: s.pfrHands || 0,
+              threeBetOpps: s.threeBetOpps || 0,
+              threeBetHands: s.threeBetHands || 0
+            });
+          }
+        }
+
+        setEntries(updatedEntries);
+        setUploadSuccess(`Successfully parsed and attached stats for ${totalHands} hands (${Object.keys(stats).length} players).`);
+      } catch (err) {
+        console.error("Failed to parse hand log file:", err);
+        alert("Failed to parse hand history log file.");
+      }
+    };
+    reader.readAsText(file);
+    if (event.target) event.target.value = null;
   };
 
   const handleRemoveRow = (index) => {
@@ -267,7 +340,7 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
                     </div>
                   </div>
                   
-                  <div className="pt-4 border-t border-slate-800">
+                  <div className="pt-4 border-t border-slate-800 space-y-3">
                     <label className="block text-xs font-medium text-slate-500 mb-1">Poker Now Link</label>
                     <input 
                       type="url"
@@ -276,6 +349,22 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
                       onChange={(e) => setPokerNowUrl(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm outline-none focus:border-emerald-500"
                     />
+
+                    <div className="pt-2">
+                      <label className="block text-xs font-medium text-slate-500 mb-1">Attach Hand History Log File (.csv, .txt)</label>
+                      <input 
+                        type="file"
+                        accept=".csv,.txt"
+                        onChange={handleHandLogUpload}
+                        className="w-full bg-slate-950 border border-slate-700 text-slate-300 text-xs rounded-lg file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-500 cursor-pointer"
+                      />
+                      {uploadSuccess && (
+                        <div className="mt-2.5 p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-lg flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>{uploadSuccess}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}

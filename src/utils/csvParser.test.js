@@ -278,4 +278,54 @@ test('parsePokerNowLogStats preserves unique external player IDs in log stats', 
   assert.strictEqual(stats.Rahul.vpipHands, 1);
 });
 
+test('hand log attachment and stats merging into session player entries correctly', () => {
+  const logCSV = `entry_id,entry,created_at
+3,"-- ending hand #1",2023-01-01T01:05:00Z
+2,"Alice @ a1 raises to 30",2023-01-01T01:02:00Z
+1,"Player stacks: #1 ""Alice @ a1"" (100) | #2 ""Bob @ b2"" (100)",2023-01-01T01:01:00Z
+0,"-- starting hand #1 (id: h1)",2023-01-01T01:00:00Z
+`;
+  const stats = parsePokerNowLogStats(logCSV);
+  const entries = [
+    { name: 'Alice', buyIn: 100, buyOut: 0, stack: 100, handsPlayed: 0, vpipHands: 0, pfrHands: 0, threeBetOpps: 0, threeBetHands: 0 }
+  ];
+
+  const updatedEntries = [...entries];
+  updatedEntries.forEach(entry => {
+    const s = stats[entry.name];
+    if (s) {
+      entry.handsPlayed = s.handsPlayed;
+      entry.vpipHands = s.vpipHands;
+      entry.pfrHands = s.pfrHands;
+      entry.threeBetOpps = s.threeBetOpps;
+      entry.threeBetHands = s.threeBetHands;
+    }
+  });
+
+  for (const [statName, s] of Object.entries(stats)) {
+    const exists = updatedEntries.some(e => e.name === statName);
+    if (!exists && s.handsPlayed > 0) {
+      updatedEntries.push({
+        name: s.name,
+        handsPlayed: s.handsPlayed,
+        vpipHands: s.vpipHands,
+        pfrHands: s.pfrHands,
+        threeBetOpps: s.threeBetOpps,
+        threeBetHands: s.threeBetHands
+      });
+    }
+  }
+
+  assert.strictEqual(updatedEntries.length, 2);
+  const alice = updatedEntries.find(e => e.name === 'Alice');
+  assert.strictEqual(alice.handsPlayed, 1);
+  assert.strictEqual(alice.vpipHands, 1);
+  assert.strictEqual(alice.pfrHands, 1);
+
+  const bob = updatedEntries.find(e => e.name === 'Bob');
+  assert.strictEqual(bob.handsPlayed, 1);
+  assert.strictEqual(bob.vpipHands, 0);
+});
+
+
 
