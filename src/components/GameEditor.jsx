@@ -164,25 +164,26 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
         const handMatches = text.match(/-- starting hand #\d+/gi);
         const totalHands = handMatches ? handMatches.length : Object.values(stats).reduce((max, s) => Math.max(max, s.handsPlayed || 0), 0);
 
-        const updatedEntries = [...entries];
-
-        updatedEntries.forEach(entry => {
+        const updatedEntries = entries.map(entry => {
           const cleanEntryName = (entry.name || '').trim().toLowerCase();
           for (const [statName, s] of Object.entries(stats)) {
             const cleanStatName = statName.trim().toLowerCase();
             if (cleanEntryName === cleanStatName || 
                 (entry.externalId && s.externalId && entry.externalId === s.externalId) ||
                 (entry.pokerNowId && s.pokerNowId && entry.pokerNowId === s.pokerNowId)) {
-              entry.handsPlayed = s.handsPlayed || 0;
-              entry.vpipHands = s.vpipHands || 0;
-              entry.pfrHands = s.pfrHands || 0;
-              entry.threeBetOpps = s.threeBetOpps || 0;
-              entry.threeBetHands = s.threeBetHands || 0;
-              if (!entry.externalId && s.externalId) entry.externalId = s.externalId;
-              if (!entry.pokerNowId && s.pokerNowId) entry.pokerNowId = s.pokerNowId;
-              break;
+              return {
+                ...entry,
+                handsPlayed: s.handsPlayed || 0,
+                vpipHands: s.vpipHands || 0,
+                pfrHands: s.pfrHands || 0,
+                threeBetOpps: s.threeBetOpps || 0,
+                threeBetHands: s.threeBetHands || 0,
+                externalId: entry.externalId || s.externalId || null,
+                pokerNowId: entry.pokerNowId || s.pokerNowId || null
+              };
             }
           }
+          return entry;
         });
 
         for (const [statName, s] of Object.entries(stats)) {
