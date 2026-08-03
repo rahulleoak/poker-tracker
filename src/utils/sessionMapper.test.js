@@ -14,6 +14,7 @@ test('mapDatabaseSessionsToGames maps full sessions with stats columns correctly
       ledger: [
         {
           player_name: 'Alice',
+          external_player_id: 'SPoLg3vOL-',
           buy_in: 100,
           cash_out: 150,
           currency: 'USD',
@@ -41,6 +42,8 @@ test('mapDatabaseSessionsToGames maps full sessions with stats columns correctly
 
   const alice = game.entries[0];
   assert.strictEqual(alice.name, 'Alice');
+  assert.strictEqual(alice.externalId, 'SPoLg3vOL-');
+  assert.strictEqual(alice.pokerNowId, 'SPoLg3vOL-');
   assert.strictEqual(alice.buyIn, 100);
   assert.strictEqual(alice.stack, 150);
   assert.strictEqual(alice.isBank, true);
@@ -129,7 +132,7 @@ test('createDefaultGame produces valid manual session model', () => {
 
 test('createGameFromCSVEntries produces valid game from parsed CSV entries', () => {
   const parsed = [
-    { name: 'Charlie', buyIn: 150, buyOut: 20, stack: 100, handsPlayed: 30, vpipHands: 10 },
+    { name: 'Charlie', externalId: 'SPoLg3vOL-', buyIn: 150, buyOut: 20, stack: 100, handsPlayed: 30, vpipHands: 10 },
     { name: 'Dave', buyIn: 50, buyOut: 0, stack: 80 }
   ];
 
@@ -143,6 +146,8 @@ test('createGameFromCSVEntries produces valid game from parsed CSV entries', () 
 
   const charlie = game.entries[0];
   assert.strictEqual(charlie.name, 'Charlie');
+  assert.strictEqual(charlie.externalId, 'SPoLg3vOL-');
+  assert.strictEqual(charlie.pokerNowId, 'SPoLg3vOL-');
   assert.strictEqual(charlie.buyIn, 150);
   assert.strictEqual(charlie.buyOut, 20);
   assert.strictEqual(charlie.stack, 100);
