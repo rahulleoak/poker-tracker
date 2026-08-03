@@ -57,7 +57,7 @@ A premium, interactive poker session tracker featuring a sleek, dark card-based 
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
    ```
-   *(Note: If Supabase variables are omitted, the app runs in local offline mode.)*
+   *(Note: The app features robust local-first session persistence using `localStorage` with automatic background sync when Supabase variables are configured, and runs fully offline when omitted.)*
 
 3. Database Setup:
    Run the SQL migration script located in `supabase_schema.sql` on your Supabase project database to set up profiles, external player IDs, aliases, and Row-Level Security (RLS) policies.
