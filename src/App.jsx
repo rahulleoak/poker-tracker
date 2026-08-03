@@ -236,7 +236,10 @@ export function AppContent() {
             buy_in: e.buyIn,
             cash_out: e.buyOut + e.stack,
             currency: globalCurrency,
-            is_bank: false
+            is_bank: false,
+            external_player_id: e.externalId || e.pokerNowId || null,
+            player_external_id: e.externalId || e.pokerNowId || null,
+            player_poker_now_id: e.pokerNowId || e.externalId || null
           }));
 
           await supabase.from('ledger').insert(initialEntries);
@@ -296,7 +299,10 @@ export function AppContent() {
                 vpip_hands: entry.vpipHands,
                 pfr_hands: entry.pfrHands,
                 three_bet_opps: entry.threeBetOpps,
-                three_bet_hands: entry.threeBetHands
+                three_bet_hands: entry.threeBetHands,
+                external_player_id: entry.externalId || entry.pokerNowId || null,
+                player_external_id: entry.externalId || entry.pokerNowId || null,
+                player_poker_now_id: entry.pokerNowId || entry.externalId || null
               }));
 
               const { error: ledgerError } = await supabase.from('ledger').insert(dbEntriesWithStats);
@@ -308,7 +314,10 @@ export function AppContent() {
                   buy_in: e.buy_in,
                   cash_out: e.cash_out,
                   currency: e.currency,
-                  is_bank: e.is_bank
+                  is_bank: e.is_bank,
+                  external_player_id: e.external_player_id,
+                  player_external_id: e.player_external_id,
+                  player_poker_now_id: e.player_poker_now_id
                 }));
                 await supabase.from('ledger').insert(legacyEntries);
               }
@@ -363,7 +372,10 @@ export function AppContent() {
           vpip_hands: Number(e.vpipHands) || 0,
           pfr_hands: Number(e.pfrHands) || 0,
           three_bet_opps: Number(e.threeBetOpps) || 0,
-          three_bet_hands: Number(e.threeBetHands) || 0
+          three_bet_hands: Number(e.threeBetHands) || 0,
+          external_player_id: e.externalId || e.pokerNowId || null,
+          player_external_id: e.externalId || e.pokerNowId || null,
+          player_poker_now_id: e.pokerNowId || e.externalId || null
         }));
 
       if (validEntries.length > 0) {
@@ -376,7 +388,10 @@ export function AppContent() {
             buy_in: e.buy_in,
             cash_out: e.cash_out,
             currency: e.currency,
-            is_bank: e.is_bank
+            is_bank: e.is_bank,
+            external_player_id: e.external_player_id,
+            player_external_id: e.player_external_id,
+            player_poker_now_id: e.player_poker_now_id
           }));
           await supabase.from('ledger').insert(legacyEntries);
         }

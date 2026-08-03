@@ -243,3 +243,39 @@ test('parsePokerNowCSV parses multi-digit cash out amounts in log entries', () =
   assert.strictEqual(alice.buyOut, 200);
 });
 
+test('parsePokerNowCSV preserves unique external player IDs (e.g. SPoLg3vOL-) in player entries', () => {
+  const csv = `player_nickname,buy_in,buy_out,stack
+"Rahul @ SPoLg3vOL-",100,50,60
+"Alice @ 123",200,,150
+`;
+  const results = parsePokerNowCSV(csv);
+  assert.strictEqual(results.length, 2);
+
+  const rahul = results.find(r => r.name === 'Rahul');
+  assert.ok(rahul);
+  assert.strictEqual(rahul.externalId, 'SPoLg3vOL-');
+  assert.strictEqual(rahul.pokerNowId, 'SPoLg3vOL-');
+  assert.strictEqual(rahul.buyIn, 100);
+
+  const alice = results.find(r => r.name === 'Alice');
+  assert.ok(alice);
+  assert.strictEqual(alice.externalId, '123');
+  assert.strictEqual(alice.pokerNowId, '123');
+});
+
+test('parsePokerNowLogStats preserves unique external player IDs in log stats', () => {
+  const logCSV = `entry_id,entry,created_at
+3,"-- ending hand #1",2023-01-01T01:05:00Z
+2,"Rahul @ SPoLg3vOL- calls 10",2023-01-01T01:02:00Z
+1,"Player stacks: #1 ""Rahul @ SPoLg3vOL-"" (100)",2023-01-01T01:01:00Z
+0,"-- starting hand #1 (id: h1)",2023-01-01T01:00:00Z
+`;
+  const stats = parsePokerNowLogStats(logCSV);
+  assert.ok(stats.Rahul);
+  assert.strictEqual(stats.Rahul.externalId, 'SPoLg3vOL-');
+  assert.strictEqual(stats.Rahul.pokerNowId, 'SPoLg3vOL-');
+  assert.strictEqual(stats.Rahul.handsPlayed, 1);
+  assert.strictEqual(stats.Rahul.vpipHands, 1);
+});
+
+
