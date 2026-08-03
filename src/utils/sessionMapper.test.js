@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries } from './sessionMapper.js';
+import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries, extractPokerNowUrl, findMatchingSession, mergeSessionEntries } from './sessionMapper.js';
 
 test('mapDatabaseSessionsToGames maps full sessions with stats columns correctly', () => {
   const dbData = [
@@ -169,4 +169,104 @@ test('createGameFromCSVEntries handles empty/null parsed entries safely', () => 
 
   const nullGame = createGameFromCSVEntries(null, 'USD');
   assert.strictEqual(nullGame.entries.length, 2);
+});
+
+test('extractPokerNowUrl extracts URL correctly', () => {
+  const text = 'Log file content header https://www.pokernow.club/games/abc123XYZ- summary';
+  assert.strictEqual(extractPokerNowUrl(text), 'https://www.pokernow.club/games/abc123XYZ-');
+  assert.strictEqual(extractPokerNowUrl('no url here'), '');
+  assert.strictEqual(extractPokerNowUrl(null), '');
+});
+
+test('findMatchingSession matches by poker_now_url or date', () => {
+  const existingGames = [
+    { id: 'g1', date: '2025-02-01', pokerNowUrl: 'https://pokernow.club/games/abc' },
+    { id: 'g2', date: '2025-02-02', pokerNowUrl: '' }
+  ];
+
+  const matchByUrl = findMatchingSession(existingGames, { pokerNowUrl: 'https://pokernow.club/games/abc', date: '2025-02-05' });
+  assert.strictEqual(matchByUrl.id, 'g1');
+
+  const matchByDate = findMatchingSession(existingGames, { pokerNowUrl: '', date: '2025-02-02' });
+  assert.strictEqual(matchByDate.id, 'g2');
+
+  const noMatch = findMatchingSession(existingGames, { pokerNowUrl: 'https://pokernow.club/games/xyz', date: '2025-03-01' });
+  assert.strictEqual(noMatch, null);
+});
+
+test('mergeSessionEntries incrementally merges ledger entries and hand stats without wiping custom manual edits', () => {
+  const existingEntries = [
+    {
+      name: 'Alice (Custom Edit)',
+      externalId: 'alice-id',
+      buyIn: 100,
+      buyOut: 20,
+      stack: 150,
+      isBank: true,
+      handsPlayed: 40,
+      vpipHands: 15,
+      pfrHands: 10,
+      threeBetOpps: 5,
+      threeBetHands: 2
+    },
+    {
+      name: 'Bob',
+      externalId: 'bob-id',
+      buyIn: 50,
+      buyOut: 0,
+      stack: 50,
+      isBank: false,
+      handsPlayed: 20,
+      vpipHands: 5,
+      pfrHands: 3,
+      threeBetOpps: 2,
+      threeBetHands: 1
+    }
+  ];
+
+  const newEntries = [
+    {
+      name: 'Alice',
+      externalId: 'alice-id',
+      buyIn: 50,
+      buyOut: 10,
+      stack: 50,
+      handsPlayed: 20,
+      vpipHands: 5,
+      pfrHands: 5,
+      threeBetOpps: 3,
+      threeBetHands: 1
+    },
+    {
+      name: 'Charlie',
+      externalId: 'charlie-id',
+      buyIn: 200,
+      buyOut: 0,
+      stack: 100,
+      handsPlayed: 60,
+      vpipHands: 25,
+      pfrHands: 20,
+      threeBetOpps: 10,
+      threeBetHands: 4
+    }
+  ];
+
+  const merged = mergeSessionEntries(existingEntries, newEntries);
+  assert.strictEqual(merged.length, 3);
+
+  const alice = merged.find(e => e.externalId === 'alice-id');
+  assert.strictEqual(alice.name, 'Alice (Custom Edit)');
+  assert.strictEqual(alice.isBank, true);
+  assert.strictEqual(alice.buyIn, 150);
+  assert.strictEqual(alice.buyOut, 30);
+  assert.strictEqual(alice.stack, 200);
+  assert.strictEqual(alice.handsPlayed, 60);
+  assert.strictEqual(alice.vpipHands, 20);
+  assert.strictEqual(alice.pfrHands, 15);
+  assert.strictEqual(alice.threeBetOpps, 8);
+  assert.strictEqual(alice.threeBetHands, 3);
+
+  const charlie = merged.find(e => e.name === 'Charlie');
+  assert.strictEqual(charlie.buyIn, 200);
+  assert.strictEqual(charlie.handsPlayed, 60);
 });
