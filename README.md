@@ -14,9 +14,9 @@ A premium, interactive poker session tracker featuring a sleek, dark card-based 
 * **Biggest Donor**: High-impact card acknowledging the player with the largest all-time contribution, keeping the games alive.
 * Interactive cards that allow clicking through to view detailed individual player profiles.
 
-### 📂 Drag-and-Drop CSV Importer
-* Clean drag-and-drop zone to drop PokerNow CSV logs directly.
-* Instantly parses logs, validates structure, and automatically populates session data.
+### 📂 Drag-and-Drop CSV Importer & Game Editor Hand Logs
+* Clean drag-and-drop zone to drop PokerNow CSV logs directly, or upload hand history logs (.csv, .txt) directly inside the Game Editor.
+* Instantly parses logs, validates structure, and automatically populates session data and player statistics (VPIP, PFR, 3Bet).
 * Fallback file explorer browsing for ease of use.
 
 ### 🃏 Interactive Hand Replayer
