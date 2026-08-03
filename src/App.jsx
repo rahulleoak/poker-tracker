@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, Component } from "react";
-import { LayoutDashboard, Coins, Globe, History, Play } from 'lucide-react';
+import { LayoutDashboard, Globe, History, Play } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { AuthProvider } from './components/AuthContext';
 import UserMenu from './components/UserMenu';
@@ -7,6 +7,7 @@ import AuthModal from './components/AuthModal';
 import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
 import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries } from './utils/sessionMapper';
+import { loadGamesFromStorage, saveGamesToStorage, mergeRemoteAndLocalGames } from './utils/storage';
 import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
@@ -54,22 +55,24 @@ class ErrorBoundary extends Component {
 }
 
 export function AppContent() {
-  const [games, setGames] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [games, setGames] = useState(() => loadGamesFromStorage());
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   
   // FX Rates & Global Config
-  const [exchangeRates, setExchangeRates] = useState(null);
+  const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
   const [globalCurrency, setGlobalCurrency] = useState('USD');
   const [globalIncrement, setGlobalIncrement] = useState(100);
 
+  // Automatically persist all game creations, edits, CSV imports, and deletions to localStorage
+  useEffect(() => {
+    saveGamesToStorage(games);
+  }, [games]);
+
   const fetchGames = async () => {
-    setIsLoading(true);
     if (!supabase) {
-      setIsLoading(false);
       return;
     }
 
@@ -106,34 +109,33 @@ export function AppContent() {
 
         if (fallback.error) {
           console.error("Fallback fetch also failed:", fallback.error);
-          setIsLoading(false);
           return;
         }
         data = fallback.data;
       }
 
       if (Array.isArray(data)) {
-        const formattedGames = mapDatabaseSessionsToGames(data);
-        setGames(formattedGames);
+        const remoteGames = mapDatabaseSessionsToGames(data);
+        setGames(prevGames => mergeRemoteAndLocalGames(remoteGames, prevGames));
       }
     } catch (err) {
       console.error("Unexpected error fetching games:", err);
-    } finally {
-      setIsLoading(false);
     }
   };
 
   // --- FETCH DATA & FX RATES ---
   useEffect(() => {
-    // 1. Fetch live exchange rates
+    // 1. Fetch live exchange rates with offline fallback
     fetch('https://open.er-api.com/v6/latest/USD')
       .then(res => res.json())
       .then(data => {
-        if (data && data.rates) setExchangeRates(data.rates);
+        if (data && data.rates) {
+          setExchangeRates(data.rates);
+        }
       })
-      .catch(err => console.error("Failed to fetch FX rates:", err));
+      .catch(err => console.error("Failed to fetch FX rates, using fallback:", err));
 
-    // 2. Fetch games from DB
+    // 2. Fetch games from DB in background
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchGames();
   }, []);
@@ -413,17 +415,6 @@ export function AppContent() {
       console.error("Error deleting session from DB:", err);
     }
   };
-
-  if (isLoading || !exchangeRates) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-emerald-400">
-        <div className="animate-pulse flex flex-col items-center gap-4">
-          <Coins className="w-12 h-12" />
-          <p className="font-bold tracking-widest uppercase">Initializing Vault...</p>
-        </div>
-      </div>
-    );
-  }
 
   const activeEditingGame = editingGameId ? games.find(g => g && g.id === editingGameId) : null;
 
