@@ -462,13 +462,13 @@ export function AppContent() {
               <span>HomeGame Tracker</span>
             </div>
             
-            <div className="flex items-center gap-4">
-              <div className="hidden sm:flex items-center gap-2">
-                <label className="text-xs font-medium text-slate-500 uppercase tracking-wider">Dashboard View:</label>
+            <div className="flex items-center gap-2 sm:gap-4">
+              <div className="flex items-center gap-1 sm:gap-2">
+                <label className="text-xs font-medium text-slate-500 uppercase tracking-wider hidden md:inline">Dashboard View:</label>
                 <select 
                   value={globalCurrency}
                   onChange={(e) => setGlobalCurrency(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 text-emerald-400 text-sm font-bold rounded-lg px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
+                  className="bg-slate-950 border border-slate-800 text-emerald-400 text-xs sm:text-sm font-bold rounded-lg px-1.5 sm:px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
                 >
                   {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
@@ -477,7 +477,7 @@ export function AppContent() {
               <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
                 <button 
                   onClick={() => { setActiveTab('dashboard'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
                     activeTab === 'dashboard' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
                 >
@@ -486,7 +486,7 @@ export function AppContent() {
                 </button>
                 <button 
                   onClick={() => { setActiveTab('games'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
                     (activeTab === 'games' || editingGameId) ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
                 >
@@ -495,7 +495,7 @@ export function AppContent() {
                 </button>
                 <button 
                   onClick={() => { setActiveTab('replayer'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
                     activeTab === 'replayer' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                   }`}
                 >
