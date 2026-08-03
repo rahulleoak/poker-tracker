@@ -73,6 +73,28 @@ CREATE TRIGGER trigger_backfill_historical_ledger
     FOR EACH ROW
     EXECUTE FUNCTION public.backfill_historical_ledger_on_claim();
 
+-- 5.1 AUTO-CREATE PROFILE TRIGGER ON AUTH.USERS SIGNUP
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.profiles (id, email, display_name, avatar_url)
+    VALUES (
+        NEW.id,
+        NEW.email,
+        COALESCE(NEW.raw_user_meta_data->>'display_name', split_part(NEW.email, '@', 1)),
+        NEW.raw_user_meta_data->>'avatar_url'
+    )
+    ON CONFLICT (id) DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW
+    EXECUTE FUNCTION public.handle_new_user();
+
 -- 6. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.groups ENABLE ROW LEVEL SECURITY;
@@ -82,24 +104,37 @@ ALTER TABLE public.user_aliases ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ledger ENABLE ROW LEVEL SECURITY;
 
--- Profiles: Public read, owner update
+-- Profiles: Public read, owner insert & update
+DROP POLICY IF EXISTS "Profiles are viewable by everyone" ON public.profiles;
 CREATE POLICY "Profiles are viewable by everyone" ON public.profiles FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 
 -- Groups & Members
+DROP POLICY IF EXISTS "Groups viewable by members" ON public.groups;
 CREATE POLICY "Groups viewable by members" ON public.groups FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.group_members WHERE group_id = id AND user_id = auth.uid())
 );
+
+DROP POLICY IF EXISTS "Group members viewable by members" ON public.group_members;
 CREATE POLICY "Group members viewable by members" ON public.group_members FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.group_members gm WHERE gm.group_id = group_id AND gm.user_id = auth.uid())
 );
 
 -- External Player IDs & Aliases: Owner view/manage
-CREATE POLICY "Users can manage own external IDs" ON public.external_player_ids FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Users can manage own aliases" ON public.user_aliases FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Users can manage own external IDs" ON public.external_player_ids;
+CREATE POLICY "Users can manage own external IDs" ON public.external_player_ids FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can manage own aliases" ON public.user_aliases;
+CREATE POLICY "Users can manage own aliases" ON public.user_aliases FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
 -- Sessions & Ledger Hand Privacy RLS:
 -- Visible only to session creator/participants or player themselves
+DROP POLICY IF EXISTS "Sessions viewable by participants or owner" ON public.sessions;
 CREATE POLICY "Sessions viewable by participants or owner" ON public.sessions FOR SELECT USING (
     user_id = auth.uid() OR 
     EXISTS (SELECT 1 FROM public.group_members gm JOIN public.sessions s ON s.user_id = gm.user_id WHERE s.id = sessions.id AND gm.user_id = auth.uid()) OR
@@ -107,13 +142,16 @@ CREATE POLICY "Sessions viewable by participants or owner" ON public.sessions FO
     user_id IS NULL -- fallback for unauth legacy sessions
 );
 
+DROP POLICY IF EXISTS "Sessions insert/update by owner" ON public.sessions;
 CREATE POLICY "Sessions insert/update by owner" ON public.sessions FOR ALL USING (auth.uid() = user_id OR user_id IS NULL);
 
+DROP POLICY IF EXISTS "Ledger viewable if session is viewable or player matches" ON public.ledger;
 CREATE POLICY "Ledger viewable if session is viewable or player matches" ON public.ledger FOR SELECT USING (
     user_id = auth.uid() OR
     EXISTS (SELECT 1 FROM public.sessions s WHERE s.id = session_id AND (s.user_id = auth.uid() OR s.user_id IS NULL))
 );
 
+DROP POLICY IF EXISTS "Ledger insert/update by session owner or player" ON public.ledger;
 CREATE POLICY "Ledger insert/update by session owner or player" ON public.ledger FOR ALL USING (
     user_id = auth.uid() OR
     EXISTS (SELECT 1 FROM public.sessions s WHERE s.id = session_id AND (s.user_id = auth.uid() OR s.user_id IS NULL))
