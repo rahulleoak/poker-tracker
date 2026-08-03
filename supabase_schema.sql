@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS public.user_aliases (
 -- 4. ENSURE SESSIONS & LEDGER COLUMNS EXIST
 ALTER TABLE public.sessions ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
 ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS external_player_id TEXT;
+ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS player_external_id TEXT;
+ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS player_poker_now_id TEXT;
 ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
 
 -- 5. FUNCTION & TRIGGER TO BACKFILL HISTORICAL LEDGER STATS UPON CLAIMING AN ID
@@ -59,7 +61,7 @@ BEGIN
     -- When a new external_player_id is linked to a user, update ledger rows matching external_id or player_name
     UPDATE public.ledger
     SET user_id = NEW.user_id
-    WHERE (external_player_id = NEW.external_id OR player_name = NEW.external_id)
+    WHERE (external_player_id = NEW.external_id OR player_external_id = NEW.external_id OR player_poker_now_id = NEW.external_id OR player_name = NEW.external_id)
       AND user_id IS NULL;
     RETURN NEW;
 END;

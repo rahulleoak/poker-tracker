@@ -1,3 +1,25 @@
+function parsePlayerIdentifier(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') {
+    return { name: 'Unknown', externalId: null, pokerNowId: null };
+  }
+  let cleanName = rawInput.trim();
+  let externalId = null;
+
+  cleanName = cleanName.replace(/^"|"$/g, '').trim();
+
+  if (cleanName.includes(' @ ')) {
+    const parts = cleanName.split(' @ ');
+    cleanName = parts[0].replace(/^"|"$/g, '').trim();
+    externalId = parts.slice(1).join(' @ ').replace(/^"|"$/g, '').replace(/[()]/g, '').trim();
+  }
+
+  return {
+    name: cleanName || 'Unknown',
+    externalId: externalId || null,
+    pokerNowId: externalId || null
+  };
+}
+
 function parseCSVLine(line) {
   if (!line) return [];
   const result = [];
@@ -110,13 +132,6 @@ function parseLogStructure(text) {
   return { chronoLines, logTextIdx };
 }
 
-/**
- * Parses PokerNow CSV log lines chronologically to compute pre-flop player statistics.
- * Tracks total hands played, VPIP hands, PFR hands, 3-Bet opportunities, and 3-Bet hands.
- *
- * @param {string} csvText - Raw CSV content from a PokerNow log export.
- * @returns {Record<string, { handsPlayed: number, vpipHands: number, pfrHands: number, threeBetOpps: number, threeBetHands: number }>}
- */
 export function parsePokerNowLogStats(csvText) {
   if (!csvText || typeof csvText !== 'string') return {};
 
@@ -125,21 +140,26 @@ export function parsePokerNowLogStats(csvText) {
 
   const playerStats = {};
 
-  const getPlayer = (name) => {
-    if (!name || typeof name !== 'string') return null;
-    const cleanName = name.split(' @ ')[0].replace(/^"|"$/g, '').trim();
-    if (!cleanName) return null;
+  const getPlayer = (rawInput) => {
+    const { name, externalId, pokerNowId } = parsePlayerIdentifier(rawInput);
+    if (!name) return null;
 
-    if (!playerStats[cleanName]) {
-      playerStats[cleanName] = {
+    if (!playerStats[name]) {
+      playerStats[name] = {
+        name,
+        externalId: externalId || null,
+        pokerNowId: pokerNowId || null,
         handsPlayed: 0,
         vpipHands: 0,
         pfrHands: 0,
         threeBetOpps: 0,
         threeBetHands: 0
       };
+    } else if ((externalId || pokerNowId) && !playerStats[name].externalId) {
+      playerStats[name].externalId = externalId || pokerNowId;
+      playerStats[name].pokerNowId = pokerNowId || externalId;
     }
-    return playerStats[cleanName];
+    return playerStats[name];
   };
 
   let handActive = false;
@@ -173,10 +193,10 @@ export function parsePokerNowLogStats(csvText) {
       const entryPart = entry.substring(entry.indexOf('Player stacks:') + 'Player stacks:'.length);
       const parts = entryPart.split('|').map(p => p.trim());
       for (const part of parts) {
-        const match = part.match(/#\d+\s+"?(.+?)(?:\s+@\s+[^\s"()]+)?"?\s*\(([-+]?\d+)\)/);
+        const match = part.match(/#\d+\s+"?(.+?)(?:\s+@\s+([^\s"()]+))?"?\s*\(([-+]?\d+)\)/);
         if (match) {
-          const name = match[1].replace(/^"|"$/g, '').trim();
-          const p = getPlayer(name);
+          const rawStr = match[1] + (match[2] ? ' @ ' + match[2] : '');
+          const p = getPlayer(rawStr);
           if (p) p.handsPlayed++;
         }
       }
@@ -218,48 +238,60 @@ export function parsePokerNowLogStats(csvText) {
     }
 
     if (handActive && preflop) {
-      const foldMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+folds/i);
+      const foldMatch = entry.match(/^"?(.+?)(?:\s+@\s+([^\s"]+))?"?\s+folds/i);
       if (foldMatch) {
-        const name = foldMatch[1].replace(/^"|"$/g, '').trim();
-        if (raiseCount === 2 && !actedPreflop3Bet.has(name)) {
+        const rawStr = foldMatch[1] + (foldMatch[2] ? ' @ ' + foldMatch[2] : '');
+        const p = getPlayer(rawStr);
+        const name = p ? p.name : null;
+        if (name && raiseCount === 2 && !actedPreflop3Bet.has(name)) {
           actedPreflop3Bet.add(name);
           threeBetOppInHand.add(name);
         }
         continue;
       }
 
-      const checkMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+checks/i);
+      const checkMatch = entry.match(/^"?(.+?)(?:\s+@\s+([^\s"]+))?"?\s+checks/i);
       if (checkMatch) {
-        const name = checkMatch[1].replace(/^"|"$/g, '').trim();
-        if (raiseCount === 2 && !actedPreflop3Bet.has(name)) {
+        const rawStr = checkMatch[1] + (checkMatch[2] ? ' @ ' + checkMatch[2] : '');
+        const p = getPlayer(rawStr);
+        const name = p ? p.name : null;
+        if (name && raiseCount === 2 && !actedPreflop3Bet.has(name)) {
           actedPreflop3Bet.add(name);
           threeBetOppInHand.add(name);
         }
         continue;
       }
 
-      const callMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+calls\s+(\d+)/i);
+      const callMatch = entry.match(/^"?(.+?)(?:\s+@\s+([^\s"]+))?"?\s+calls\s+(\d+)/i);
       if (callMatch) {
-        const name = callMatch[1].replace(/^"|"$/g, '').trim();
-        vpipInHand.add(name);
-        if (raiseCount === 2 && !actedPreflop3Bet.has(name)) {
-          actedPreflop3Bet.add(name);
-          threeBetOppInHand.add(name);
+        const rawStr = callMatch[1] + (callMatch[2] ? ' @ ' + callMatch[2] : '');
+        const p = getPlayer(rawStr);
+        const name = p ? p.name : null;
+        if (name) {
+          vpipInHand.add(name);
+          if (raiseCount === 2 && !actedPreflop3Bet.has(name)) {
+            actedPreflop3Bet.add(name);
+            threeBetOppInHand.add(name);
+          }
         }
         continue;
       }
 
-      const raiseMatch = entry.match(/^"?(.+?)(?:\s+@\s+[^\s"]+)?"?\s+raises\s+to\s+(\d+)/i);
+      const raiseMatch = entry.match(/^"?(.+?)(?:\s+@\s+([^\s"]+))?"?\s+raises\s+to\s+(\d+)/i);
       if (raiseMatch) {
-        const name = raiseMatch[1].replace(/^"|"$/g, '').trim();
-        vpipInHand.add(name);
-        pfrInHand.add(name);
-        raiseCount++;
-        
-        if (raiseCount === 3 && !actedPreflop3Bet.has(name)) {
-          actedPreflop3Bet.add(name);
-          threeBetOppInHand.add(name);
-          threeBetInHand.add(name);
+        const rawStr = raiseMatch[1] + (raiseMatch[2] ? ' @ ' + raiseMatch[2] : '');
+        const p = getPlayer(rawStr);
+        const name = p ? p.name : null;
+        if (name) {
+          vpipInHand.add(name);
+          pfrInHand.add(name);
+          raiseCount++;
+          
+          if (raiseCount === 3 && !actedPreflop3Bet.has(name)) {
+            actedPreflop3Bet.add(name);
+            threeBetOppInHand.add(name);
+            threeBetInHand.add(name);
+          }
         }
         continue;
       }
@@ -274,7 +306,7 @@ export function parsePokerNowLogStats(csvText) {
  * into player financial entries and aggregated pre-flop statistics.
  *
  * @param {string} text - Raw CSV content.
- * @returns {Array<{ name: string, buyIn: number, buyOut: number, stack: number, handsPlayed: number, vpipHands: number, pfrHands: number, threeBetOpps: number, threeBetHands: number }>}
+ * @returns {Array<{ name: string, externalId: string|null, pokerNowId: string|null, buyIn: number, buyOut: number, stack: number, handsPlayed: number, vpipHands: number, pfrHands: number, threeBetOpps: number, threeBetHands: number }>}
  */
 export function parsePokerNowCSV(text) {
   if (!text || typeof text !== 'string') return [];
@@ -283,14 +315,15 @@ export function parsePokerNowCSV(text) {
   if (lines.length === 0) return [];
   const players = {}; 
 
-  const getPlayer = (rawName) => {
-    if (!rawName || typeof rawName !== 'string') return null;
-    let cleanName = rawName.split(' @ ')[0].replace(/^"|"$/g, '').trim();
-    if (!cleanName) return null;
+  const getPlayer = (rawInput) => {
+    const { name, externalId, pokerNowId } = parsePlayerIdentifier(rawInput);
+    if (!name) return null;
 
-    if (!players[cleanName]) {
-      players[cleanName] = { 
-        name: cleanName,
+    if (!players[name]) {
+      players[name] = { 
+        name,
+        externalId: externalId || null,
+        pokerNowId: pokerNowId || null,
         buyIn: 0, 
         buyOut: 0, 
         stack: 0,
@@ -300,8 +333,11 @@ export function parsePokerNowCSV(text) {
         threeBetOpps: 0,
         threeBetHands: 0
       };
+    } else if ((externalId || pokerNowId) && !players[name].externalId) {
+      players[name].externalId = externalId || pokerNowId;
+      players[name].pokerNowId = pokerNowId || externalId;
     }
-    return players[cleanName];
+    return players[name];
   };
 
   const headerColsRaw = parseCSVLine(lines[0]);
@@ -319,12 +355,13 @@ export function parsePokerNowCSV(text) {
     for (let i = 1; i < lines.length; i++) {
       const cols = parseCSVLine(lines[i]).map(c => c.replace(/^"|"$/g, '').trim());
       if (cols.length > nameIdx) {
+        const rawPlayerCol = cols[nameIdx];
         const buyIn = (buyInIdx > -1 && cols.length > buyInIdx) ? (parseFloat(cols[buyInIdx]) || 0) : 0;
         const buyOut = (buyOutIdx > -1 && cols.length > buyOutIdx) ? (parseFloat(cols[buyOutIdx]) || 0) : 0;
         const stack = (stackIdx > -1 && cols.length > stackIdx) ? (parseFloat(cols[stackIdx]) || 0) : 0;
 
         if (buyIn !== 0 || buyOut !== 0 || stack !== 0) {
-          const p = getPlayer(cols[nameIdx]);
+          const p = getPlayer(rawPlayerCol);
           if (p) {
             p.buyIn += buyIn;
             p.buyOut += buyOut;
@@ -341,79 +378,86 @@ export function parsePokerNowCSV(text) {
       const parsedCols = parseCSVLine(rawLine);
       const line = getLogEntryText(parsedCols, rawLine, logTextIdx);
 
-      let m = line.match(/approved the player "?([^"]+?)"? participation with a stack of (\d+)/i);
+      let m = line.match(/approved the player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? participation with a stack of (\d+)/i);
       if (m) {
-        const p = getPlayer(m[1]);
+        const rawStr = m[1] + (m[2] ? ' @ ' + m[2] : '');
+        const p = getPlayer(rawStr);
         if (p) {
-          const amt = parseInt(m[2], 10);
+          const amt = parseInt(m[3], 10);
           p.buyIn += amt;
           currentTableStack[p.name] = (currentTableStack[p.name] || 0) + amt;
         }
         continue;
       }
       
-      m = line.match(/approved the player "?([^"]+?)"? requested stack of (\d+)/i);
+      m = line.match(/approved the player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? requested stack of (\d+)/i);
       if (m) {
-        const p = getPlayer(m[1]);
+        const rawStr = m[1] + (m[2] ? ' @ ' + m[2] : '');
+        const p = getPlayer(rawStr);
         if (p) {
-          const amt = parseInt(m[2], 10);
+          const amt = parseInt(m[3], 10);
           p.buyIn += amt;
           currentTableStack[p.name] = (currentTableStack[p.name] || 0) + amt;
         }
         continue;
       }
       
-      m = line.match(/player "?([^"]+?)"? sits down with a stack of (\d+)/i);
+      m = line.match(/player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? sits down with a stack of (\d+)/i);
       if (m) {
-        const p = getPlayer(m[1]);
+        const rawStr = m[1] + (m[2] ? ' @ ' + m[2] : '');
+        const p = getPlayer(rawStr);
         if (p) {
-          const amt = parseInt(m[2], 10);
+          const amt = parseInt(m[3], 10);
           p.buyIn += amt;
           currentTableStack[p.name] = (currentTableStack[p.name] || 0) + amt;
         }
         continue;
       }
 
-      m = line.match(/approved the player "?([^"]+?)"? cash out request (?:for|of) (\d+)/i) ||
-          line.match(/approved the player "?([^"]+?)"? cash out request.*?stack of (\d+)/i) ||
-          line.match(/player "?([^"]+?)"? cashed out with (\d+)/i) ||
-          line.match(/player "?([^"]+?)"? cashed out for (\d+)/i) ||
-          line.match(/player "?([^"]+?)"? cashed out\D*(\d+)/i);
+      m = line.match(/approved the player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? cash out request (?:for|of) (\d+)/i) ||
+          line.match(/approved the player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? cash out request.*?stack of (\d+)/i) ||
+          line.match(/player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? cashed out with (\d+)/i) ||
+          line.match(/player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? cashed out for (\d+)/i) ||
+          line.match(/player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? cashed out\D*(\d+)/i);
       if (m) {
-        const p = getPlayer(m[1]);
+        const rawStr = m[1] + (m[2] ? ' @ ' + m[2] : '');
+        const p = getPlayer(rawStr);
         if (p) {
-          const amt = parseInt(m[2], 10);
+          const amt = parseInt(m[3], 10);
           p.buyOut += amt;
           currentTableStack[p.name] = Math.max(0, (currentTableStack[p.name] || 0) - amt);
         }
         continue;
       }
 
-      m = line.match(/player "?([^"]+?)"? quits the game with a stack of (\d+)/i);
+      m = line.match(/player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? quits the game with a stack of (\d+)/i);
       if (m) {
-        const p = getPlayer(m[1]);
+        const rawStr = m[1] + (m[2] ? ' @ ' + m[2] : '');
+        const p = getPlayer(rawStr);
         if (p) {
-          p.stack += parseInt(m[2], 10);
+          p.stack += parseInt(m[3], 10);
           currentTableStack[p.name] = 0;
         }
         continue;
       }
       
-      m = line.match(/player "?([^"]+?)"? stands up with a stack of (\d+)/i);
+      m = line.match(/player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? stands up with a stack of (\d+)/i);
       if (m) {
-        const p = getPlayer(m[1]);
+        const rawStr = m[1] + (m[2] ? ' @ ' + m[2] : '');
+        const p = getPlayer(rawStr);
         if (p) {
-          p.stack += parseInt(m[2], 10);
+          p.stack += parseInt(m[3], 10);
           currentTableStack[p.name] = 0;
         }
         continue;
       }
       
-      m = line.match(/updated the player "?([^"]+?)"? stack from (\d+) to (\d+)/i);
+      m = line.match(/updated the player "?([^"]+?)"?(?:\s+@\s+([^\s"]+))? stack from (\d+) to (\d+)/i);
       if (m) {
-        const from = parseInt(m[2], 10);
-        const to = parseInt(m[3], 10);
-        const p = getPlayer(m[1]);
+        const rawStr = m[1] + (m[2] ? ' @ ' + m[2] : '');
+        const from = parseInt(m[3], 10);
+        const to = parseInt(m[4], 10);
+        const p = getPlayer(rawStr);
         if (p) {
           if (to > from) {
             p.buyIn += (to - from);
@@ -431,11 +475,11 @@ export function parsePokerNowCSV(text) {
         const entryPart = line.substring(line.indexOf('Player stacks:') + 'Player stacks:'.length);
         const parts = entryPart.split('|').map(p => p.trim());
         for (const part of parts) {
-          const match = part.match(/#\d+\s+"?(.+?)(?:\s+@\s+[^\s"()]+)?"?\s*\(([-+]?\d+)\)/);
+          const match = part.match(/#\d+\s+"?(.+?)(?:\s+@\s+([^\s"()]+))?"?\s*\(([-+]?\d+)\)/);
           if (match) {
-            const name = match[1].replace(/^"|"$/g, '').trim();
-            const stackVal = parseInt(match[2], 10);
-            const p = getPlayer(name);
+            const rawStr = match[1] + (match[2] ? ' @ ' + match[2] : '');
+            const stackVal = parseInt(match[3], 10);
+            const p = getPlayer(rawStr);
             if (p) {
               currentTableStack[p.name] = stackVal;
             }
@@ -456,6 +500,10 @@ export function parsePokerNowCSV(text) {
     for (const [cleanName, s] of Object.entries(stats)) {
       const p = getPlayer(cleanName);
       if (p) {
+        if (s.externalId && !p.externalId) {
+          p.externalId = s.externalId;
+          p.pokerNowId = s.pokerNowId;
+        }
         p.handsPlayed = s.handsPlayed || 0;
         p.vpipHands = s.vpipHands || 0;
         p.pfrHands = s.pfrHands || 0;
@@ -466,7 +514,9 @@ export function parsePokerNowCSV(text) {
   }
 
   return Object.entries(players).map(([name, data]) => ({
-    name,
+    name: data.name || name,
+    externalId: data.externalId || null,
+    pokerNowId: data.pokerNowId || null,
     buyIn: Number(data.buyIn) || 0,
     buyOut: Number(data.buyOut) || 0,
     stack: Number(data.stack) || 0,

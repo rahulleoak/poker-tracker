@@ -24,6 +24,8 @@ export function mapDatabaseSessionsToGames(dbSessions) {
         if (!entry) return null;
         return {
           name: (entry.player_name || '').trim() || 'Unknown',
+          externalId: (entry.external_player_id || entry.player_external_id || entry.player_poker_now_id || '').trim() || null,
+          pokerNowId: (entry.player_poker_now_id || entry.external_player_id || entry.player_external_id || '').trim() || null,
           buyIn: Number(entry.buy_in) || 0,
           buyOut: 0,
           stack: Number(entry.cash_out) || 0,
@@ -87,6 +89,8 @@ export function createGameFromCSVEntries(parsedEntries = [], currency = 'USD', d
 
   const formattedEntries = rawEntries.map(entry => ({
     name: ((entry && entry.name) || '').trim() || 'Unknown',
+    externalId: (entry?.externalId || entry?.pokerNowId || entry?.playerExternalId || '').trim() || null,
+    pokerNowId: (entry?.pokerNowId || entry?.externalId || '').trim() || null,
     buyIn: Number(entry?.buyIn) || 0,
     buyOut: Number(entry?.buyOut) || 0,
     stack: Number(entry?.stack) || 0,
