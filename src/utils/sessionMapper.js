@@ -113,3 +113,133 @@ export function createGameFromCSVEntries(parsedEntries = [], currency = 'USD', d
     entries: formattedEntries
   };
 }
+
+/**
+ * Extracts a PokerNow URL from raw text or log content.
+ * 
+ * @param {string} text 
+ * @returns {string} PokerNow URL or empty string.
+ */
+export function extractPokerNowUrl(text) {
+  if (!text || typeof text !== 'string') return '';
+  const match = text.match(/https?:\/\/(?:www\.)?pokernow\.club\/games\/[a-zA-Z0-9_-]+/i);
+  return match ? match[0] : '';
+}
+
+/**
+ * Checks if an existing session matches a new game by poker_now_url or date.
+ * 
+ * @param {Array<Object>} existingGames 
+ * @param {Object} newGame 
+ * @returns {Object|null} Matching game object or null.
+ */
+export function findMatchingSession(existingGames, newGame) {
+  if (!Array.isArray(existingGames) || !newGame) return null;
+
+  const newUrl = (newGame.pokerNowUrl || '').trim().toLowerCase();
+  if (newUrl) {
+    const urlMatch = existingGames.find(g => g && (g.pokerNowUrl || '').trim().toLowerCase() === newUrl);
+    if (urlMatch) return urlMatch;
+  }
+
+  const newDate = (newGame.date || '').trim();
+  if (newDate) {
+    const dateMatch = existingGames.find(g => g && (g.date || '').trim() === newDate);
+    if (dateMatch) return dateMatch;
+  }
+
+  return null;
+}
+
+/**
+ * Incrementally merges new player entries into existing session entries.
+ * Accumulates buy-ins, buy-outs, stacks, and hand stats for matching player names / external IDs
+ * without wiping custom manual edits.
+ * 
+ * @param {Array<Object>} existingEntries 
+ * @param {Array<Object>} newEntries 
+ * @returns {Array<Object>} Merged entries array.
+ */
+export function mergeSessionEntries(existingEntries = [], newEntries = []) {
+  const safeExisting = Array.isArray(existingEntries) ? existingEntries : [];
+  const safeNew = Array.isArray(newEntries) ? newEntries : [];
+
+  const mergedMap = new Map();
+  const consumedNewIndices = new Set();
+
+  const getPlayerKey = (entry) => {
+    const extId = (entry?.externalId || entry?.pokerNowId || '').trim();
+    if (extId) return `ext:${extId.toLowerCase()}`;
+    const name = (entry?.name || '').trim().toLowerCase();
+    return `name:${name}`;
+  };
+
+  for (const existing of safeExisting) {
+    if (!existing) continue;
+    const key = getPlayerKey(existing);
+    
+    let matchedNewIndex = -1;
+    let matchedNew = null;
+
+    for (let i = 0; i < safeNew.length; i++) {
+      if (consumedNewIndices.has(i)) continue;
+      const incoming = safeNew[i];
+      if (!incoming) continue;
+
+      const incomingKey = getPlayerKey(incoming);
+      const nameMatch = (existing.name || '').trim().toLowerCase() === (incoming.name || '').trim().toLowerCase();
+      const extMatch = (existing.externalId && incoming.externalId && existing.externalId === incoming.externalId) ||
+                       (existing.pokerNowId && incoming.pokerNowId && existing.pokerNowId === incoming.pokerNowId);
+
+      if (extMatch || nameMatch || key === incomingKey) {
+        matchedNewIndex = i;
+        matchedNew = incoming;
+        break;
+      }
+    }
+
+    if (matchedNew) {
+      consumedNewIndices.add(matchedNewIndex);
+      mergedMap.set(key, {
+        ...existing,
+        externalId: existing.externalId || matchedNew.externalId || null,
+        pokerNowId: existing.pokerNowId || matchedNew.pokerNowId || null,
+        buyIn: (Number(existing.buyIn) || 0) + (Number(matchedNew.buyIn) || 0),
+        buyOut: (Number(existing.buyOut) || 0) + (Number(matchedNew.buyOut) || 0),
+        stack: (Number(existing.stack) || 0) + (Number(matchedNew.stack) || 0),
+        handsPlayed: (Number(existing.handsPlayed) || 0) + (Number(matchedNew.handsPlayed) || 0),
+        vpipHands: (Number(existing.vpipHands) || 0) + (Number(matchedNew.vpipHands) || 0),
+        pfrHands: (Number(existing.pfrHands) || 0) + (Number(matchedNew.pfrHands) || 0),
+        threeBetOpps: (Number(existing.threeBetOpps) || 0) + (Number(matchedNew.threeBetOpps) || 0),
+        threeBetHands: (Number(existing.threeBetHands) || 0) + (Number(matchedNew.threeBetHands) || 0)
+      });
+    } else {
+      mergedMap.set(key, { ...existing });
+    }
+  }
+
+  for (let i = 0; i < safeNew.length; i++) {
+    if (consumedNewIndices.has(i)) continue;
+    const incoming = safeNew[i];
+    if (!incoming) continue;
+    const key = getPlayerKey(incoming);
+    if (!mergedMap.has(key)) {
+      mergedMap.set(key, { ...incoming });
+    } else {
+      const existing = mergedMap.get(key);
+      mergedMap.set(key, {
+        ...existing,
+        buyIn: (Number(existing.buyIn) || 0) + (Number(incoming.buyIn) || 0),
+        buyOut: (Number(existing.buyOut) || 0) + (Number(incoming.buyOut) || 0),
+        stack: (Number(existing.stack) || 0) + (Number(incoming.stack) || 0),
+        handsPlayed: (Number(existing.handsPlayed) || 0) + (Number(incoming.handsPlayed) || 0),
+        vpipHands: (Number(existing.vpipHands) || 0) + (Number(incoming.vpipHands) || 0),
+        pfrHands: (Number(existing.pfrHands) || 0) + (Number(incoming.pfrHands) || 0),
+        threeBetOpps: (Number(existing.threeBetOpps) || 0) + (Number(incoming.threeBetOpps) || 0),
+        threeBetHands: (Number(existing.threeBetHands) || 0) + (Number(incoming.threeBetHands) || 0)
+      });
+    }
+  }
+
+  return Array.from(mergedMap.values());
+}

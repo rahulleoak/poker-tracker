@@ -17,6 +17,7 @@ import {
 import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
 import { calculateSettlement } from '../utils/settlement';
 import { parsePokerNowLogStats } from '../utils/csvParser';
+import { mergeSessionEntries } from '../utils/sessionMapper';
 
 export default function GameEditor({ game, globalIncrement = 100, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete }) {
   // Local state to manage edits without hitting DB on every keystroke
@@ -164,55 +165,26 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
         const handMatches = text.match(/-- starting hand #\d+/gi);
         const totalHands = handMatches ? handMatches.length : Object.values(stats).reduce((max, s) => Math.max(max, s.handsPlayed || 0), 0);
 
-        const updatedEntries = entries.map(entry => {
-          const cleanEntryName = (entry.name || '').trim().toLowerCase();
-          for (const [statName, s] of Object.entries(stats)) {
-            const cleanStatName = statName.trim().toLowerCase();
-            if (cleanEntryName === cleanStatName || 
-                (entry.externalId && s.externalId && entry.externalId === s.externalId) ||
-                (entry.pokerNowId && s.pokerNowId && entry.pokerNowId === s.pokerNowId)) {
-              return {
-                ...entry,
-                handsPlayed: s.handsPlayed || 0,
-                vpipHands: s.vpipHands || 0,
-                pfrHands: s.pfrHands || 0,
-                threeBetOpps: s.threeBetOpps || 0,
-                threeBetHands: s.threeBetHands || 0,
-                externalId: entry.externalId || s.externalId || null,
-                pokerNowId: entry.pokerNowId || s.pokerNowId || null
-              };
-            }
-          }
-          return entry;
-        });
+        const incomingStatsEntries = Object.values(stats).map(s => ({
+          name: s.name,
+          externalId: s.externalId || null,
+          pokerNowId: s.pokerNowId || null,
+          buyIn: 0,
+          buyOut: 0,
+          stack: 0,
+          currency: gameCurrency,
+          isBank: false,
+          handsPlayed: s.handsPlayed || 0,
+          vpipHands: s.vpipHands || 0,
+          pfrHands: s.pfrHands || 0,
+          threeBetOpps: s.threeBetOpps || 0,
+          threeBetHands: s.threeBetHands || 0
+        }));
 
-        for (const [statName, s] of Object.entries(stats)) {
-          const exists = updatedEntries.some(e => {
-            const cleanE = (e.name || '').trim().toLowerCase();
-            const cleanS = statName.trim().toLowerCase();
-            return cleanE === cleanS || (e.externalId && s.externalId && e.externalId === s.externalId);
-          });
-          if (!exists && s.handsPlayed > 0) {
-            updatedEntries.push({
-              name: s.name,
-              externalId: s.externalId || null,
-              pokerNowId: s.pokerNowId || null,
-              buyIn: 0,
-              buyOut: 0,
-              stack: 0,
-              currency: gameCurrency,
-              isBank: false,
-              handsPlayed: s.handsPlayed || 0,
-              vpipHands: s.vpipHands || 0,
-              pfrHands: s.pfrHands || 0,
-              threeBetOpps: s.threeBetOpps || 0,
-              threeBetHands: s.threeBetHands || 0
-            });
-          }
-        }
+        const updatedEntries = mergeSessionEntries(entries, incomingStatsEntries);
 
         setEntries(updatedEntries);
-        setUploadSuccess(`Successfully parsed and attached stats for ${totalHands} hands (${Object.keys(stats).length} players).`);
+        setUploadSuccess(`Successfully parsed and accumulated stats for ${totalHands} hands (${Object.keys(stats).length} players). Cumulative stats updated.`);
       } catch (err) {
         console.error("Failed to parse hand log file:", err);
         alert("Failed to parse hand history log file.");
