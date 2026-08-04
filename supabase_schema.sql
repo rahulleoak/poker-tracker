@@ -117,12 +117,15 @@ CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING
 -- Groups & Members
 DROP POLICY IF EXISTS "Groups viewable by members" ON public.groups;
 CREATE POLICY "Groups viewable by members" ON public.groups FOR SELECT USING (
-    EXISTS (SELECT 1 FROM public.group_members WHERE group_id = id AND user_id = auth.uid())
+    created_by = auth.uid() OR
+    id IN (SELECT group_id FROM public.group_members WHERE user_id = auth.uid())
 );
 
 DROP POLICY IF EXISTS "Group members viewable by members" ON public.group_members;
 CREATE POLICY "Group members viewable by members" ON public.group_members FOR SELECT USING (
-    EXISTS (SELECT 1 FROM public.group_members gm WHERE gm.group_id = group_id AND gm.user_id = auth.uid())
+    user_id = auth.uid() OR
+    group_id IN (SELECT id FROM public.groups WHERE created_by = auth.uid()) OR
+    group_id IN (SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid())
 );
 
 -- External Player IDs & Aliases: Owner view/manage
@@ -137,9 +140,8 @@ CREATE POLICY "Users can manage own aliases" ON public.user_aliases FOR ALL USIN
 DROP POLICY IF EXISTS "Sessions viewable by participants or owner" ON public.sessions;
 CREATE POLICY "Sessions viewable by participants or owner" ON public.sessions FOR SELECT USING (
     user_id = auth.uid() OR 
-    EXISTS (SELECT 1 FROM public.group_members gm JOIN public.sessions s ON s.user_id = gm.user_id WHERE s.id = sessions.id AND gm.user_id = auth.uid()) OR
-    EXISTS (SELECT 1 FROM public.ledger l WHERE l.session_id = sessions.id AND l.user_id = auth.uid()) OR
-    user_id IS NULL -- fallback for unauth legacy sessions
+    user_id IS NULL OR
+    id IN (SELECT session_id FROM public.ledger WHERE user_id = auth.uid())
 );
 
 DROP POLICY IF EXISTS "Sessions insert/update by owner" ON public.sessions;
