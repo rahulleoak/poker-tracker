@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, Component } from "react";
 import { LayoutDashboard, Globe, History, Play } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { useAuth } from './components/useAuth';
+import { AuthProvider } from './components/AuthContext';
 import UserMenu from './components/UserMenu';
 import AuthModal from './components/AuthModal';
 import { parsePokerNowCSV } from './utils/csvParser';
@@ -67,12 +68,20 @@ export function AppContent() {
   const [globalCurrency, setGlobalCurrency] = useState('USD');
   const [globalIncrement, setGlobalIncrement] = useState(100);
 
-  // Automatically persist all game creations, edits, CSV imports, and deletions to localStorage
+  // --- FETCH DATA & FX RATES ---
   useEffect(() => {
-    saveGamesToStorage(games);
-  }, [games]);
+    // 1. Fetch live exchange rates with offline fallback
+    fetch('https://open.er-api.com/v6/latest/USD')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.rates) {
+          setExchangeRates(data.rates);
+        }
+      })
+      .catch(err => console.error("Failed to fetch FX rates, using fallback:", err));
 
-  const fetchGames = async () => {
+    // 2. Fetch games from DB when user or component mounts
+    const fetchGames = async () => {
     if (!supabase) {
       return;
     }
@@ -230,22 +239,8 @@ export function AppContent() {
       console.error("Unexpected error fetching games:", err);
     }
   };
-
-  // --- FETCH DATA & FX RATES ---
-  useEffect(() => {
-    // 1. Fetch live exchange rates with offline fallback
-    fetch('https://open.er-api.com/v6/latest/USD')
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.rates) {
-          setExchangeRates(data.rates);
-        }
-      })
-      .catch(err => console.error("Failed to fetch FX rates, using fallback:", err));
-
-    // 2. Fetch games from DB when user or component mounts
     fetchGames();
-  }, [user?.id]);
+  }, [user?.id, globalCurrency]);
 
   // --- DERIVED STATS (ALL-TIME FIAT) ---
   const playerStats = useMemo(() => {
