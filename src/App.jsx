@@ -56,7 +56,7 @@ class ErrorBoundary extends Component {
 }
 
 export function AppContent() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const [games, setGames] = useState(() => loadGamesFromStorage());
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
@@ -82,6 +82,10 @@ export function AppContent() {
 
     // 2. Fetch games from DB when user or component mounts
     const fetchGames = async () => {
+    if (loading) {
+      return;
+    }
+
     if (!supabase) {
       return;
     }
@@ -169,7 +173,19 @@ export function AppContent() {
         // Push any local localStorage games that aren't yet in remote up to Supabase.
         const localGames = loadGamesFromStorage();
         const remoteIds = new Set(remoteGames.map(g => g.id));
-        const unSyncedLocalGames = localGames.filter(g => g && g.id && !remoteIds.has(g.id));
+        const remoteFingerprints = new Set(
+          remoteGames
+            .filter(g => g && g.date && g.pokerNowUrl)
+            .map(g => `${g.date}_${g.pokerNowUrl}`)
+        );
+
+        const unSyncedLocalGames = localGames.filter(g => {
+          if (!g || !g.id) return false;
+          if (remoteIds.has(g.id)) return false;
+          const fingerprint = (g.date && g.pokerNowUrl) ? `${g.date}_${g.pokerNowUrl}` : null;
+          if (fingerprint && remoteFingerprints.has(fingerprint)) return false;
+          return true;
+        });
 
         if (unSyncedLocalGames.length > 0 && supabase) {
           const syncedSessions = [];
@@ -240,7 +256,7 @@ export function AppContent() {
     }
   };
     fetchGames();
-  }, [user?.id, globalCurrency]);
+  }, [user?.id, loading, globalCurrency]);
 
   // --- DERIVED STATS (ALL-TIME FIAT) ---
   const playerStats = useMemo(() => {
