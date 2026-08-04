@@ -93,7 +93,7 @@ export function AppContent() {
         .order('date', { ascending: false });
 
       if (user?.id) {
-        query = query.eq('user_id', user.id);
+        query = query.or(`user_id.eq.${user.id},user_id.is.null`);
       }
 
       // 1. Try querying with all columns via ledger(*)
@@ -117,7 +117,7 @@ export function AppContent() {
           .order('date', { ascending: false });
 
         if (user?.id) {
-          fallbackQuery = fallbackQuery.eq('user_id', user.id);
+          fallbackQuery = fallbackQuery.or(`user_id.eq.${user.id},user_id.is.null`);
         }
 
         const fallback = await fallbackQuery;
@@ -130,8 +130,95 @@ export function AppContent() {
       }
 
       if (Array.isArray(data)) {
+        // Auto-claim legacy unassigned sessions if user is logged in
+        if (user?.id) {
+          const unassignedIds = data
+            .filter(s => s && s.user_id === null && s.id)
+            .map(s => s.id);
+
+          if (unassignedIds.length > 0) {
+            try {
+              const { error: updateError } = await supabase
+                .from('sessions')
+                .update({ user_id: user.id })
+                .in('id', unassignedIds);
+
+              if (updateError) {
+                console.warn("Failed to auto-claim legacy sessions:", updateError);
+              } else {
+                data = data.map(s => unassignedIds.includes(s.id) ? { ...s, user_id: user.id } : s);
+              }
+            } catch (claimErr) {
+              console.error("Error auto-claiming legacy sessions:", claimErr);
+            }
+          }
+        }
+
         const remoteGames = mapDatabaseSessionsToGames(data);
-        setGames(prevGames => mergeRemoteAndLocalGames(remoteGames, prevGames));
+        
+        // Local-to-Cloud Sync on Login/Mount:
+        // Push any local localStorage games that aren't yet in remote up to Supabase.
+        const localGames = loadGamesFromStorage();
+        const remoteIds = new Set(remoteGames.map(g => g.id));
+        const unSyncedLocalGames = localGames.filter(g => g && g.id && !remoteIds.has(g.id));
+
+        if (unSyncedLocalGames.length > 0 && supabase) {
+          for (const localGame of unSyncedLocalGames) {
+            try {
+              const sessionPayload = {
+                date: localGame.date,
+                currency: localGame.currency || globalCurrency,
+                chip_value: localGame.chipValue || 1,
+                is_active: Boolean(localGame.isActive),
+                poker_now_url: localGame.pokerNowUrl || null
+              };
+              if (user?.id) {
+                sessionPayload.user_id = user.id;
+              }
+
+              const { data: sessionData, error: sessionError } = await supabase
+                .from('sessions')
+                .insert([sessionPayload])
+                .select()
+                .single();
+
+              if (!sessionError && sessionData && sessionData.id) {
+                const newRemoteId = sessionData.id;
+                const entries = Array.isArray(localGame.entries) ? localGame.entries : [];
+                const validEntries = entries.map(e => ({
+                  session_id: newRemoteId,
+                  player_name: (e.name || '').trim() || 'Unknown Player',
+                  buy_in: Number(e.buyIn) || 0,
+                  cash_out: (Number(e.buyOut) || 0) + (Number(e.stack) || 0),
+                  currency: e.currency || localGame.currency || globalCurrency,
+                  is_bank: Boolean(e.isBank),
+                  hands_played: Number(e.handsPlayed) || 0,
+                  vpip_hands: Number(e.vpipHands) || 0,
+                  pfr_hands: Number(e.pfrHands) || 0,
+                  three_bet_opps: Number(e.threeBetOpps) || 0,
+                  three_bet_hands: Number(e.threeBetHands) || 0,
+                  external_player_id: e.externalId || e.pokerNowId || null,
+                  player_external_id: e.externalId || e.pokerNowId || null,
+                  player_poker_now_id: e.pokerNowId || e.externalId || null
+                }));
+
+                if (validEntries.length > 0) {
+                  await supabase.from('ledger').insert(validEntries);
+                }
+
+                // Update local game ID to remote assigned ID
+                localGame.id = newRemoteId;
+              }
+            } catch (syncErr) {
+              console.error("Failed to sync local game to cloud:", syncErr);
+            }
+          }
+          // Save updated local games with new remote IDs
+          saveGamesToStorage(localGames);
+        }
+
+        const refreshedRemoteGames = mapDatabaseSessionsToGames(data);
+        setGames(prevGames => mergeRemoteAndLocalGames(refreshedRemoteGames, prevGames));
       }
     } catch (err) {
       console.error("Unexpected error fetching games:", err);
