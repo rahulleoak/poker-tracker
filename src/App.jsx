@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, Component } from "react";
 import { LayoutDashboard, Globe, History, Play } from 'lucide-react';
 import { supabase } from './utils/supabase';
-import { AuthProvider } from './components/AuthContext';
+import { useAuth } from './components/useAuth';
 import UserMenu from './components/UserMenu';
 import AuthModal from './components/AuthModal';
 import { parsePokerNowCSV } from './utils/csvParser';
@@ -55,6 +55,7 @@ class ErrorBoundary extends Component {
 }
 
 export function AppContent() {
+  const { user } = useAuth();
   const [games, setGames] = useState(() => loadGamesFromStorage());
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
@@ -77,8 +78,7 @@ export function AppContent() {
     }
 
     try {
-      // 1. Try querying with all columns via ledger(*)
-      let { data, error } = await supabase
+      let query = supabase
         .from('sessions')
         .select(`
           id,
@@ -87,14 +87,22 @@ export function AppContent() {
           chip_value,
           poker_now_url,
           is_active,
+          user_id,
           ledger ( * )
         `)
         .order('date', { ascending: false });
 
+      if (user?.id) {
+        query = query.eq('user_id', user.id);
+      }
+
+      // 1. Try querying with all columns via ledger(*)
+      let { data, error } = await query;
+
       // 2. If selecting ledger(*) fails, fallback to basic columns
       if (error) {
         console.warn("Primary fetch error, attempting fallback query:", error);
-        const fallback = await supabase
+        let fallbackQuery = supabase
           .from('sessions')
           .select(`
             id,
@@ -103,9 +111,16 @@ export function AppContent() {
             chip_value,
             poker_now_url,
             is_active,
+            user_id,
             ledger ( player_name, buy_in, cash_out, currency, is_bank )
           `)
           .order('date', { ascending: false });
+
+        if (user?.id) {
+          fallbackQuery = fallbackQuery.eq('user_id', user.id);
+        }
+
+        const fallback = await fallbackQuery;
 
         if (fallback.error) {
           console.error("Fallback fetch also failed:", fallback.error);
@@ -135,10 +150,9 @@ export function AppContent() {
       })
       .catch(err => console.error("Failed to fetch FX rates, using fallback:", err));
 
-    // 2. Fetch games from DB in background
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // 2. Fetch games from DB when user or component mounts
     fetchGames();
-  }, []);
+  }, [user?.id]);
 
   // --- DERIVED STATS (ALL-TIME FIAT) ---
   const playerStats = useMemo(() => {
@@ -221,9 +235,19 @@ export function AppContent() {
 
     if (supabase) {
       try {
+        const sessionPayload = {
+          date: newGame.date,
+          currency: globalCurrency,
+          chip_value: 1,
+          is_active: true
+        };
+        if (user?.id) {
+          sessionPayload.user_id = user.id;
+        }
+
         const { data: sessionData, error: sessionError } = await supabase
           .from('sessions')
-          .insert([{ date: newGame.date, currency: globalCurrency, chip_value: 1, is_active: true }])
+          .insert([sessionPayload])
           .select()
           .single();
 
@@ -309,9 +333,20 @@ export function AppContent() {
 
           if (supabase) {
             try {
+              const sessionPayload = {
+                date: newGame.date,
+                currency: globalCurrency,
+                chip_value: 1,
+                is_active: false,
+                poker_now_url: newGame.pokerNowUrl
+              };
+              if (user?.id) {
+                sessionPayload.user_id = user.id;
+              }
+
               const { data: sessionData, error: sessionError } = await supabase
                 .from('sessions')
-                .insert([{ date: newGame.date, currency: globalCurrency, chip_value: 1, is_active: false, poker_now_url: newGame.pokerNowUrl }])
+                .insert([sessionPayload])
                 .select()
                 .single();
                 
