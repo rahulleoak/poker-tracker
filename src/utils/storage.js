@@ -51,6 +51,13 @@ export function mergeRemoteAndLocalGames(remoteGames = [], localGames = []) {
   const remoteMap = new Map(remoteArr.map(g => [g.id, g]));
   const localMap = new Map(localArr.map(g => [g.id, g]));
 
+  // Build a set of remote fingerprints for deduplication (date + pokerNowUrl)
+  const remoteFingerprints = new Set(
+    remoteArr
+      .filter(g => g && g.date && g.pokerNowUrl)
+      .map(g => `${g.date}_${g.pokerNowUrl}`)
+  );
+
   const merged = [];
 
   // Add all remote games
@@ -58,11 +65,19 @@ export function mergeRemoteAndLocalGames(remoteGames = [], localGames = []) {
     merged.push(remoteGame);
   }
 
-  // Add any local games not present in remote (offline created / pending sync)
+  // Add any local games not present in remote by ID or fingerprint
   for (const [id, localGame] of localMap) {
-    if (!remoteMap.has(id)) {
-      merged.push(localGame);
+    if (remoteMap.has(id)) continue;
+
+    const localFingerprint = (localGame?.date && localGame?.pokerNowUrl)
+      ? `${localGame.date}_${localGame.pokerNowUrl}`
+      : null;
+
+    if (localFingerprint && remoteFingerprints.has(localFingerprint)) {
+      continue;
     }
+
+    merged.push(localGame);
   }
 
   // Sort by date descending (newest first)

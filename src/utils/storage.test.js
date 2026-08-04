@@ -96,3 +96,20 @@ test('mergeRemoteAndLocalGames combines remote and local games correctly', () =>
   assert.strictEqual(merged[1].id, 'session-1');
   assert.strictEqual(merged[2].id, 'session-2');
 });
+
+test('mergeRemoteAndLocalGames deduplicates local games matching remote fingerprint', () => {
+  const remoteGames = [
+    { id: 'db-session-1', date: '2025-02-10', pokerNowUrl: 'https://poker.now/game/123', currency: 'USD' }
+  ];
+
+  const localGames = [
+    { id: 'local-temp-id', date: '2025-02-10', pokerNowUrl: 'https://poker.now/game/123', currency: 'USD' },
+    { id: 'local-unique', date: '2025-02-11', pokerNowUrl: 'https://poker.now/game/456', currency: 'USD' }
+  ];
+
+  const merged = mergeRemoteAndLocalGames(remoteGames, localGames);
+
+  assert.strictEqual(merged.length, 2);
+  assert.strictEqual(merged[0].id, 'local-unique');
+  assert.strictEqual(merged[1].id, 'db-session-1');
+});
