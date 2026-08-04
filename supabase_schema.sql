@@ -2,7 +2,7 @@
 -- POKER TRACKER ENTERPRISE MIGRATION: AUTH, PROFILES, EXTERNAL IDS & RLS
 -- =========================================================================
 
--- 1. PROFILES TABLE (Linked to Supabase auth.users)
+-- 1. BASE TABLE DEFINITIONS
 CREATE TABLE IF NOT EXISTS public.profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     email TEXT UNIQUE,
@@ -10,6 +10,32 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     avatar_url TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    date TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    poker_now_url TEXT,
+    is_active BOOLEAN DEFAULT false,
+    currency TEXT DEFAULT 'USD',
+    chip_value NUMERIC DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS public.ledger (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES public.sessions(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    player_name TEXT,
+    buy_in NUMERIC DEFAULT 0,
+    cash_out NUMERIC DEFAULT 0,
+    external_player_id TEXT,
+    player_external_id TEXT,
+    player_poker_now_id TEXT,
+    currency TEXT DEFAULT 'USD',
+    is_bank BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 2. GROUPS & GROUP MEMBERS
@@ -53,6 +79,13 @@ ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS external_player_id TEXT;
 ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS player_external_id TEXT;
 ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS player_poker_now_id TEXT;
 ALTER TABLE public.ledger ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL;
+
+-- 4.1 PERFORMANCE INDEXES
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON public.sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_session_id ON public.ledger(session_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON public.ledger(user_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON public.group_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON public.group_members(group_id);
 
 -- 5. FUNCTION & TRIGGER TO BACKFILL HISTORICAL LEDGER STATS UPON CLAIMING AN ID
 CREATE OR REPLACE FUNCTION public.backfill_historical_ledger_on_claim()
@@ -123,9 +156,7 @@ CREATE POLICY "Groups viewable by members" ON public.groups FOR SELECT USING (
 
 DROP POLICY IF EXISTS "Group members viewable by members" ON public.group_members;
 CREATE POLICY "Group members viewable by members" ON public.group_members FOR SELECT USING (
-    user_id = auth.uid() OR
-    group_id IN (SELECT id FROM public.groups WHERE created_by = auth.uid()) OR
-    group_id IN (SELECT gm.group_id FROM public.group_members gm WHERE gm.user_id = auth.uid())
+    user_id = auth.uid()
 );
 
 -- External Player IDs & Aliases: Owner view/manage
@@ -139,9 +170,9 @@ CREATE POLICY "Users can manage own aliases" ON public.user_aliases FOR ALL USIN
 -- Visible only to session creator/participants or player themselves
 DROP POLICY IF EXISTS "Sessions viewable by participants or owner" ON public.sessions;
 CREATE POLICY "Sessions viewable by participants or owner" ON public.sessions FOR SELECT USING (
-    user_id = auth.uid() OR 
+    user_id = auth.uid() OR
     user_id IS NULL OR
-    id IN (SELECT session_id FROM public.ledger WHERE user_id = auth.uid())
+    EXISTS (SELECT 1 FROM public.ledger l WHERE l.session_id = sessions.id AND (l.user_id = auth.uid() OR l.user_id IS NULL))
 );
 
 DROP POLICY IF EXISTS "Sessions insert/update by owner" ON public.sessions;
@@ -150,11 +181,13 @@ CREATE POLICY "Sessions insert/update by owner" ON public.sessions FOR ALL USING
 DROP POLICY IF EXISTS "Ledger viewable if session is viewable or player matches" ON public.ledger;
 CREATE POLICY "Ledger viewable if session is viewable or player matches" ON public.ledger FOR SELECT USING (
     user_id = auth.uid() OR
+    user_id IS NULL OR
     EXISTS (SELECT 1 FROM public.sessions s WHERE s.id = session_id AND (s.user_id = auth.uid() OR s.user_id IS NULL))
 );
 
 DROP POLICY IF EXISTS "Ledger insert/update by session owner or player" ON public.ledger;
 CREATE POLICY "Ledger insert/update by session owner or player" ON public.ledger FOR ALL USING (
     user_id = auth.uid() OR
+    user_id IS NULL OR
     EXISTS (SELECT 1 FROM public.sessions s WHERE s.id = session_id AND (s.user_id = auth.uid() OR s.user_id IS NULL))
 );
