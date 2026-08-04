@@ -163,6 +163,7 @@ export function AppContent() {
         const unSyncedLocalGames = localGames.filter(g => g && g.id && !remoteIds.has(g.id));
 
         if (unSyncedLocalGames.length > 0 && supabase) {
+          const syncedSessions = [];
           for (const localGame of unSyncedLocalGames) {
             try {
               const sessionPayload = {
@@ -206,15 +207,20 @@ export function AppContent() {
                   await supabase.from('ledger').insert(validEntries);
                 }
 
-                // Update local game ID to remote assigned ID
                 localGame.id = newRemoteId;
+                syncedSessions.push({
+                  ...sessionData,
+                  ledger: validEntries
+                });
               }
             } catch (syncErr) {
               console.error("Failed to sync local game to cloud:", syncErr);
             }
           }
-          // Save updated local games with new remote IDs
           saveGamesToStorage(localGames);
+          if (syncedSessions.length > 0) {
+            data = [...data, ...syncedSessions];
+          }
         }
 
         const refreshedRemoteGames = mapDatabaseSessionsToGames(data);
