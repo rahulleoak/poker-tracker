@@ -170,9 +170,7 @@ CREATE POLICY "Users can manage own aliases" ON public.user_aliases FOR ALL USIN
 -- Visible only to session creator/participants or player themselves
 DROP POLICY IF EXISTS "Sessions viewable by participants or owner" ON public.sessions;
 CREATE POLICY "Sessions viewable by participants or owner" ON public.sessions FOR SELECT USING (
-    user_id = auth.uid() OR
-    user_id IS NULL OR
-    EXISTS (SELECT 1 FROM public.ledger l WHERE l.session_id = sessions.id AND (l.user_id = auth.uid() OR l.user_id IS NULL))
+     user_id = auth.uid() OR user_id IS NULL
 );
 
 DROP POLICY IF EXISTS "Sessions insert/update by owner" ON public.sessions;
@@ -180,14 +178,10 @@ CREATE POLICY "Sessions insert/update by owner" ON public.sessions FOR ALL USING
 
 DROP POLICY IF EXISTS "Ledger viewable if session is viewable or player matches" ON public.ledger;
 CREATE POLICY "Ledger viewable if session is viewable or player matches" ON public.ledger FOR SELECT USING (
-    user_id = auth.uid() OR
-    user_id IS NULL OR
-    EXISTS (SELECT 1 FROM public.sessions s WHERE s.id = session_id AND (s.user_id = auth.uid() OR s.user_id IS NULL))
+       user_id = auth.uid() OR user_id IS NULL
 );
 
 DROP POLICY IF EXISTS "Ledger insert/update by session owner or player" ON public.ledger;
 CREATE POLICY "Ledger insert/update by session owner or player" ON public.ledger FOR ALL USING (
-    user_id = auth.uid() OR
-    user_id IS NULL OR
-    EXISTS (SELECT 1 FROM public.sessions s WHERE s.id = session_id AND (s.user_id = auth.uid() OR s.user_id IS NULL))
+        user_id = auth.uid() OR user_id IS NULL
 );
