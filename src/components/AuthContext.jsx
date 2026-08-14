@@ -73,12 +73,20 @@ export function AuthProvider({ children }) {
 
   const signInWithMagicLink = async (email) => {
     if (!supabase) throw new Error("Supabase is not configured");
-    return supabase.auth.signInWithOtp({ email });
+    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}` : undefined;
+    return supabase.auth.signInWithOtp({ 
+      email, 
+      options: { emailRedirectTo: redirectTo } 
+    });
   };
 
   const signInWithOAuth = async (provider) => {
     if (!supabase) throw new Error("Supabase is not configured");
-    return supabase.auth.signInWithOAuth({ provider });
+    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}` : undefined;
+    return supabase.auth.signInWithOAuth({ 
+      provider, 
+      options: { redirectTo } 
+    });
   };
 
   const signOut = async () => {
