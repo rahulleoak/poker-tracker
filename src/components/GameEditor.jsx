@@ -55,6 +55,34 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
   const [useBankBuddies, setUseBankBuddies] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(null);
 
+  // --- RESET STATE WHEN GAME PROP CHANGES ---
+  useEffect(() => {
+    if (!game) return;
+    setGameCurrency(game.currency || 'USD');
+    setIsActive(game.isActive !== false);
+    setPokerNowUrl(game.pokerNowUrl || '');
+    setEntries(Array.isArray(game.entries) ? game.entries : []);
+    setSettlementCurrency(game.currency || 'USD');
+
+    const chipVal = Number(game.chipValue) || 1;
+    if (chipVal === 1) {
+      setRatioChips(1);
+      setRatioFiat(1);
+    } else if (chipVal > 0) {
+      const inv = 1 / chipVal;
+      if (Math.abs(inv - Math.round(inv)) < 0.001) {
+        setRatioChips(Math.round(inv));
+        setRatioFiat(1);
+      } else {
+        setRatioChips(1000);
+        setRatioFiat(Number((chipVal * 1000).toFixed(2)));
+      }
+    } else {
+      setRatioChips(1000);
+      setRatioFiat(1);
+    }
+  }, [game?.id, game?.chipValue]);
+
   // --- AUTO-SAVE EFFECT ---
   const isMounted = useRef(false);
   const onSaveRef = useRef(onSave);

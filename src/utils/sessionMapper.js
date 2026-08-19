@@ -154,7 +154,7 @@ export function findMatchingSession(existingGames, newGame) {
 /**
  * Incrementally merges new player entries into existing session entries.
  * Accumulates buy-ins, buy-outs, stacks, and hand stats for matching player names / external IDs
- * without wiping custom manual edits.
+ * without wiping custom manual edits or creating duplicate player rows.
  * 
  * @param {Array<Object>} existingEntries 
  * @param {Array<Object>} newEntries 
@@ -164,7 +164,7 @@ export function mergeSessionEntries(existingEntries = [], newEntries = []) {
   const safeExisting = Array.isArray(existingEntries) ? existingEntries : [];
   const safeNew = Array.isArray(newEntries) ? newEntries : [];
 
-  const mergedMap = new Map();
+  const mergedList = [];
   const consumedNewIndices = new Set();
 
   const getPlayerKey = (entry) => {
@@ -174,9 +174,26 @@ export function mergeSessionEntries(existingEntries = [], newEntries = []) {
     return `name:${name}`;
   };
 
+  const isMatch = (existing, incoming) => {
+    if (!existing || !incoming) return false;
+    const existingExtId = (existing.externalId || existing.pokerNowId || '').trim().toLowerCase();
+    const incomingExtId = (incoming.externalId || incoming.pokerNowId || '').trim().toLowerCase();
+    
+    if (existingExtId && incomingExtId && existingExtId === incomingExtId) {
+      return true;
+    }
+    
+    const existingName = (existing.name || '').trim().toLowerCase();
+    const incomingName = (incoming.name || '').trim().toLowerCase();
+    if (existingName && incomingName && existingName === incomingName) {
+      return true;
+    }
+    
+    return false;
+  };
+
   for (const existing of safeExisting) {
     if (!existing) continue;
-    const key = getPlayerKey(existing);
     
     let matchedNewIndex = -1;
     let matchedNew = null;
@@ -186,12 +203,7 @@ export function mergeSessionEntries(existingEntries = [], newEntries = []) {
       const incoming = safeNew[i];
       if (!incoming) continue;
 
-      const incomingKey = getPlayerKey(incoming);
-      const nameMatch = (existing.name || '').trim().toLowerCase() === (incoming.name || '').trim().toLowerCase();
-      const extMatch = (existing.externalId && incoming.externalId && existing.externalId === incoming.externalId) ||
-                       (existing.pokerNowId && incoming.pokerNowId && existing.pokerNowId === incoming.pokerNowId);
-
-      if (extMatch || nameMatch || key === incomingKey) {
+      if (isMatch(existing, incoming)) {
         matchedNewIndex = i;
         matchedNew = incoming;
         break;
@@ -200,7 +212,7 @@ export function mergeSessionEntries(existingEntries = [], newEntries = []) {
 
     if (matchedNew) {
       consumedNewIndices.add(matchedNewIndex);
-      mergedMap.set(key, {
+      mergedList.push({
         ...existing,
         externalId: existing.externalId || matchedNew.externalId || null,
         pokerNowId: existing.pokerNowId || matchedNew.pokerNowId || null,
@@ -214,7 +226,7 @@ export function mergeSessionEntries(existingEntries = [], newEntries = []) {
         threeBetHands: (Number(existing.threeBetHands) || 0) + (Number(matchedNew.threeBetHands) || 0)
       });
     } else {
-      mergedMap.set(key, { ...existing });
+      mergedList.push({ ...existing });
     }
   }
 
@@ -222,13 +234,16 @@ export function mergeSessionEntries(existingEntries = [], newEntries = []) {
     if (consumedNewIndices.has(i)) continue;
     const incoming = safeNew[i];
     if (!incoming) continue;
-    const key = getPlayerKey(incoming);
-    if (!mergedMap.has(key)) {
-      mergedMap.set(key, { ...incoming });
-    } else {
-      const existing = mergedMap.get(key);
-      mergedMap.set(key, {
+
+    const incomingKey = getPlayerKey(incoming);
+    const existingIndex = mergedList.findIndex(e => isMatch(e, incoming) || getPlayerKey(e) === incomingKey);
+
+    if (existingIndex !== -1) {
+      const existing = mergedList[existingIndex];
+      mergedList[existingIndex] = {
         ...existing,
+        externalId: existing.externalId || incoming.externalId || null,
+        pokerNowId: existing.pokerNowId || incoming.pokerNowId || null,
         buyIn: (Number(existing.buyIn) || 0) + (Number(incoming.buyIn) || 0),
         buyOut: (Number(existing.buyOut) || 0) + (Number(incoming.buyOut) || 0),
         stack: (Number(existing.stack) || 0) + (Number(incoming.stack) || 0),
@@ -237,9 +252,11 @@ export function mergeSessionEntries(existingEntries = [], newEntries = []) {
         pfrHands: (Number(existing.pfrHands) || 0) + (Number(incoming.pfrHands) || 0),
         threeBetOpps: (Number(existing.threeBetOpps) || 0) + (Number(incoming.threeBetOpps) || 0),
         threeBetHands: (Number(existing.threeBetHands) || 0) + (Number(incoming.threeBetHands) || 0)
-      });
+      };
+    } else {
+      mergedList.push({ ...incoming });
     }
   }
 
-  return Array.from(mergedMap.values());
+  return mergedList;
 }
