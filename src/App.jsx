@@ -1,10 +1,6 @@
 import { useState, useMemo, useEffect, Component } from "react";
-import { LayoutDashboard, Globe, History, Play } from 'lucide-react';
+import { LayoutDashboard, Globe, History } from 'lucide-react';
 import { supabase } from './utils/supabase';
-import { useAuth } from './components/useAuth';
-import { AuthProvider } from './components/AuthContext';
-import UserMenu from './components/UserMenu';
-import AuthModal from './components/AuthModal';
 import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
 import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries, extractPokerNowUrl, findMatchingSession, mergeSessionEntries } from './utils/sessionMapper';
@@ -13,7 +9,6 @@ import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
 import PlayerProfile from './components/PlayerProfile';
-import HandReplayer from './components/HandReplayer';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -56,12 +51,10 @@ class ErrorBoundary extends Component {
 }
 
 export function AppContent() {
-  const { user, loading } = useAuth();
   const [games, setGames] = useState(() => loadGamesFromStorage());
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
   
   // FX Rates & Global Config
   const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
@@ -80,42 +73,14 @@ export function AppContent() {
       })
       .catch(err => console.error("Failed to fetch FX rates, using fallback:", err));
 
-    // 2. Fetch games from DB when user or component mounts
+    // 2. Fetch games from DB when component mounts
     const fetchGames = async () => {
-    if (loading) {
-      return;
-    }
-
-    if (!supabase) {
-      return;
-    }
-
-    try {
-      let query = supabase
-        .from('sessions')
-        .select(`
-          id,
-          date,
-          currency,
-          chip_value,
-          poker_now_url,
-          is_active,
-          user_id,
-          ledger ( * )
-        `)
-        .order('date', { ascending: false });
-
-      if (user?.id) {
-        query = query.or(`user_id.eq.${user.id},user_id.is.null`);
+      if (!supabase) {
+        return;
       }
 
-      // 1. Try querying with all columns via ledger(*)
-      let { data, error } = await query;
-
-      // 2. If selecting ledger(*) fails, fallback to basic columns
-      if (error) {
-        console.warn("Primary fetch error, attempting fallback query:", error);
-        let fallbackQuery = supabase
+      try {
+        let query = supabase
           .from('sessions')
           .select(`
             id,
@@ -125,138 +90,127 @@ export function AppContent() {
             poker_now_url,
             is_active,
             user_id,
-            ledger ( player_name, buy_in, cash_out, currency, is_bank )
+            ledger ( * )
           `)
           .order('date', { ascending: false });
 
-        if (user?.id) {
-          fallbackQuery = fallbackQuery.or(`user_id.eq.${user.id},user_id.is.null`);
-        }
+        // 1. Try querying with all columns via ledger(*)
+        let { data, error } = await query;
 
-        const fallback = await fallbackQuery;
+        // 2. If selecting ledger(*) fails, fallback to basic columns
+        if (error) {
+          console.warn("Primary fetch error, attempting fallback query:", error);
+          let fallbackQuery = supabase
+            .from('sessions')
+            .select(`
+              id,
+              date,
+              currency,
+              chip_value,
+              poker_now_url,
+              is_active,
+              user_id,
+              ledger ( player_name, buy_in, cash_out, currency, is_bank )
+            `)
+            .order('date', { ascending: false });
 
-        if (fallback.error) {
-          console.error("Fallback fetch also failed:", fallback.error);
-          return;
-        }
-        data = fallback.data;
-      }
+          const fallback = await fallbackQuery;
 
-      if (Array.isArray(data)) {
-        // Auto-claim legacy unassigned sessions if user is logged in
-        if (user?.id) {
-          const unassignedIds = data
-            .filter(s => s && s.user_id === null && s.id)
-            .map(s => s.id);
-
-          if (unassignedIds.length > 0) {
-            try {
-              const { error: updateError } = await supabase
-                .from('sessions')
-                .update({ user_id: user.id })
-                .in('id', unassignedIds);
-
-              if (updateError) {
-                console.warn("Failed to auto-claim legacy sessions:", updateError);
-              } else {
-                data = data.map(s => unassignedIds.includes(s.id) ? { ...s, user_id: user.id } : s);
-              }
-            } catch (claimErr) {
-              console.error("Error auto-claiming legacy sessions:", claimErr);
-            }
+          if (fallback.error) {
+            console.error("Fallback fetch also failed:", fallback.error);
+            return;
           }
+          data = fallback.data;
         }
 
-        const remoteGames = mapDatabaseSessionsToGames(data);
-        
-        // Local-to-Cloud Sync on Login/Mount:
-        // Push any local localStorage games that aren't yet in remote up to Supabase.
-        const localGames = loadGamesFromStorage();
-        const remoteIds = new Set(remoteGames.map(g => g.id));
-        const remoteFingerprints = new Set(
-          remoteGames
-            .filter(g => g && g.date && g.pokerNowUrl)
-            .map(g => `${g.date}_${g.pokerNowUrl}`)
-        );
+        if (Array.isArray(data)) {
+          const remoteGames = mapDatabaseSessionsToGames(data);
+          
+          // Local-to-Cloud Sync on Mount:
+          // Push any local localStorage games that aren't yet in remote up to Supabase.
+          const localGames = loadGamesFromStorage();
+          const remoteIds = new Set(remoteGames.map(g => g.id));
+          const remoteFingerprints = new Set(
+            remoteGames
+              .filter(g => g && g.date && g.pokerNowUrl)
+              .map(g => `${g.date}_${g.pokerNowUrl}`)
+          );
 
-        const unSyncedLocalGames = localGames.filter(g => {
-          if (!g || !g.id) return false;
-          if (remoteIds.has(g.id)) return false;
-          const fingerprint = (g.date && g.pokerNowUrl) ? `${g.date}_${g.pokerNowUrl}` : null;
-          if (fingerprint && remoteFingerprints.has(fingerprint)) return false;
-          return true;
-        });
+          const unSyncedLocalGames = localGames.filter(g => {
+            if (!g || !g.id) return false;
+            if (remoteIds.has(g.id)) return false;
+            const fingerprint = (g.date && g.pokerNowUrl) ? `${g.date}_${g.pokerNowUrl}` : null;
+            if (fingerprint && remoteFingerprints.has(fingerprint)) return false;
+            return true;
+          });
 
-        if (unSyncedLocalGames.length > 0 && supabase) {
-          const syncedSessions = [];
-          for (const localGame of unSyncedLocalGames) {
-            try {
-              const sessionPayload = {
-                date: localGame.date,
-                currency: localGame.currency || globalCurrency,
-                chip_value: localGame.chipValue || 1,
-                is_active: Boolean(localGame.isActive),
-                poker_now_url: localGame.pokerNowUrl || null
-              };
-              if (user?.id) {
-                sessionPayload.user_id = user.id;
-              }
+          if (unSyncedLocalGames.length > 0 && supabase) {
+            const syncedSessions = [];
+            for (const localGame of unSyncedLocalGames) {
+              try {
+                const sessionPayload = {
+                  date: localGame.date,
+                  currency: localGame.currency || globalCurrency,
+                  chip_value: localGame.chipValue || 1,
+                  is_active: Boolean(localGame.isActive),
+                  poker_now_url: localGame.pokerNowUrl || null
+                };
 
-              const { data: sessionData, error: sessionError } = await supabase
-                .from('sessions')
-                .insert([sessionPayload])
-                .select()
-                .single();
+                const { data: sessionData, error: sessionError } = await supabase
+                  .from('sessions')
+                  .insert([sessionPayload])
+                  .select()
+                  .single();
 
-              if (!sessionError && sessionData && sessionData.id) {
-                const newRemoteId = sessionData.id;
-                const entries = Array.isArray(localGame.entries) ? localGame.entries : [];
-                const validEntries = entries.map(e => ({
-                  session_id: newRemoteId,
-                  player_name: (e.name || '').trim() || 'Unknown Player',
-                  buy_in: Number(e.buyIn) || 0,
-                  cash_out: (Number(e.buyOut) || 0) + (Number(e.stack) || 0),
-                  currency: e.currency || localGame.currency || globalCurrency,
-                  is_bank: Boolean(e.isBank),
-                  hands_played: Number(e.handsPlayed) || 0,
-                  vpip_hands: Number(e.vpipHands) || 0,
-                  pfr_hands: Number(e.pfrHands) || 0,
-                  three_bet_opps: Number(e.threeBetOpps) || 0,
-                  three_bet_hands: Number(e.threeBetHands) || 0,
-                  external_player_id: e.externalId || e.pokerNowId || null,
-                  player_external_id: e.externalId || e.pokerNowId || null,
-                  player_poker_now_id: e.pokerNowId || e.externalId || null
-                }));
+                if (!sessionError && sessionData && sessionData.id) {
+                  const newRemoteId = sessionData.id;
+                  const entries = Array.isArray(localGame.entries) ? localGame.entries : [];
+                  const validEntries = entries.map(e => ({
+                    session_id: newRemoteId,
+                    player_name: (e.name || '').trim() || 'Unknown Player',
+                    buy_in: Number(e.buyIn) || 0,
+                    cash_out: (Number(e.buyOut) || 0) + (Number(e.stack) || 0),
+                    currency: e.currency || localGame.currency || globalCurrency,
+                    is_bank: Boolean(e.isBank),
+                    hands_played: Number(e.handsPlayed) || 0,
+                    vpip_hands: Number(e.vpipHands) || 0,
+                    pfr_hands: Number(e.pfrHands) || 0,
+                    three_bet_opps: Number(e.threeBetOpps) || 0,
+                    three_bet_hands: Number(e.threeBetHands) || 0,
+                    external_player_id: e.externalId || e.pokerNowId || null,
+                    player_external_id: e.externalId || e.pokerNowId || null,
+                    player_poker_now_id: e.pokerNowId || e.externalId || null
+                  }));
 
-                if (validEntries.length > 0) {
-                  await supabase.from('ledger').insert(validEntries);
+                  if (validEntries.length > 0) {
+                    await supabase.from('ledger').insert(validEntries);
+                  }
+
+                  localGame.id = newRemoteId;
+                  syncedSessions.push({
+                    ...sessionData,
+                    ledger: validEntries
+                  });
                 }
-
-                localGame.id = newRemoteId;
-                syncedSessions.push({
-                  ...sessionData,
-                  ledger: validEntries
-                });
+              } catch (syncErr) {
+                console.error("Failed to sync local game to cloud:", syncErr);
               }
-            } catch (syncErr) {
-              console.error("Failed to sync local game to cloud:", syncErr);
+            }
+            saveGamesToStorage(localGames);
+            if (syncedSessions.length > 0) {
+              data = [...data, ...syncedSessions];
             }
           }
-          saveGamesToStorage(localGames);
-          if (syncedSessions.length > 0) {
-            data = [...data, ...syncedSessions];
-          }
-        }
 
-        const refreshedRemoteGames = mapDatabaseSessionsToGames(data);
-        setGames(prevGames => mergeRemoteAndLocalGames(refreshedRemoteGames, prevGames));
+          const refreshedRemoteGames = mapDatabaseSessionsToGames(data);
+          setGames(prevGames => mergeRemoteAndLocalGames(refreshedRemoteGames, prevGames));
+        }
+      } catch (err) {
+        console.error("Unexpected error fetching games:", err);
       }
-    } catch (err) {
-      console.error("Unexpected error fetching games:", err);
-    }
-  };
+    };
     fetchGames();
-  }, [user?.id, loading, globalCurrency]);
+  }, [globalCurrency]);
 
   // --- DERIVED STATS (ALL-TIME FIAT) ---
   const playerStats = useMemo(() => {
@@ -345,9 +299,6 @@ export function AppContent() {
           chip_value: 1,
           is_active: true
         };
-        if (user?.id) {
-          sessionPayload.user_id = user.id;
-        }
 
         const { data: sessionData, error: sessionError } = await supabase
           .from('sessions')
@@ -444,9 +395,6 @@ export function AppContent() {
                 is_active: false,
                 poker_now_url: newGame.pokerNowUrl
               };
-              if (user?.id) {
-                sessionPayload.user_id = user.id;
-              }
 
               const { data: sessionData, error: sessionError } = await supabase
                 .from('sessions')
@@ -632,18 +580,7 @@ export function AppContent() {
                   <History className="w-4 h-4" />
                   <span className="hidden sm:inline">Sessions</span>
                 </button>
-                <button 
-                  onClick={() => { setActiveTab('replayer'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                    activeTab === 'replayer' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                >
-                  <Play className="w-4 h-4" />
-                  <span className="hidden sm:inline">Hand Replayer</span>
-                </button>
               </div>
-
-              <UserMenu onOpenAuthModal={() => setAuthModalOpen(true)} />
             </div>
           </div>
         </nav>
@@ -669,22 +606,15 @@ export function AppContent() {
             />
           ) : activeTab === 'dashboard' ? (
             <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlayFiat} globalCurrency={globalCurrency} onPlayerClick={setSelectedPlayer} />
-          ) : activeTab === 'replayer' ? (
-            <HandReplayer />
           ) : (
             <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
           )}
         </main>
-        <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
       </div>
     </ErrorBoundary>
   );
 }
 
 export default function App() {
-  return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
-  );
+  return <AppContent />;
 }
