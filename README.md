@@ -1,6 +1,6 @@
-# Premium Poker Session Tracker
+# Premium OffSuite Session Tracker
 
-A premium, interactive poker session tracker featuring a sleek, dark card-based theme to easily analyze games, track player stats, import logs, and replay key hands on a virtual felt.
+A premium, interactive home game poker session tracker featuring a sleek, dark card-based theme to easily analyze games, track player stats, import logs, and replay key hands on a virtual felt.
 
 ## Features
 

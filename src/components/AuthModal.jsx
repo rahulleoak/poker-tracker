@@ -62,7 +62,7 @@ export default function AuthModal({ isOpen, onClose }) {
             </div>
             <div>
               <h3 className="font-bold text-slate-100">
-                {mode === 'signin' && 'Sign In to Poker Tracker'}
+                {mode === 'signin' && 'Sign In to OffSuite'}
                 {mode === 'signup' && 'Create Player Account'}
                 {mode === 'magic' && 'Sign In with Magic Link'}
               </h3>

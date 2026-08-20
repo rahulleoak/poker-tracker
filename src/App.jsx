@@ -598,7 +598,7 @@ export function AppContent() {
               <div className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400">
                 <Globe className="w-5 h-5" />
               </div>
-              <span>HomeGame Tracker</span>
+              <span>OffSuite</span>
             </div>
             
             <div className="flex items-center gap-2 sm:gap-4">
