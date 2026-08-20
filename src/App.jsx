@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect, Component } from "react";
-import { LayoutDashboard, Globe, History } from 'lucide-react';
+import { useState, useMemo, useEffect, Component, useCallback } from "react";
+import { LayoutDashboard, Globe, History, Users } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
@@ -9,6 +9,7 @@ import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
 import PlayerProfile from './components/PlayerProfile';
+import PlayerManager from './components/PlayerManager';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -55,6 +56,62 @@ export function AppContent() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [editingGameId, setEditingGameId] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
+
+  // --- PLAYER IDENTITIES STATE & SYNCHRONIZATION ---
+  const [players, setPlayers] = useState(() => JSON.parse(localStorage.getItem('offsuite_players') || '[]'));
+  const [playerLinks, setPlayerLinks] = useState(() => JSON.parse(localStorage.getItem('offsuite_player_links') || '[]'));
+
+  const fetchPlayersAndLinks = async () => {
+    if (!supabase) return;
+    try {
+      const { data: pData } = await supabase.from('players').select('*');
+      if (Array.isArray(pData)) {
+        setPlayers(pData);
+        localStorage.setItem('offsuite_players', JSON.stringify(pData));
+      }
+      const { data: lData } = await supabase.from('player_links').select('*');
+      if (Array.isArray(lData)) {
+        setPlayerLinks(lData);
+        localStorage.setItem('offsuite_player_links', JSON.stringify(lData));
+      }
+    } catch (err) {
+      console.error("Failed to fetch players or links from Supabase:", err);
+    }
+  };
+
+  useEffect(() => {
+    fetchPlayersAndLinks();
+  }, [games.length]);
+
+  const getPlayerDisplayName = useCallback((name, externalId) => {
+    if (!name) return 'Unknown Player';
+    const normName = name.trim().toLowerCase();
+    const normExtId = (externalId || '').trim().toLowerCase();
+
+    // 1. Check external ID match
+    if (normExtId) {
+      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normExtId);
+      if (link) {
+        const player = players.find(p => p.id === link.player_id);
+        if (player) return player.display_name;
+      }
+    }
+
+    // 2. Check name as external ID match (aliases)
+    if (normName) {
+      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normName);
+      if (link) {
+        const player = players.find(p => p.id === link.player_id);
+        if (player) return player.display_name;
+      }
+    }
+
+    // 3. Check direct display name match
+    const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
+    if (directPlayer) return directPlayer.display_name;
+
+    return name.trim();
+  }, [players, playerLinks]);
   
   // FX Rates & Global Config
   const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
@@ -230,12 +287,11 @@ export function AppContent() {
       const entries = Array.isArray(game.entries) ? game.entries : [];
       entries.forEach(entry => {
         if (!entry || !entry.name) return;
-        const name = entry.name.trim();
-        if (!name) return;
+        const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId);
 
-        if (!stats[name]) {
-          stats[name] = { 
-            name, 
+        if (!stats[mappedName]) {
+          stats[mappedName] = { 
+            name: mappedName, 
             buyInFiat: 0, 
             cashOutFiat: 0, 
             gamesPlayed: 0, 
@@ -252,20 +308,20 @@ export function AppContent() {
         const stack = Number(entry.stack) || 0;
         const totalCashOutChips = buyOut + stack;
         
-        stats[name].buyInFiat += (buyIn * chipToFiatMultiplier);
-        stats[name].cashOutFiat += (totalCashOutChips * chipToFiatMultiplier);
-        stats[name].netFiat += ((totalCashOutChips - buyIn) * chipToFiatMultiplier);
-        stats[name].gamesPlayed += 1;
+        stats[mappedName].buyInFiat += (buyIn * chipToFiatMultiplier);
+        stats[mappedName].cashOutFiat += (totalCashOutChips * chipToFiatMultiplier);
+        stats[mappedName].netFiat += ((totalCashOutChips - buyIn) * chipToFiatMultiplier);
+        stats[mappedName].gamesPlayed += 1;
 
-        stats[name].handsPlayed += Number(entry.handsPlayed) || 0;
-        stats[name].vpipHands += Number(entry.vpipHands) || 0;
-        stats[name].pfrHands += Number(entry.pfrHands) || 0;
-        stats[name].threeBetOpps += Number(entry.threeBetOpps) || 0;
-        stats[name].threeBetHands += Number(entry.threeBetHands) || 0;
+        stats[mappedName].handsPlayed += Number(entry.handsPlayed) || 0;
+        stats[mappedName].vpipHands += Number(entry.vpipHands) || 0;
+        stats[mappedName].pfrHands += Number(entry.pfrHands) || 0;
+        stats[mappedName].threeBetOpps += Number(entry.threeBetOpps) || 0;
+        stats[mappedName].threeBetHands += Number(entry.threeBetHands) || 0;
       });
     });
     return Object.values(stats).sort((a, b) => (b.netFiat || 0) - (a.netFiat || 0));
-  }, [games, exchangeRates, globalCurrency]);
+  }, [games, exchangeRates, globalCurrency, getPlayerDisplayName]);
 
   const totalMoneyInPlayFiat = useMemo(() => {
     const safeGames = Array.isArray(games) ? games : [];
@@ -580,6 +636,15 @@ export function AppContent() {
                   <History className="w-4 h-4" />
                   <span className="hidden sm:inline">Sessions</span>
                 </button>
+                <button 
+                  onClick={() => { setActiveTab('players'); setEditingGameId(null); setSelectedPlayer(null); }}
+                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
+                    activeTab === 'players' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <Users className="w-4 h-4" />
+                  <span className="hidden sm:inline">Players</span>
+                </button>
               </div>
             </div>
           </div>
@@ -602,10 +667,13 @@ export function AppContent() {
               games={games} 
               exchangeRates={exchangeRates}
               globalCurrency={globalCurrency}
+              getPlayerDisplayName={getPlayerDisplayName}
               onBack={() => setSelectedPlayer(null)} 
             />
           ) : activeTab === 'dashboard' ? (
             <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlayFiat} globalCurrency={globalCurrency} onPlayerClick={setSelectedPlayer} />
+          ) : activeTab === 'players' ? (
+            <PlayerManager players={players} playerLinks={playerLinks} onUpdate={fetchPlayersAndLinks} />
           ) : (
             <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
           )}

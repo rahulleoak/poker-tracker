@@ -3,14 +3,14 @@ import { ChevronLeft, TrendingUp, TrendingDown, History, DollarSign } from 'luci
 import MetricCard from './MetricCard';
 import { formatFiat } from '../utils/formatters';
 
-export default function PlayerProfile({ playerName, games = [], exchangeRates, globalCurrency = 'USD', onBack }) {
+export default function PlayerProfile({ playerName, games = [], exchangeRates, globalCurrency = 'USD', getPlayerDisplayName = (n) => n, onBack }) {
   const playerHistory = useMemo(() => {
     const safeGames = Array.isArray(games) ? games : [];
     return safeGames
       .map(game => {
         if (!game) return null;
         const entries = Array.isArray(game.entries) ? game.entries : [];
-        const entry = entries.find(e => e && e.name === playerName);
+        const entry = entries.find(e => e && getPlayerDisplayName(e.name, e.externalId || e.pokerNowId) === playerName);
         if (entry) {
           const buyIn = Number(entry.buyIn) || 0;
           const buyOut = Number(entry.buyOut) || 0;
@@ -37,7 +37,7 @@ export default function PlayerProfile({ playerName, games = [], exchangeRates, g
       })
       .filter(Boolean)
       .sort((a, b) => new Date(b.date) - new Date(a.date)); 
-  }, [playerName, games, exchangeRates, globalCurrency]);
+  }, [playerName, games, exchangeRates, globalCurrency, getPlayerDisplayName]);
 
   const advancedStats = useMemo(() => {
     const safeGames = Array.isArray(games) ? games : [];
@@ -50,7 +50,7 @@ export default function PlayerProfile({ playerName, games = [], exchangeRates, g
     safeGames.forEach(game => {
       if (!game) return;
       const entries = Array.isArray(game.entries) ? game.entries : [];
-      const entry = entries.find(e => e && e.name === playerName);
+      const entry = entries.find(e => e && getPlayerDisplayName(e.name, e.externalId || e.pokerNowId) === playerName);
       if (entry) {
         handsPlayed += Number(entry.handsPlayed) || 0;
         vpipHands += Number(entry.vpipHands) || 0;
