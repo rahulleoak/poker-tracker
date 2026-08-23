@@ -84,7 +84,7 @@ export function AppContent() {
   }, [games.length]);
 
   const getPlayerDisplayName = useCallback((name, externalId) => {
-    if (!name) return 'Unknown Player';
+    if (!name) return null;
     const normName = name.trim().toLowerCase();
     const normExtId = (externalId || '').trim().toLowerCase();
 
@@ -106,11 +106,11 @@ export function AppContent() {
       }
     }
 
-    // 3. Check direct display name match
+    // 3. Check direct display name match (auto-link matching names)
     const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
     if (directPlayer) return directPlayer.display_name;
 
-    return name.trim();
+    return null;
   }, [players, playerLinks]);
   
   // FX Rates & Global Config
@@ -288,6 +288,7 @@ export function AppContent() {
       entries.forEach(entry => {
         if (!entry || !entry.name) return;
         const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId);
+        if (!mappedName) return;
 
         if (!stats[mappedName]) {
           stats[mappedName] = { 
