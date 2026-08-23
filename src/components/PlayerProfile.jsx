@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { ChevronLeft, TrendingUp, TrendingDown, History, DollarSign } from 'lucide-react';
 import MetricCard from './MetricCard';
+import InfoTooltip from './InfoTooltip';
 import { formatFiat } from '../utils/formatters';
 
 export default function PlayerProfile({ playerName, games = [], exchangeRates, globalCurrency = 'USD', getPlayerDisplayName = (n) => n, onBack }) {
@@ -141,10 +142,10 @@ export default function PlayerProfile({ playerName, games = [], exchangeRates, g
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-slate-900 text-slate-400 text-sm border-b border-slate-800">
-                  <th className="p-4 font-medium">Date</th>
-                  <th className="p-4 font-medium text-right">Buy In</th>
-                  <th className="p-4 font-medium text-right">Cash Out</th>
-                  <th className="p-4 font-medium text-right">Net</th>
+                  <th className="p-4 font-medium"><InfoTooltip label="Date" content="Calendar date when the poker session was played." /></th>
+                  <th className="p-4 font-medium text-right"><InfoTooltip label="Buy In" content="Total fiat currency equivalent contributed as buy-in chips for this session." /></th>
+                  <th className="p-4 font-medium text-right"><InfoTooltip label="Cash Out" content="Total fiat currency equivalent cashed out or held as final stack at session end." /></th>
+                  <th className="p-4 font-medium text-right"><InfoTooltip label="Net" content="Net profit or loss in fiat currency for this specific session." /></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
