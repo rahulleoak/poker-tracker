@@ -152,7 +152,6 @@ export function AppContent() {
             chip_value,
             poker_now_url,
             is_active,
-            user_id,
             ledger ( * )
           `)
           .order('date', { ascending: false });
@@ -172,7 +171,6 @@ export function AppContent() {
               chip_value,
               poker_now_url,
               is_active,
-              user_id,
               ledger ( player_name, buy_in, cash_out, currency, is_bank )
             `)
             .order('date', { ascending: false });
