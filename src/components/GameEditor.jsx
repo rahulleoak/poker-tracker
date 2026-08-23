@@ -19,7 +19,7 @@ import { calculateSettlement } from '../utils/settlement';
 import { parsePokerNowLogStats } from '../utils/csvParser';
 import { mergeSessionEntries } from '../utils/sessionMapper';
 
-export default function GameEditor({ game, globalIncrement = 100, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete }) {
+export default function GameEditor({ game, globalIncrement = 100, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete, players = [], playerLinks = [], handleLinkPlayer, handleCreatePlayer }) {
   // Local state to manage edits without hitting DB on every keystroke
   const [date, setDate] = useState(() => game?.date || new Date().toISOString().split('T')[0]);
   const [gameCurrency, setGameCurrency] = useState(() => game?.currency || 'USD');
