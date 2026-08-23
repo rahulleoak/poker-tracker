@@ -61,30 +61,36 @@ export function AppContent() {
   const [players, setPlayers] = useState(() => JSON.parse(localStorage.getItem('offsuite_players') || '[]'));
   const [playerLinks, setPlayerLinks] = useState(() => JSON.parse(localStorage.getItem('offsuite_player_links') || '[]'));
 
-  const fetchPlayersAndLinks = async () => {
-    if (!supabase) return;
-    try {
-      const { data: pData } = await supabase.from('players').select('*');
-      if (Array.isArray(pData)) {
-        setPlayers(pData);
-        localStorage.setItem('offsuite_players', JSON.stringify(pData));
+  const fetchPlayersAndLinks = useCallback(async () => {
+    if (supabase) {
+      try {
+        const { data: pData } = await supabase.from('players').select('*');
+        if (Array.isArray(pData)) {
+          setPlayers(pData);
+          localStorage.setItem('offsuite_players', JSON.stringify(pData));
+        }
+        const { data: lData } = await supabase.from('player_links').select('*');
+        if (Array.isArray(lData)) {
+          setPlayerLinks(lData);
+          localStorage.setItem('offsuite_player_links', JSON.stringify(lData));
+        }
+        return;
+      } catch (err) {
+        console.error("Failed to fetch players or links from Supabase:", err);
       }
-      const { data: lData } = await supabase.from('player_links').select('*');
-      if (Array.isArray(lData)) {
-        setPlayerLinks(lData);
-        localStorage.setItem('offsuite_player_links', JSON.stringify(lData));
-      }
-    } catch (err) {
-      console.error("Failed to fetch players or links from Supabase:", err);
     }
-  };
+    const localP = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
+    const localL = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+    setPlayers(localP);
+    setPlayerLinks(localL);
+  }, []);
 
   useEffect(() => {
     fetchPlayersAndLinks();
-  }, [games.length]);
+  }, [games.length, fetchPlayersAndLinks]);
 
   const getPlayerDisplayName = useCallback((name, externalId) => {
-    if (!name) return 'Unknown Player';
+    if (!name) return null;
     const normName = name.trim().toLowerCase();
     const normExtId = (externalId || '').trim().toLowerCase();
 
@@ -106,11 +112,11 @@ export function AppContent() {
       }
     }
 
-    // 3. Check direct display name match
+    // 3. Check direct display name match (auto-link matching names)
     const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
     if (directPlayer) return directPlayer.display_name;
 
-    return name.trim();
+    return null;
   }, [players, playerLinks]);
   
   // FX Rates & Global Config
@@ -146,7 +152,6 @@ export function AppContent() {
             chip_value,
             poker_now_url,
             is_active,
-            user_id,
             ledger ( * )
           `)
           .order('date', { ascending: false });
@@ -166,7 +171,6 @@ export function AppContent() {
               chip_value,
               poker_now_url,
               is_active,
-              user_id,
               ledger ( player_name, buy_in, cash_out, currency, is_bank )
             `)
             .order('date', { ascending: false });
@@ -288,6 +292,7 @@ export function AppContent() {
       entries.forEach(entry => {
         if (!entry || !entry.name) return;
         const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId);
+        if (!mappedName) return;
 
         if (!stats[mappedName]) {
           stats[mappedName] = { 
@@ -657,6 +662,9 @@ export function AppContent() {
               globalIncrement={globalIncrement}
               setGlobalIncrement={setGlobalIncrement}
               exchangeRates={exchangeRates}
+              players={players}
+              playerLinks={playerLinks}
+              onUpdatePlayers={fetchPlayersAndLinks}
               onSave={handleUpdateGame}
               onBack={() => setEditingGameId(null)}
               onDelete={() => handleDeleteGame(editingGameId)}
@@ -671,7 +679,16 @@ export function AppContent() {
               onBack={() => setSelectedPlayer(null)} 
             />
           ) : activeTab === 'dashboard' ? (
-            <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlayFiat} globalCurrency={globalCurrency} onPlayerClick={setSelectedPlayer} />
+            <Dashboard 
+              stats={playerStats} 
+              totalSessions={games.length} 
+              totalMoney={totalMoneyInPlayFiat} 
+              globalCurrency={globalCurrency} 
+              onPlayerClick={setSelectedPlayer} 
+              games={games}
+              exchangeRates={exchangeRates}
+              getPlayerDisplayName={getPlayerDisplayName}
+            />
           ) : activeTab === 'players' ? (
             <PlayerManager players={players} playerLinks={playerLinks} onUpdate={fetchPlayersAndLinks} />
           ) : (

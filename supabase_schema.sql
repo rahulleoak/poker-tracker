@@ -41,14 +41,13 @@ CREATE TABLE IF NOT EXISTS public.players (
 CREATE TABLE IF NOT EXISTS public.player_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     player_id UUID REFERENCES public.players(id) ON DELETE CASCADE,
-    platform TEXT NOT NULL DEFAULT 'pokernow',
-    external_id TEXT NOT NULL,
-    UNIQUE(platform, external_id)
+    session_name TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 4. PERFORMANCE INDEXES FOR PLAYERS & LINKS
 CREATE INDEX IF NOT EXISTS idx_player_links_player_id ON public.player_links(player_id);
-CREATE INDEX IF NOT EXISTS idx_player_links_external_id ON public.player_links(external_id);
+CREATE INDEX IF NOT EXISTS idx_player_links_session_name ON public.player_links(session_name);
 
 -- 5. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE public.sessions ENABLE ROW LEVEL SECURITY;

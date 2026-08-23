@@ -1,8 +1,9 @@
 import { History, DollarSign, Crown, HeartHandshake } from 'lucide-react';
 import MetricCard from './MetricCard';
+import ProfitGraph from './ProfitGraph';
 import { formatFiat } from '../utils/formatters';
 
-export default function Dashboard({ stats = [], totalSessions = 0, totalMoney = 0, globalCurrency = 'USD', onPlayerClick }) {
+export default function Dashboard({ stats = [], totalSessions = 0, totalMoney = 0, globalCurrency = 'USD', onPlayerClick, games = [], exchangeRates = {}, getPlayerDisplayName }) {
   const safeStats = Array.isArray(stats) ? stats : [];
   const topWinner = safeStats.length > 0 && safeStats[0]?.netFiat > 0 ? safeStats[0] : null;
   const topLoser = safeStats.length > 0 && safeStats[safeStats.length - 1]?.netFiat < 0 ? safeStats[safeStats.length - 1] : null;
@@ -14,6 +15,14 @@ export default function Dashboard({ stats = [], totalSessions = 0, totalMoney = 
         <MetricCard title="Total Sessions" value={totalSessions} icon={<History className="w-5 h-5 text-indigo-400" />} />
         <MetricCard title={`Money Wagered (${globalCurrency})`} value={formatFiat(totalMoney, globalCurrency)} icon={<DollarSign className="w-5 h-5 text-emerald-400" />} />
       </div>
+
+      {/* Global Profit / Loss Trend Graph */}
+      <ProfitGraph 
+        games={games} 
+        exchangeRates={exchangeRates} 
+        globalCurrency={globalCurrency} 
+        getPlayerDisplayName={getPlayerDisplayName} 
+      />
 
       {/* Hall of Fame Podiums */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
