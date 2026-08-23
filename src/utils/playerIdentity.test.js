@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert';
 
-// Simulates player identity resolution and aggregation
+// Simulates player identity resolution and aggregation with registered-players-only filtering
 function getPlayerDisplayName(name, externalId, players = [], playerLinks = []) {
-  if (!name) return 'Unknown Player';
+  if (!name) return null;
   const normName = name.trim().toLowerCase();
   const normExtId = (externalId || '').trim().toLowerCase();
 
@@ -25,17 +25,18 @@ function getPlayerDisplayName(name, externalId, players = [], playerLinks = []) 
     }
   }
 
-  // 3. Check direct display name match
+  // 3. Check direct display name match (auto-link matching names)
   const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
   if (directPlayer) return directPlayer.display_name;
 
-  return name.trim();
+  return null; // Unregistered / unmapped raw session names are filtered out
 }
 
-test('player identity mapping maps external IDs and aliases correctly', () => {
+test('player identity mapping maps external IDs, aliases, and exact matching names correctly, and filters out unregistered players', () => {
   const players = [
     { id: 'p-1', display_name: 'Rahul' },
-    { id: 'p-2', display_name: 'John Doe' }
+    { id: 'p-2', display_name: 'John Doe' },
+    { id: 'p-3', display_name: 'Alice' }
   ];
 
   const playerLinks = [
@@ -51,17 +52,18 @@ test('player identity mapping maps external IDs and aliases correctly', () => {
   // Match by seat name / alias
   assert.strictEqual(getPlayerDisplayName('@RahulL', null, players, playerLinks), 'Rahul');
 
-  // Match by direct display name
-  assert.strictEqual(getPlayerDisplayName('Rahul', null, players, playerLinks), 'Rahul');
-  assert.strictEqual(getPlayerDisplayName('John Doe', null, players, playerLinks), 'John Doe');
-
-  // Fallback to name if unmatched
+  // Match by direct display name (auto-link matching names)
   assert.strictEqual(getPlayerDisplayName('Alice', null, players, playerLinks), 'Alice');
+  assert.strictEqual(getPlayerDisplayName('Rahul', null, players, playerLinks), 'Rahul');
+
+  // Return null for unregistered / unlinked players
+  assert.strictEqual(getPlayerDisplayName('Bob', null, players, playerLinks), null);
 });
 
-test('poker stats aggregate correctly across multiple linked IDs', () => {
+test('poker stats aggregate correctly across multiple linked IDs and filter unregistered players', () => {
   const players = [
-    { id: 'p-1', display_name: 'Rahul' }
+    { id: 'p-1', display_name: 'Rahul' },
+    { id: 'p-2', display_name: 'Alice' }
   ];
 
   const playerLinks = [
@@ -74,7 +76,8 @@ test('poker stats aggregate correctly across multiple linked IDs', () => {
       id: 'g-1',
       entries: [
         { name: 'Rahul (Seat 1)', externalId: 'SPoLg3vOL-', buyIn: 100, buyOut: 200, stack: 0 },
-        { name: 'Alice', buyIn: 50, buyOut: 0, stack: 0 }
+        { name: 'Alice', buyIn: 50, buyOut: 0, stack: 0 },
+        { name: 'UnregisteredBob', buyIn: 500, buyOut: 0, stack: 0 }
       ]
     },
     {
@@ -90,6 +93,7 @@ test('poker stats aggregate correctly across multiple linked IDs', () => {
   games.forEach(game => {
     game.entries.forEach(entry => {
       const name = getPlayerDisplayName(entry.name, entry.externalId, players, playerLinks);
+      if (!name) return; // filter out unregistered players
       if (!stats[name]) {
         stats[name] = { name, buyIn: 0, cashOut: 0, net: 0 };
       }
@@ -107,9 +111,12 @@ test('poker stats aggregate correctly across multiple linked IDs', () => {
   assert.strictEqual(stats['Rahul'].cashOut, 350);
   assert.strictEqual(stats['Rahul'].net, 150);
 
-  // Check stats for 'Alice'
+  // Check stats for 'Alice' (auto-linked by exact name match)
   assert.ok(stats['Alice']);
   assert.strictEqual(stats['Alice'].buyIn, 150);
   assert.strictEqual(stats['Alice'].cashOut, 50);
   assert.strictEqual(stats['Alice'].net, -100);
+
+  // UnregisteredBob should be completely excluded
+  assert.strictEqual(stats['UnregisteredBob'], undefined);
 });
