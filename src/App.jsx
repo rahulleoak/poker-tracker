@@ -679,7 +679,16 @@ export function AppContent() {
               onBack={() => setSelectedPlayer(null)} 
             />
           ) : activeTab === 'dashboard' ? (
-            <Dashboard stats={playerStats} totalSessions={games.length} totalMoney={totalMoneyInPlayFiat} globalCurrency={globalCurrency} onPlayerClick={setSelectedPlayer} />
+            <Dashboard 
+              stats={playerStats} 
+              totalSessions={games.length} 
+              totalMoney={totalMoneyInPlayFiat} 
+              globalCurrency={globalCurrency} 
+              onPlayerClick={setSelectedPlayer} 
+              games={games}
+              exchangeRates={exchangeRates}
+              getPlayerDisplayName={getPlayerDisplayName}
+            />
           ) : activeTab === 'players' ? (
             <PlayerManager players={players} playerLinks={playerLinks} onUpdate={fetchPlayersAndLinks} />
           ) : (
