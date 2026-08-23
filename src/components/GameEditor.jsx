@@ -22,6 +22,7 @@ import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
 import { calculateSettlement } from '../utils/settlement';
 import { parsePokerNowLogStats } from '../utils/csvParser';
 import { mergeSessionEntries } from '../utils/sessionMapper';
+import InfoTooltip from './InfoTooltip';
 
 export default function GameEditor({ 
   game, 
@@ -857,11 +858,11 @@ export default function GameEditor({
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-slate-900 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
-                  <th className="p-3 font-medium min-w-[150px]">Player Name</th>
-                  <th className="p-3 font-medium text-center min-w-[140px]" title="Chips Bought In">Buy Ins (🪙)</th>
-                  <th className="p-3 font-medium text-center min-w-[140px]" title="Chips removed mid-game">Buy Outs (🪙)</th>
-                  <th className="p-3 font-medium text-center min-w-[100px]" title="Chips held at end of game">Current Stack</th>
-                  <th className="p-3 font-medium text-right min-w-[80px]">Net Chips</th>
+                  <th className="p-3 font-medium min-w-[150px]"><InfoTooltip label="Player Name" content="Participant name or nickname in the poker session." /></th>
+                  <th className="p-3 font-medium text-center min-w-[140px]"><InfoTooltip label="Buy Ins (🪙)" content="Total chips purchased by the player to enter or reload during the game." /></th>
+                  <th className="p-3 font-medium text-center min-w-[140px]"><InfoTooltip label="Buy Outs (🪙)" content="Chips cashed out or removed by the player mid-game before session end." /></th>
+                  <th className="p-3 font-medium text-center min-w-[100px]"><InfoTooltip label="Current Stack" content="Chips held by the player at the conclusion of the session." /></th>
+                  <th className="p-3 font-medium text-right min-w-[80px]"><InfoTooltip label="Net Chips" content="Total chips won or lost (Cash Out + Stack minus Buy Ins)." /></th>
                   <th className="p-3 w-10"></th>
                 </tr>
               </thead>
