@@ -61,27 +61,33 @@ export function AppContent() {
   const [players, setPlayers] = useState(() => JSON.parse(localStorage.getItem('offsuite_players') || '[]'));
   const [playerLinks, setPlayerLinks] = useState(() => JSON.parse(localStorage.getItem('offsuite_player_links') || '[]'));
 
-  const fetchPlayersAndLinks = async () => {
-    if (!supabase) return;
-    try {
-      const { data: pData } = await supabase.from('players').select('*');
-      if (Array.isArray(pData)) {
-        setPlayers(pData);
-        localStorage.setItem('offsuite_players', JSON.stringify(pData));
+  const fetchPlayersAndLinks = useCallback(async () => {
+    if (supabase) {
+      try {
+        const { data: pData } = await supabase.from('players').select('*');
+        if (Array.isArray(pData)) {
+          setPlayers(pData);
+          localStorage.setItem('offsuite_players', JSON.stringify(pData));
+        }
+        const { data: lData } = await supabase.from('player_links').select('*');
+        if (Array.isArray(lData)) {
+          setPlayerLinks(lData);
+          localStorage.setItem('offsuite_player_links', JSON.stringify(lData));
+        }
+        return;
+      } catch (err) {
+        console.error("Failed to fetch players or links from Supabase:", err);
       }
-      const { data: lData } = await supabase.from('player_links').select('*');
-      if (Array.isArray(lData)) {
-        setPlayerLinks(lData);
-        localStorage.setItem('offsuite_player_links', JSON.stringify(lData));
-      }
-    } catch (err) {
-      console.error("Failed to fetch players or links from Supabase:", err);
     }
-  };
+    const localP = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
+    const localL = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+    setPlayers(localP);
+    setPlayerLinks(localL);
+  }, []);
 
   useEffect(() => {
     fetchPlayersAndLinks();
-  }, [games.length]);
+  }, [games.length, fetchPlayersAndLinks]);
 
   const getPlayerDisplayName = useCallback((name, externalId) => {
     if (!name) return null;
@@ -658,6 +664,9 @@ export function AppContent() {
               globalIncrement={globalIncrement}
               setGlobalIncrement={setGlobalIncrement}
               exchangeRates={exchangeRates}
+              players={players}
+              playerLinks={playerLinks}
+              onUpdatePlayers={fetchPlayersAndLinks}
               onSave={handleUpdateGame}
               onBack={() => setEditingGameId(null)}
               onDelete={() => handleDeleteGame(editingGameId)}

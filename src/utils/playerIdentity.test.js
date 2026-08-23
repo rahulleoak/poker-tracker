@@ -120,3 +120,26 @@ test('poker stats aggregate correctly across multiple linked IDs and filter unre
   // UnregisteredBob should be completely excluded
   assert.strictEqual(stats['UnregisteredBob'], undefined);
 });
+
+test('in-place identity mapping allows linking new session names to existing or new profiles', () => {
+  const players = [
+    { id: 'p-1', display_name: 'Rahul' }
+  ];
+  let playerLinks = [];
+
+  // Initially unlinked
+  assert.strictEqual(getPlayerDisplayName('Rahul (Guest)', null, players, playerLinks), null);
+
+  // Perform in-place link to existing profile 'Rahul'
+  playerLinks.push({ id: 'l-new', player_id: 'p-1', platform: 'alias', external_id: 'Rahul (Guest)' });
+
+  // Now resolves to 'Rahul'
+  assert.strictEqual(getPlayerDisplayName('Rahul (Guest)', null, players, playerLinks), 'Rahul');
+
+  // Perform in-place creation of new profile 'Dave' and link 'Dave's Laptop'
+  players.push({ id: 'p-2', display_name: 'Dave' });
+  playerLinks.push({ id: 'l-dave', player_id: 'p-2', platform: 'alias', external_id: "Dave's Laptop" });
+
+  assert.strictEqual(getPlayerDisplayName("Dave's Laptop", null, players, playerLinks), 'Dave');
+});
+
