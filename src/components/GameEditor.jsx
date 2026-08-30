@@ -12,14 +12,30 @@ import {
   ArrowRight, 
   Landmark, 
   Globe, 
-  DollarSign 
+  DollarSign,
+  Link,
+  Unlink,
+  UserPlus
 } from 'lucide-react';
+import { supabase } from '../utils/supabase';
 import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
 import { calculateSettlement } from '../utils/settlement';
 import { parsePokerNowLogStats } from '../utils/csvParser';
 import { mergeSessionEntries } from '../utils/sessionMapper';
+import InfoTooltip from './InfoTooltip';
 
-export default function GameEditor({ game, globalIncrement = 100, setGlobalIncrement, exchangeRates, onSave, onBack, onDelete, players = [], playerLinks = [], handleLinkPlayer, handleCreatePlayer }) {
+export default function GameEditor({ 
+  game, 
+  globalIncrement = 100, 
+  setGlobalIncrement, 
+  exchangeRates, 
+  players = [], 
+  playerLinks = [], 
+  onUpdatePlayers, 
+  onSave, 
+  onBack, 
+  onDelete 
+}) {
   // Local state to manage edits without hitting DB on every keystroke
   const [date, setDate] = useState(() => game?.date || new Date().toISOString().split('T')[0]);
   const [gameCurrency, setGameCurrency] = useState(() => game?.currency || 'USD');
@@ -54,6 +70,13 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
   const [settlementCurrency, setSettlementCurrency] = useState(() => game?.currency || 'USD');
   const [useBankBuddies, setUseBankBuddies] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(null);
+
+  // In-place identity linking popover state
+  const [popoverIndex, setPopoverIndex] = useState(null);
+  const [popoverPlayerId, setPopoverPlayerId] = useState('');
+  const [popoverNewName, setPopoverNewName] = useState('');
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkError, setLinkError] = useState(null);
 
   // --- RESET STATE WHEN GAME PROP CHANGES ---
   useEffect(() => {
@@ -124,6 +147,193 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
       useBankBuddies
     });
   }, [entries, chipValue, gameCurrency, settlementCurrency, exchangeRates, useBankBuddies]);
+
+  // Identity Linking Helpers
+  const getLinkedPlayerInfo = (entry) => {
+    if (!entry) return null;
+    const sessionName = (entry.name || '').trim();
+    const extId = (entry.externalId || entry.pokerNowId || '').trim();
+    if (!sessionName && !extId) return null;
+
+    const normName = sessionName.toLowerCase();
+    const normExt = extId.toLowerCase();
+
+    const foundLink = playerLinks.find(l => {
+      const ext = (l.external_id || '').trim().toLowerCase();
+      return (normExt && ext === normExt) || (normName && ext === normName);
+    });
+
+    if (foundLink) {
+      const player = players.find(p => p.id === foundLink.player_id);
+      return { player: player || null, link: foundLink, isDirectLink: true };
+    }
+
+    if (normName) {
+      const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
+      if (directPlayer) {
+        return { player: directPlayer, link: null, isDirectLink: false };
+      }
+    }
+
+    return null;
+  };
+
+  const isEntryLinked = (entry) => {
+    return Boolean(getLinkedPlayerInfo(entry));
+  };
+
+  const handleOpenLinkPopover = (i, entry) => {
+    setPopoverIndex(i);
+    setPopoverPlayerId('');
+    setPopoverNewName((entry?.name || '').trim());
+    setLinkError(null);
+  };
+
+  const handleLinkToExistingPlayer = async (targetEntry, playerId) => {
+    if (!targetEntry || !playerId) return;
+    setLinkLoading(true);
+    setLinkError(null);
+
+    const sessionName = (targetEntry.name || '').trim();
+    const extId = (targetEntry.externalId || targetEntry.pokerNowId || '').trim();
+    const linkValues = Array.from(new Set([sessionName, extId].filter(Boolean)));
+
+    try {
+      if (supabase) {
+        for (const val of linkValues) {
+          const exists = playerLinks.some(l => 
+            l.player_id === playerId && (l.external_id || '').trim().toLowerCase() === val.toLowerCase()
+          );
+          if (!exists) {
+            const platform = (extId && val === extId) ? 'pokernow' : 'alias';
+            const { error } = await supabase.from('player_links').insert([{
+              player_id: playerId,
+              platform,
+              external_id: val
+            }]);
+            if (error) throw error;
+          }
+        }
+      }
+
+      const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+      let updatedLinks = [...currentLinks];
+      for (const val of linkValues) {
+        const exists = updatedLinks.some(l => 
+          l.player_id === playerId && (l.external_id || '').trim().toLowerCase() === val.toLowerCase()
+        );
+        if (!exists) {
+          const platform = (extId && val === extId) ? 'pokernow' : 'alias';
+          updatedLinks.push({
+            id: `local-link-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            player_id: playerId,
+            platform,
+            external_id: val
+          });
+        }
+      }
+      localStorage.setItem('offsuite_player_links', JSON.stringify(updatedLinks));
+
+      if (onUpdatePlayers) {
+        await onUpdatePlayers();
+      }
+      setPopoverIndex(null);
+    } catch (err) {
+      console.error("Error linking player identity:", err);
+      setLinkError(err.message || "Failed to link identity");
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
+  const handleCreateAndLinkPlayer = async (targetEntry, newPlayerDisplayName) => {
+    const displayName = (newPlayerDisplayName || '').trim();
+    if (!targetEntry || !displayName) return;
+    setLinkLoading(true);
+    setLinkError(null);
+
+    try {
+      let createdPlayerId = null;
+
+      if (supabase) {
+        const { data, error } = await supabase
+          .from('players')
+          .insert([{ display_name: displayName }])
+          .select()
+          .single();
+
+        if (error) throw error;
+        if (data && data.id) {
+          createdPlayerId = data.id;
+        }
+      }
+
+      if (!createdPlayerId) {
+        createdPlayerId = `local-player-${Date.now()}`;
+        const newLocalPlayer = { id: createdPlayerId, display_name: displayName, created_at: new Date().toISOString() };
+        const currentPlayers = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
+        localStorage.setItem('offsuite_players', JSON.stringify([...currentPlayers, newLocalPlayer]));
+      }
+
+      const sessionName = (targetEntry.name || '').trim();
+      const extId = (targetEntry.externalId || targetEntry.pokerNowId || '').trim();
+      const linkValues = Array.from(new Set([sessionName, extId].filter(Boolean)));
+
+      if (supabase) {
+        for (const val of linkValues) {
+          const platform = (extId && val === extId) ? 'pokernow' : 'alias';
+          await supabase.from('player_links').insert([{
+            player_id: createdPlayerId,
+            platform,
+            external_id: val
+          }]);
+        }
+      }
+
+      const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+      let updatedLinks = [...currentLinks];
+      for (const val of linkValues) {
+        const platform = (extId && val === extId) ? 'pokernow' : 'alias';
+        updatedLinks.push({
+          id: `local-link-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          player_id: createdPlayerId,
+          platform,
+          external_id: val
+        });
+      }
+      localStorage.setItem('offsuite_player_links', JSON.stringify(updatedLinks));
+
+      if (onUpdatePlayers) {
+        await onUpdatePlayers();
+      }
+      setPopoverIndex(null);
+    } catch (err) {
+      console.error("Error creating and linking player:", err);
+      setLinkError(err.message || "Failed to create player identity");
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
+  const handleUnlinkPlayer = async (linkId) => {
+    if (!linkId) return;
+    setLinkLoading(true);
+    try {
+      if (supabase) {
+        await supabase.from('player_links').delete().eq('id', linkId);
+      }
+      const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]').filter(l => l.id !== linkId);
+      localStorage.setItem('offsuite_player_links', JSON.stringify(currentLinks));
+
+      if (onUpdatePlayers) {
+        await onUpdatePlayers();
+      }
+    } catch (err) {
+      console.error("Error unlinking identity:", err);
+    } finally {
+      setLinkLoading(false);
+    }
+  };
 
   if (!game) {
     return (
@@ -525,9 +735,24 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
               if (!entry) return null;
               const sessionCashOut = (Number(entry.buyOut) || 0) + (Number(entry.stack) || 0);
               const net = sessionCashOut - (Number(entry.buyIn) || 0);
+              const isLinked = isEntryLinked(entry);
+
               return (
                 <div key={index} className="p-4 space-y-3 bg-slate-900/40">
                   <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenLinkPopover(index, entry)}
+                      className={`p-2 rounded-lg transition-all shrink-0 ${
+                        isLinked 
+                          ? 'text-emerald-400 bg-emerald-500/10 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)] border border-emerald-500/30' 
+                          : 'text-slate-500 hover:text-slate-300 bg-slate-950 border border-slate-800'
+                      }`}
+                      title={isLinked ? 'Mapped to player profile (click to view/edit link)' : 'Link player to master profile'}
+                    >
+                      <Link className="w-4 h-4" />
+                    </button>
+
                     <div className="relative flex-1">
                       <input 
                         type="text" 
@@ -633,11 +858,11 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
             <table className="w-full text-left">
               <thead>
                 <tr className="bg-slate-900 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
-                  <th className="p-3 font-medium min-w-[150px]">Player Name</th>
-                  <th className="p-3 font-medium text-center min-w-[140px]" title="Chips Bought In">Buy Ins (🪙)</th>
-                  <th className="p-3 font-medium text-center min-w-[140px]" title="Chips removed mid-game">Buy Outs (🪙)</th>
-                  <th className="p-3 font-medium text-center min-w-[100px]" title="Chips held at end of game">Current Stack</th>
-                  <th className="p-3 font-medium text-right min-w-[80px]">Net Chips</th>
+                  <th className="p-3 font-medium min-w-[150px]"><InfoTooltip label="Player Name" content="Participant name or nickname in the poker session." /></th>
+                  <th className="p-3 font-medium text-center min-w-[140px]"><InfoTooltip label="Buy Ins (🪙)" content="Total chips purchased by the player to enter or reload during the game." /></th>
+                  <th className="p-3 font-medium text-center min-w-[140px]"><InfoTooltip label="Buy Outs (🪙)" content="Chips cashed out or removed by the player mid-game before session end." /></th>
+                  <th className="p-3 font-medium text-center min-w-[100px]"><InfoTooltip label="Current Stack" content="Chips held by the player at the conclusion of the session." /></th>
+                  <th className="p-3 font-medium text-right min-w-[80px]"><InfoTooltip label="Net Chips" content="Total chips won or lost (Cash Out + Stack minus Buy Ins)." /></th>
                   <th className="p-3 w-10"></th>
                 </tr>
               </thead>
@@ -646,25 +871,41 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
                   if (!entry) return null;
                   const sessionCashOut = (Number(entry.buyOut) || 0) + (Number(entry.stack) || 0);
                   const net = sessionCashOut - (Number(entry.buyIn) || 0);
+                  const isLinked = isEntryLinked(entry);
                   
                   return (
                     <tr key={index} className="hover:bg-slate-800/20 group">
-                      <td className="p-3 min-w-[200px]">
-                        <div className="relative flex items-center">
-                          <input 
-                            type="text" 
-                            placeholder="Player name..."
-                            value={entry.name || ''}
-                            onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
-                            className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-3 pr-16 py-2 text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
-                          />
-                          <select
-                            value={entry.currency || 'USD'}
-                            onChange={(e) => handleEntryChange(index, 'currency', e.target.value)}
-                            className="absolute right-2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 rounded text-[10px] font-bold px-1.5 py-1 outline-none cursor-pointer appearance-none hover:bg-indigo-500/20 transition-colors uppercase"
+                      <td className="p-3 min-w-[220px]">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenLinkPopover(index, entry)}
+                            className={`p-1.5 rounded-lg transition-all shrink-0 ${
+                              isLinked 
+                                ? 'text-emerald-400 bg-emerald-500/10 drop-shadow-[0_0_8px_rgba(16,185,129,0.8)] border border-emerald-500/30' 
+                                : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800 border border-transparent'
+                            }`}
+                            title={isLinked ? 'Mapped to player profile (click to view/edit link)' : 'Link player to master profile'}
                           >
-                            {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-slate-900 text-slate-200">{c}</option>)}
-                          </select>
+                            <Link className="w-4 h-4" />
+                          </button>
+
+                          <div className="relative flex-1">
+                            <input 
+                              type="text" 
+                              placeholder="Player name..."
+                              value={entry.name || ''}
+                              onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-3 pr-16 py-2 text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-slate-600"
+                            />
+                            <select
+                              value={entry.currency || 'USD'}
+                              onChange={(e) => handleEntryChange(index, 'currency', e.target.value)}
+                              className="absolute right-2 top-1/2 -translate-y-1/2 bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 rounded text-[10px] font-bold px-1.5 py-1 outline-none cursor-pointer appearance-none hover:bg-indigo-500/20 transition-colors uppercase"
+                            >
+                              {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-slate-900 text-slate-200">{c}</option>)}
+                            </select>
+                          </div>
                         </div>
                       </td>
                       <td className="p-3">
@@ -833,6 +1074,150 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
         </div>
 
       </div>
+      {/* In-Place Player Identity Link Popover Modal */}
+      {popoverIndex !== null && entries[popoverIndex] && (() => {
+        const targetEntry = entries[popoverIndex];
+        const linkInfo = getLinkedPlayerInfo(targetEntry);
+        const sessionName = (targetEntry.name || '').trim();
+
+        return (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col">
+              
+              {/* Popover Header */}
+              <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
+                <div>
+                  <h3 className="font-bold text-lg text-slate-100 flex items-center gap-2">
+                    <Link className="w-5 h-5 text-emerald-400" />
+                    Link Player Identity
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Session name: <span className="font-semibold text-slate-200">{sessionName || 'Unassigned'}</span>
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setPopoverIndex(null)} 
+                  disabled={linkLoading}
+                  className="text-slate-400 hover:text-slate-200 p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Popover Body */}
+              <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+                {linkError && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl">
+                    {linkError}
+                  </div>
+                )}
+
+                {/* Current Link Status Banner */}
+                {linkInfo ? (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Mapped Profile</span>
+                      <p className="font-bold text-slate-100 text-sm">
+                        {linkInfo.player ? linkInfo.player.display_name : sessionName}
+                      </p>
+                    </div>
+                    {linkInfo.link && (
+                      <button
+                        onClick={() => handleUnlinkPlayer(linkInfo.link.id)}
+                        disabled={linkLoading}
+                        className="px-2.5 py-1 text-xs bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 border border-slate-700 rounded-lg transition-colors flex items-center gap-1 shrink-0"
+                        title="Unlink identity"
+                      >
+                        <Unlink className="w-3.5 h-3.5" /> Unlink
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-xl text-xs text-slate-400">
+                    This ledger entry is currently unlinked to any master profile. Link it below so session stats aggregate accurately.
+                  </div>
+                )}
+
+                {/* Option 1: Link to Existing Player */}
+                <div className="space-y-3 pt-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <Link className="w-4 h-4 text-emerald-400" />
+                    Select Existing Profile
+                  </h4>
+                  <div className="flex gap-2">
+                    <select
+                      value={popoverPlayerId}
+                      onChange={(e) => setPopoverPlayerId(e.target.value)}
+                      disabled={linkLoading || players.length === 0}
+                      className="flex-1 bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 transition-colors font-medium disabled:opacity-50"
+                    >
+                      <option value="">-- Choose Profile --</option>
+                      {players.map(p => (
+                        <option key={p.id} value={p.id}>{p.display_name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => handleLinkToExistingPlayer(targetEntry, popoverPlayerId)}
+                      disabled={linkLoading || !popoverPlayerId}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition-all shrink-0"
+                    >
+                      {linkLoading ? 'Saving...' : 'Link'}
+                    </button>
+                  </div>
+                  {players.length === 0 && (
+                    <p className="text-[11px] text-slate-500 italic">No existing master profiles found.</p>
+                  )}
+                </div>
+
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-slate-800"></div>
+                  <span className="flex-shrink mx-3 text-slate-600 text-[10px] uppercase font-bold tracking-wider">or</span>
+                  <div className="flex-grow border-t border-slate-800"></div>
+                </div>
+
+                {/* Option 2: Create New Profile & Link */}
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <UserPlus className="w-4 h-4 text-emerald-400" />
+                    Create New Profile & Link
+                  </h4>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Master Profile Name..."
+                      value={popoverNewName}
+                      onChange={(e) => setPopoverNewName(e.target.value)}
+                      disabled={linkLoading}
+                      className="flex-1 bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 transition-colors"
+                    />
+                    <button
+                      onClick={() => handleCreateAndLinkPlayer(targetEntry, popoverNewName)}
+                      disabled={linkLoading || !popoverNewName.trim()}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition-all shrink-0"
+                    >
+                      {linkLoading ? 'Creating...' : 'Create & Link'}
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Popover Footer */}
+              <div className="p-4 border-t border-slate-800 bg-slate-900 flex justify-end">
+                <button 
+                  onClick={() => setPopoverIndex(null)}
+                  disabled={linkLoading}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }
