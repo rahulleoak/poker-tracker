@@ -24,6 +24,8 @@ import { parsePokerNowLogStats } from '../utils/csvParser';
 import { mergeSessionEntries } from '../utils/sessionMapper';
 import InfoTooltip from './InfoTooltip';
 
+const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
 export default function GameEditor({ 
   game, 
   globalIncrement = 100, 
@@ -225,7 +227,7 @@ export default function GameEditor({
         if (!exists) {
           const platform = (extId && val === extId) ? 'pokernow' : 'alias';
           updatedLinks.push({
-            id: `local-link-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            id: generateId('local-link'),
             player_id: playerId,
             platform,
             external_id: val
@@ -295,7 +297,7 @@ export default function GameEditor({
       for (const val of linkValues) {
         const platform = (extId && val === extId) ? 'pokernow' : 'alias';
         updatedLinks.push({
-          id: `local-link-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          id: generateId('local-link'),
           player_id: createdPlayerId,
           platform,
           external_id: val

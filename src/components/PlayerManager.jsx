@@ -20,11 +20,9 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
 
     try {
       if (supabase) {
-        const { data, error: dbErr } = await supabase
+        const { error: dbErr } = await supabase
           .from('players')
-          .insert([{ display_name: displayName }])
-          .select()
-          .single();
+          .insert([{ display_name: displayName }]);
 
         if (dbErr) throw dbErr;
         setNewPlayerName('');
