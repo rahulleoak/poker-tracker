@@ -9,7 +9,7 @@ import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
 import PlayerProfile from './components/PlayerProfile';
-import PlayerManager from './components/PlayerManager';
+import { ThemeLab } from './components/ThemeLab';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -599,12 +599,12 @@ export function AppContent() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
+      <div className="min-h-screen bg-[var(--bg-main)] text-[var(--text-main)] font-sans selection:bg-[var(--text-primary)]/30">
         {/* Navbar */}
-        <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
+        <nav className="bg-[var(--bg-nav)] border-b border-[var(--border-color)] sticky top-0 z-10">
           <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-emerald-400 font-bold text-xl tracking-tight">
-              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400">
+            <div className="flex items-center gap-2 text-[var(--text-primary)] font-bold text-xl tracking-tight">
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-[var(--text-primary)]/10 text-[var(--text-primary)]">
                 <Globe className="w-5 h-5" />
               </div>
               <span>OffSuite</span>
@@ -616,13 +616,13 @@ export function AppContent() {
                 <select 
                   value={globalCurrency}
                   onChange={(e) => setGlobalCurrency(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 text-emerald-400 text-xs sm:text-sm font-bold rounded-lg px-1.5 sm:px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
+                  className="bg-[var(--bg-main)] border border-[var(--border-color)] text-[var(--text-primary)] text-xs sm:text-sm font-bold rounded-lg px-1.5 sm:px-2 py-1 outline-none focus:border-[var(--text-primary)] transition-colors"
                 >
                   {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
 
-              <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
+              <div className="flex gap-1 bg-[var(--bg-nav)]/50 p-1 rounded-lg">
                 <button 
                   onClick={() => { setActiveTab('dashboard'); setEditingGameId(null); setSelectedPlayer(null); }}
                   className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
@@ -695,6 +695,7 @@ export function AppContent() {
             <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
           )}
         </main>
+        <ThemeLab />
       </div>
     </ErrorBoundary>
   );

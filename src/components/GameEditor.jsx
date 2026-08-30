@@ -757,8 +757,8 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
             <div className="p-5 border-b border-slate-800 bg-slate-950/50 flex flex-col gap-4">
               <div className="flex justify-between items-start gap-2">
                 <div>
-                  <h3 className="font-bold text-slate-100 flex items-center gap-2">
-                    <DollarSign className="w-5 h-5 text-emerald-400" />
+                  <h3 className="font-bold text-[var(--text-main)] flex items-center gap-2">
+                    <DollarSign className="w-5 h-5 text-[var(--text-primary)]" />
                     Settlements
                   </h3>
                   <p className="text-xs text-slate-500 mt-1">Cash owed between players.</p>
@@ -772,9 +772,9 @@ export default function GameEditor({ game, globalIncrement = 100, setGlobalIncre
                 </select>
               </div>
               
-              <div className="flex items-center justify-between bg-slate-900 p-2.5 rounded-lg border border-slate-800">
+              <div className="flex items-center justify-between bg-[var(--bg-main)] p-2.5 rounded-lg border border-[var(--border-color)]">
                 <span className="text-xs font-medium text-slate-400 flex items-center gap-1.5">
-                  <Landmark className="w-4 h-4 text-emerald-500/70" /> 
+                  <Landmark className="w-4 h-4 text-[var(--text-primary)]/70" /> 
                   Route via Bank Buddies
                 </span>
                 <label className="flex items-center cursor-pointer">

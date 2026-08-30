@@ -1,3 +1,12 @@
+:root {
+  --bg-main: #020617;
+  --bg-nav: #0f172a;
+  --text-main: #e2e8f0;
+  --text-primary: #34d399;
+  --text-secondary: #fb7185;
+  --border-color: #1e293b;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
