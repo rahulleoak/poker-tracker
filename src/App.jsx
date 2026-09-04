@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, Component, useCallback } from "react";
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { LayoutDashboard, Globe, History, Users } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { parsePokerNowCSV } from './utils/csvParser';
@@ -10,6 +11,9 @@ import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
 import PlayerProfile from './components/PlayerProfile';
 import PlayerManager from './components/PlayerManager';
+import AdminPage from './components/AdminPage';
+import HomePage from './components/HomePage';
+import SessionPage from './components/SessionPage';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -701,5 +705,14 @@ export function AppContent() {
 }
 
 export default function App() {
-  return <AppContent />;
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<AppContent />} />
+        <Route path="/home" element={<HomePage />} />
+        <Route path="/admin" element={<AdminPage />} />
+        <Route path="/session/:sessionId" element={<SessionPage />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
