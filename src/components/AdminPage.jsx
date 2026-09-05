@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Upload, XCircle } from 'lucide-react';
-import { supabase } from '../utils/supabase';
 import { parsePokerNowCSV } from '../utils/csvParser';
 import { createGameFromCSVEntries, extractPokerNowUrl } from '../utils/sessionMapper';
 import { loadGamesFromStorage, saveGamesToStorage, saveSessionCsv } from '../utils/storage';
@@ -37,54 +36,8 @@ export default function AdminPage() {
 
         setStatus('saving');
 
-        if (supabase) {
-          const sessionPayload = {
-            date: newGame.date,
-            currency: newGame.currency,
-            chip_value: 1,
-            is_active: false,
-            poker_now_url: newGame.pokerNowUrl
-          };
-
-          const { data: sessionData, error: sessionError } = await supabase
-            .from('sessions')
-            .insert([sessionPayload])
-            .select()
-            .single();
-
-          if (sessionError) throw sessionError;
-
-          newGame.id = sessionData.id;
-
-          const ledgerEntries = newGame.entries.map(entry => ({
-            session_id: sessionData.id,
-            player_name: entry.name,
-            buy_in: entry.buyIn,
-            cash_out: entry.buyOut + entry.stack,
-            currency: newGame.currency,
-            is_bank: false,
-            hands_played: entry.handsPlayed,
-            vpip_hands: entry.vpipHands,
-            pfr_hands: entry.pfrHands,
-            three_bet_opps: entry.threeBetOpps,
-            three_bet_hands: entry.threeBetHands,
-            external_player_id: entry.externalId || entry.pokerNowId || null,
-            player_external_id: entry.externalId || entry.pokerNowId || null,
-            player_poker_now_id: entry.pokerNowId || entry.externalId || null
-          }));
-
-          const { error: ledgerError } = await supabase.from('ledger').insert(ledgerEntries);
-          if (ledgerError) {
-            console.warn('Ledger insert with stats failed, attempting legacy insert:', ledgerError);
-            const legacyEntries = ledgerEntries.map(({ session_id, player_name, buy_in, cash_out, currency, is_bank, external_player_id, player_external_id, player_poker_now_id }) => ({
-              session_id, player_name, buy_in, cash_out, currency, is_bank, external_player_id, player_external_id, player_poker_now_id
-            }));
-            await supabase.from('ledger').insert(legacyEntries);
-          }
-        } else {
-          const localGames = loadGamesFromStorage();
-          saveGamesToStorage([newGame, ...localGames]);
-        }
+        const localGames = loadGamesFromStorage();
+        saveGamesToStorage([newGame, ...localGames]);
 
         saveSessionCsv(newGame.id, text);
         navigate(`/session/${newGame.id}`);
