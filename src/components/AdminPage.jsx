@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Upload, XCircle } from 'lucide-react';
 import { parsePokerNowCSV } from '../utils/csvParser';
 import { createGameFromCSVEntries, extractPokerNowUrl } from '../utils/sessionMapper';
-import { loadGamesFromStorage, saveGamesToStorage, saveSessionCsv } from '../utils/storage';
+import { loadAdminGamesFromStorage, saveAdminGamesToStorage, saveSessionCsv } from '../utils/storage';
 
 export default function AdminPage() {
   const navigate = useNavigate();
@@ -36,8 +36,8 @@ export default function AdminPage() {
 
         setStatus('saving');
 
-        const localGames = loadGamesFromStorage();
-        saveGamesToStorage([newGame, ...localGames]);
+        const localAdminGames = loadAdminGamesFromStorage();
+        saveAdminGamesToStorage([newGame, ...localAdminGames]);
 
         saveSessionCsv(newGame.id, text);
         navigate(`/session/${newGame.id}`);

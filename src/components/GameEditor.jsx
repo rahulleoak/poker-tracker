@@ -111,21 +111,26 @@ export default function GameEditor({
   // --- AUTO-SAVE EFFECT ---
   const isMounted = useRef(false);
   const onSaveRef = useRef(onSave);
-  
+  const gameRef = useRef(game);
+
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
+
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
 
   useEffect(() => {
     if (!isMounted.current) {
       isMounted.current = true;
       return;
     }
-    if (!game) return;
+    if (!gameRef.current) return;
     const timer = setTimeout(() => {
       if (onSaveRef.current) {
         onSaveRef.current({
-          ...game,
+          ...gameRef.current,
           date,
           currency: gameCurrency,
           chipValue,
@@ -136,7 +141,7 @@ export default function GameEditor({
       }
     }, 1000);
     return () => clearTimeout(timer);
-  }, [date, gameCurrency, chipValue, isActive, pokerNowUrl, entries, game]);
+  }, [date, gameCurrency, chipValue, isActive, pokerNowUrl, entries]);
 
   // Derived calculations for the current session via extracted utility function
   const { totalBuyIn, totalCashOut, isBalanced, settlements, chipsOnTable } = useMemo(() => {
