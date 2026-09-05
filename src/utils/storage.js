@@ -1,4 +1,5 @@
 export const STORAGE_KEY = 'poker_tracker_games_v1';
+export const CSV_STORAGE_PREFIX = 'poker_tracker_csv_';
 
 /**
  * Loads games array from localStorage.
@@ -33,6 +34,40 @@ export function saveGamesToStorage(games, storage = (typeof window !== 'undefine
     storage.setItem(STORAGE_KEY, JSON.stringify(Array.isArray(games) ? games : []));
   } catch (err) {
     console.error("Failed to save games to localStorage:", err);
+  }
+}
+
+/**
+ * Saves a session's raw PokerNow CSV text to localStorage, keyed by session id,
+ * so pages can re-parse it later (e.g. for hand-log analytics) without re-uploading.
+ *
+ * @param {string} sessionId
+ * @param {string} csvText
+ * @param {Storage} [storage=window?.localStorage]
+ */
+export function saveSessionCsv(sessionId, csvText, storage = (typeof window !== 'undefined' ? window.localStorage : null)) {
+  if (!storage || !sessionId) return;
+  try {
+    storage.setItem(`${CSV_STORAGE_PREFIX}${sessionId}`, csvText || '');
+  } catch (err) {
+    console.error("Failed to save session CSV to localStorage:", err);
+  }
+}
+
+/**
+ * Loads a session's raw PokerNow CSV text from localStorage.
+ *
+ * @param {string} sessionId
+ * @param {Storage} [storage=window?.localStorage]
+ * @returns {string|null}
+ */
+export function loadSessionCsv(sessionId, storage = (typeof window !== 'undefined' ? window.localStorage : null)) {
+  if (!storage || !sessionId) return null;
+  try {
+    return storage.getItem(`${CSV_STORAGE_PREFIX}${sessionId}`);
+  } catch (err) {
+    console.error("Failed to load session CSV from localStorage:", err);
+    return null;
   }
 }
 
