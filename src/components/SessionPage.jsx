@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import { loadSessionCsv } from '../utils/storage';
 import { extractSessionStartDate } from '../utils/pokernow-utils/sessionMeta';
-import { computeBankSettlement } from '../utils/bankSettlement';
+import { computeBankSettlement, keyOfEntry } from '../utils/bankSettlement';
 import { peekSessionPreview, clearSessionPreview } from '../utils/sessionHandoff';
 import { parseCumulativeNet, groupCumulativeNet, reconcileCumulativeNet, toPerPlayerSeries } from '../utils/pokernow-utils/parseHandLog';
 import { fromChartData } from '../utils/chartData';
@@ -198,6 +198,58 @@ export default function SessionPage() {
     return computeBankSettlement({ entries: named, ...config });
   }, [ledgerEntries, preview, dbRow, nameOf]);
 
+  // --- Settlement check-offs (persisted per leg; see design/banks-settlement.md) ---
+  const [marks, setMarks] = useState([]);
+  const [markBusy, setMarkBusy] = useState(false);
+
+  const reloadMarks = useCallback(() => {
+    if (!sessionId) return Promise.resolve();
+    return sessionApi
+      .listMarks({ sessionId })
+      .then((m) => setMarks(Array.isArray(m) ? m : []))
+      .catch((err) => console.error('Failed to load settlement marks:', err));
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (loadState !== 'ready') return;
+    reloadMarks();
+  }, [loadState, reloadMarks]);
+
+  const pidByKey = useMemo(() => {
+    const map = new Map();
+    for (const e of ledgerEntries || []) map.set(keyOfEntry(e), e.playerId || null);
+    return map;
+  }, [ledgerEntries]);
+
+  const markFor = useCallback(
+    (legId) => marks.find((m) => m.leg_id === legId && !m.undone_at) || null,
+    [marks]
+  );
+
+  const toggleMark = useCallback(
+    async (legId, buildRow) => {
+      if (markBusy) return;
+      setMarkBusy(true);
+      try {
+        const existing = markFor(legId);
+        if (existing) await sessionApi.undoMarks([existing.id]);
+        else await sessionApi.addMarks([buildRow()]);
+        await reloadMarks();
+      } catch (err) {
+        console.error('Failed to update settlement mark:', err);
+        window.alert(err.message || 'Failed to update settlement.');
+      } finally {
+        setMarkBusy(false);
+      }
+    },
+    [markBusy, markFor, reloadMarks]
+  );
+
+  const countryOfBankKey = useCallback(
+    (bankKey) => settlement?.countries.find((c) => c.bankKey === bankKey)?.code || null,
+    [settlement]
+  );
+
   const handCount = parsed?.snapshots.length ? parsed.snapshots.length - 1 : 0;
 
   const startDate =
@@ -313,16 +365,26 @@ export default function SessionPage() {
 
         {loadState === 'ready' && settlement && settlement.countries.length > 0 && (
           <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between gap-4">
               <h2 className="text-sm font-medium text-slate-300">Settlement</h2>
-              <span className="text-xs text-slate-500">
-                {settlement.chipsPerCad} chips = 1 CAD · 1 CAD = {settlement.cadToUsd} USD
-              </span>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="text-slate-500">
+                  {settlement.chipsPerCad} chips = 1 CAD · 1 CAD = {settlement.cadToUsd} USD
+                </span>
+                <Link to="/settlement" className="font-medium text-emerald-400 hover:text-emerald-300 shrink-0">
+                  Cross-session ledger →
+                </Link>
+              </div>
             </div>
             <div className="p-5 space-y-5">
               {settlement.countries.map((c) => {
                 const nonBank = c.members.filter((m) => !m.isBank && Math.abs(m.netLocal) >= 0.005);
                 const converted = c.currency !== 'CAD';
+                const transfersByKey = new Map(
+                  settlement.playerTransfers
+                    .filter((t) => t.country === c.code)
+                    .map((t) => [t.partyKey, t])
+                );
                 return (
                   <div key={c.code} className="space-y-1.5">
                     <div className="text-xs font-semibold text-slate-400 flex items-center gap-2 flex-wrap">
@@ -337,19 +399,66 @@ export default function SessionPage() {
                     </div>
                     {c.bankName ? (
                       <div className="divide-y divide-slate-800/60">
-                        {nonBank.map((m) => (
-                          <div key={m.key} className="flex items-center justify-between py-2 text-sm gap-3">
-                            <span className="text-slate-300 truncate">{m.name}</span>
-                            <span className={`shrink-0 text-right ${m.netLocal >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                              {m.netLocal >= 0
-                                ? `receives ${money(m.netLocal, c.currency)} from ${c.bankName}`
-                                : `pays ${money(m.netLocal, c.currency)} to ${c.bankName}`}
-                              {converted && (
-                                <span className="text-slate-600"> ({money(m.netCad, 'CAD')})</span>
-                              )}
-                            </span>
-                          </div>
-                        ))}
+                        {nonBank.map((m) => {
+                          const t = transfersByKey.get(m.key);
+                          const settled = t ? Boolean(markFor(t.legId)) : false;
+                          return (
+                            <div key={m.key} className="flex items-center justify-between py-2 text-sm gap-3">
+                              <span className="flex items-center gap-2.5 min-w-0">
+                                {t && (
+                                  <input
+                                    type="checkbox"
+                                    checked={settled}
+                                    disabled={markBusy}
+                                    onChange={() =>
+                                      toggleMark(t.legId, () => ({
+                                        session_id: sessionId,
+                                        leg_id: t.legId,
+                                        scope: 'player',
+                                        country: t.country,
+                                        party_key: pidByKey.get(t.partyKey) || t.partyKey,
+                                        party_name: t.partyName,
+                                        counterparty_key: pidByKey.get(t.bankKey) || t.bankKey,
+                                        counterparty_name: t.bankName,
+                                        direction: t.direction,
+                                        amount_cad: t.amount,
+                                        amount_local: t.amountLocal,
+                                        currency: t.currency,
+                                        session_date: startDate || null
+                                      }))
+                                    }
+                                    className="w-4 h-4 accent-emerald-500 shrink-0"
+                                  />
+                                )}
+                                <span className={`truncate ${settled ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                                  {m.name}
+                                </span>
+                              </span>
+                              <span
+                                className={`shrink-0 text-right ${
+                                  settled
+                                    ? 'text-slate-600'
+                                    : m.netLocal >= 0
+                                    ? 'text-emerald-400'
+                                    : 'text-rose-400'
+                                }`}
+                              >
+                                {settled ? (
+                                  'settled'
+                                ) : (
+                                  <>
+                                    {m.netLocal >= 0
+                                      ? `receives ${money(m.netLocal, c.currency)} from ${c.bankName}`
+                                      : `pays ${money(m.netLocal, c.currency)} to ${c.bankName}`}
+                                    {converted && (
+                                      <span className="text-slate-600"> ({money(m.netCad, 'CAD')})</span>
+                                    )}
+                                  </>
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })}
                         {nonBank.length === 0 && (
                           <div className="py-2 text-sm text-slate-600 italic">Everyone in {c.name} broke even.</div>
                         )}
@@ -375,19 +484,54 @@ export default function SessionPage() {
                 <div className="space-y-1.5 pt-3 border-t border-slate-800">
                   <div className="text-xs font-semibold text-slate-400">Between banks</div>
                   <div className="divide-y divide-slate-800/60">
-                    {settlement.bankTransfers.map((t, i) => (
-                      <div key={i} className="flex items-center justify-between py-2 text-sm gap-3">
-                        <span className="text-slate-300 truncate">
-                          {t.from} <span className="text-slate-600">→</span> {t.to}
-                        </span>
-                        <span className="text-slate-200 shrink-0">
-                          {money(t.amount, 'CAD')}
-                          {settlement.cadToUsd !== 1 && (
-                            <span className="text-slate-600"> ({money(t.amount * settlement.cadToUsd, 'USD')})</span>
-                          )}
-                        </span>
-                      </div>
-                    ))}
+                    {settlement.bankTransfers.map((t) => {
+                      const settled = Boolean(markFor(t.legId));
+                      return (
+                        <div key={t.legId} className="flex items-center justify-between py-2 text-sm gap-3">
+                          <span className="flex items-center gap-2.5 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={settled}
+                              disabled={markBusy}
+                              onChange={() =>
+                                toggleMark(t.legId, () => ({
+                                  session_id: sessionId,
+                                  leg_id: t.legId,
+                                  scope: 'bank',
+                                  country: countryOfBankKey(t.fromKey),
+                                  party_key: pidByKey.get(t.fromKey) || t.fromKey,
+                                  party_name: t.from,
+                                  counterparty_key: pidByKey.get(t.toKey) || t.toKey,
+                                  counterparty_name: t.to,
+                                  direction: 'bank',
+                                  amount_cad: t.amount,
+                                  amount_local:
+                                    settlement.cadToUsd !== 1 ? t.amount * settlement.cadToUsd : t.amount,
+                                  currency: 'CAD',
+                                  session_date: startDate || null
+                                }))
+                              }
+                              className="w-4 h-4 accent-emerald-500 shrink-0"
+                            />
+                            <span className={`truncate ${settled ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                              {t.from} <span className="text-slate-600">→</span> {t.to}
+                            </span>
+                          </span>
+                          <span className={`shrink-0 ${settled ? 'text-slate-600' : 'text-slate-200'}`}>
+                            {settled ? (
+                              'settled'
+                            ) : (
+                              <>
+                                {money(t.amount, 'CAD')}
+                                {settlement.cadToUsd !== 1 && (
+                                  <span className="text-slate-600"> ({money(t.amount * settlement.cadToUsd, 'USD')})</span>
+                                )}
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

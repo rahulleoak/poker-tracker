@@ -123,6 +123,39 @@ test('each country reports amounts in its own currency via cadToUsd', () => {
   assert.ok(Math.abs(us.netLocal + 7.5) < 1e-9); // -10 CAD * 0.75
 });
 
+test('transfers carry stable leg identity for check-offs', () => {
+  const entries = [p('Bank', 0), p('Alice', 300), p('Bob', -300)];
+  const r = computeBankSettlement({ entries, bankByCountry: { CA: 'bank' }, chipsPerCad: 100 });
+
+  const alice = r.playerTransfers.find((t) => t.partyKey === 'alice');
+  assert.strictEqual(alice.scope, 'player');
+  assert.strictEqual(alice.legId, 'player:alice');
+  assert.strictEqual(alice.direction, 'from_bank'); // Alice is up → bank owes her
+  assert.strictEqual(alice.bankKey, 'bank');
+  assert.strictEqual(alice.partyName, 'Alice');
+
+  const bob = r.playerTransfers.find((t) => t.partyKey === 'bob');
+  assert.strictEqual(bob.legId, 'player:bob');
+  assert.strictEqual(bob.direction, 'to_bank'); // Bob is down → owes the bank
+});
+
+test('bank transfers carry a stable legId', () => {
+  const entries = [
+    p('BankCA', -100, { pokerNowId: 'bankca' }),
+    p('P1', 400, { pokerNowId: 'p1' }),
+    p('BankUS', 0, { pokerNowId: 'bankus' }),
+    p('P2', -300, { pokerNowId: 'p2' })
+  ];
+  const r = computeBankSettlement({
+    entries,
+    countryByKey: { bankus: 'US', p2: 'US' },
+    bankByCountry: { CA: 'bankca', US: 'bankus' },
+    chipsPerCad: 100
+  });
+  assert.strictEqual(r.bankTransfers[0].scope, 'bank');
+  assert.strictEqual(r.bankTransfers[0].legId, 'bank:bankus>bankca');
+});
+
 test('stale bank key (bank not a member of the country) is ignored', () => {
   const entries = [p('A', 100, { pokerNowId: 'a' }), p('B', -100, { pokerNowId: 'b' })];
   const r = computeBankSettlement({

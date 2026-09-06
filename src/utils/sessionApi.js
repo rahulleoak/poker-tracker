@@ -89,6 +89,68 @@ async function remove(id) {
   // CSV is retained (see "Raw CSV (deferred)" in the design doc).
 }
 
+// --- Cross-session settlement (settlement_marks) ------------------------------
+
+/**
+ * Every session's ledger + settlement config, minus the heavy `chart_data`
+ * blob. Feeds the /settlement cross-session roll-up (see design doc).
+ *
+ * @returns {Promise<Array<{ id, date, entries, settlement }>>}
+ */
+async function listForSettlement() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('admin_sessions')
+    .select('id, date, entries, settlement')
+    .order('date', { ascending: false, nullsFirst: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Active (not undone) settlement marks. Pass `sessionId` to scope to one session.
+ *
+ * @param {{ sessionId?: string }} [opts]
+ * @returns {Promise<Array<Object>>}
+ */
+async function listMarks({ sessionId } = {}) {
+  if (!supabase) return [];
+  let q = supabase.from('settlement_marks').select('*').is('undone_at', null);
+  if (sessionId) q = q.eq('session_id', sessionId);
+  const { data, error } = await q.order('settled_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Check off one or more legs as settled. Rows are `settlement_marks` shape
+ * (see design doc / supabase_schema.sql).
+ *
+ * @param {Array<Object>} rows
+ * @returns {Promise<Array<Object>>} the inserted rows (with ids)
+ */
+async function addMarks(rows) {
+  if (!supabase || !Array.isArray(rows) || rows.length === 0) return [];
+  const { data, error } = await supabase.from('settlement_marks').insert(rows).select();
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Soft-delete marks by id — the Undo path. History is kept.
+ *
+ * @param {Array<string>} ids
+ */
+async function undoMarks(ids) {
+  if (!supabase || !Array.isArray(ids) || ids.length === 0) return;
+  const { error } = await supabase
+    .from('settlement_marks')
+    .update({ undone_at: new Date().toISOString() })
+    .in('id', ids)
+    .is('undone_at', null);
+  if (error) throw error;
+}
+
 // --- Standing bank defaults (admin_bank_defaults) -----------------------------
 
 /**
@@ -139,6 +201,10 @@ export const sessionApi = {
   list,
   exists,
   remove,
+  listForSettlement,
+  listMarks,
+  addMarks,
+  undoMarks,
   listBankDefaults,
   setBankDefault,
   uploadRawCsv,

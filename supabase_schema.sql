@@ -165,3 +165,51 @@ DROP POLICY IF EXISTS "admin_bank_defaults readable by everyone" ON public.admin
 CREATE POLICY "admin_bank_defaults readable by everyone" ON public.admin_bank_defaults FOR SELECT USING (true);
 DROP POLICY IF EXISTS "admin_bank_defaults writable by anyone" ON public.admin_bank_defaults;
 CREATE POLICY "admin_bank_defaults writable by anyone" ON public.admin_bank_defaults FOR ALL USING (true) WITH CHECK (true);
+
+-- =========================================================================
+-- 8. SETTLEMENT MARKS  (see design/banks-settlement.md)
+--    One row per settled leg. A "leg" is a single player's whole net with
+--    their country's bank for one session (`computeBankSettlement` emits one
+--    per non-bank member as `player:<key>`), or one inter-bank transfer
+--    (`bank:<from>><to>`). Rows are never hard-deleted — Undo sets `undone_at`
+--    so the history survives. Not gated: public read + write.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.settlement_marks (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    session_id       TEXT NOT NULL REFERENCES public.admin_sessions(id) ON DELETE CASCADE,
+    leg_id           TEXT NOT NULL,               -- 'player:<key>' | 'bank:<from>><to>'
+    scope            TEXT NOT NULL,               -- 'player' | 'bank'
+    country          TEXT,                        -- 'CA' | 'US'; null for inter-bank legs
+
+    party_key        TEXT NOT NULL,               -- master playerId when resolved, else keyOfEntry / bank fromKey
+    party_name       TEXT,                        -- snapshot label for the Recently-settled list
+    counterparty_key TEXT,                        -- master playerId of the bank, when resolved
+    counterparty_name TEXT,                       -- the bank (player scope) / creditor bank (bank scope)
+    direction        TEXT,                        -- 'to_bank' | 'from_bank' | 'bank'
+
+    amount_cad       NUMERIC,                     -- snapshot at settle time
+    amount_local     NUMERIC,
+    currency         TEXT,
+    session_date     DATE,
+
+    settled_by       TEXT,                        -- best effort, anon
+    settled_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    undone_at        TIMESTAMPTZ                  -- non-null => reverted
+);
+
+-- Additive for deployments created before counterparty_key existed.
+ALTER TABLE public.settlement_marks ADD COLUMN IF NOT EXISTS counterparty_key TEXT;
+
+-- At most one active mark per leg; an undone row can coexist with a fresh one.
+CREATE UNIQUE INDEX IF NOT EXISTS settlement_marks_active_uq
+  ON public.settlement_marks (session_id, leg_id) WHERE undone_at IS NULL;
+CREATE INDEX IF NOT EXISTS settlement_marks_country_idx
+  ON public.settlement_marks (country) WHERE undone_at IS NULL;
+
+ALTER TABLE public.settlement_marks ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "settlement_marks readable by everyone" ON public.settlement_marks;
+CREATE POLICY "settlement_marks readable by everyone" ON public.settlement_marks FOR SELECT USING (true);
+DROP POLICY IF EXISTS "settlement_marks writable by anyone" ON public.settlement_marks;
+CREATE POLICY "settlement_marks writable by anyone" ON public.settlement_marks FOR ALL USING (true) WITH CHECK (true);

@@ -18,7 +18,15 @@ function greedyMatch(nodes) {
     const d = debtors[di];
     const amount = Math.min(c.amount, d.amount);
     if (amount > EPS) {
-      transfers.push({ fromKey: d.key, from: d.name, toKey: c.key, to: c.name, amount });
+      transfers.push({
+        scope: 'bank',
+        legId: `bank:${d.key}>${c.key}`,
+        fromKey: d.key,
+        from: d.name,
+        toKey: c.key,
+        to: c.name,
+        amount
+      });
     }
     c.amount -= amount;
     d.amount -= amount;
@@ -99,10 +107,22 @@ export function computeBankSettlement({ entries = [], countryByKey = {}, bankByC
     if (bankUnit) {
       for (const m of members) {
         if (m.key === bankKey) continue;
+        const common = {
+          scope: 'player',
+          legId: `player:${m.key}`,
+          partyKey: m.key,
+          partyName: m.name,
+          bankKey,
+          bankName: bankUnit.name,
+          currency: meta.currency,
+          country: code
+        };
         if (m.netCad > EPS) {
-          playerTransfers.push({ fromKey: bankKey, from: bankUnit.name, toKey: m.key, to: m.name, amount: m.netCad, amountLocal: m.netCad * fx, currency: meta.currency, country: code });
+          // player is up on the session — the bank owes them
+          playerTransfers.push({ ...common, direction: 'from_bank', fromKey: bankKey, from: bankUnit.name, toKey: m.key, to: m.name, amount: m.netCad, amountLocal: m.netCad * fx });
         } else if (m.netCad < -EPS) {
-          playerTransfers.push({ fromKey: m.key, from: m.name, toKey: bankKey, to: bankUnit.name, amount: -m.netCad, amountLocal: -m.netCad * fx, currency: meta.currency, country: code });
+          // player is down — they owe the bank
+          playerTransfers.push({ ...common, direction: 'to_bank', fromKey: m.key, from: m.name, toKey: bankKey, to: bankUnit.name, amount: -m.netCad, amountLocal: -m.netCad * fx });
         }
       }
       interNodes.push({ key: bankKey, name: bankUnit.name, amount: countryNet });

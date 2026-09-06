@@ -16,6 +16,7 @@ import AdminPage from './components/AdminPage';
 import HomePage from './components/HomePage';
 import SessionPage from './components/SessionPage';
 import ConfirmationModal from './components/ConfirmationModal';
+import SettlementPage from './components/SettlementPage';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -745,6 +746,8 @@ export default function App() {
         <Route path="/home" element={<HomePage />} />
         <Route path="/admin" element={<AdminPage />} />
         <Route path="/admin/session/:sessionId" element={<SessionPage />} />
+        <Route path="/settlement" element={<SettlementPage />} />
+        <Route path="/settlement/:country" element={<SettlementPage />} />
       </Routes>
     </BrowserRouter>
   );

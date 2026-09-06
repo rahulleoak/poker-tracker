@@ -467,7 +467,7 @@ export default function AdminPage() {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Delete this session? Its chart, ledger and settlement are removed. Player profiles and links are kept.')) {
+    if (!window.confirm('Delete this session? Its chart, ledger, settlement and settlement check-offs are removed. Player profiles and links are kept.')) {
       return;
     }
     setDeletingId(id);
@@ -485,8 +485,9 @@ export default function AdminPage() {
   const showDialog = (status === 'review' || status === 'saving') && pending && !collision;
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans p-6">
-      <div className="max-w-2xl mx-auto space-y-8 py-6">
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans">
+      <div className="max-w-[1600px] mx-auto px-8 py-10 grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
+        <div className="space-y-6 lg:order-2">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl space-y-6">
           <div>
             <h1 className="text-xl font-bold text-emerald-400">Admin: Upload PokerNow session</h1>
@@ -525,7 +526,7 @@ export default function AdminPage() {
           </Link>
         </div>
 
-        <StandingBanks
+        <BanksAndSettlement
           profiles={players}
           value={bankDefaults}
           onChange={async (code, playerId) => {
@@ -538,15 +539,18 @@ export default function AdminPage() {
             }
           }}
         />
+        </div>
 
-        <SessionList
-          state={listState}
-          sessions={sessions}
-          deletingId={deletingId}
-          onOpen={(id) => navigate(`/admin/session/${id}`)}
-          onDelete={handleDelete}
-          onRetry={refreshList}
-        />
+        <div className="lg:order-1 lg:sticky lg:top-10">
+          <SessionList
+            state={listState}
+            sessions={sessions}
+            deletingId={deletingId}
+            onOpen={(id) => navigate(`/admin/session/${id}`)}
+            onDelete={handleDelete}
+            onRetry={refreshList}
+          />
+        </div>
       </div>
 
       {collision && (
@@ -664,35 +668,51 @@ function DropZone({ picked, dragging, onFiles, onDragState, onClear }) {
   );
 }
 
-function StandingBanks({ profiles, value, onChange }) {
+function BanksAndSettlement({ profiles, value, onChange }) {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
       <div className="px-5 py-4 border-b border-slate-800">
-        <h2 className="text-sm font-medium text-slate-300">Standing banks</h2>
+        <h2 className="text-sm font-medium text-slate-300">Banks &amp; settlement</h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          This player banks for their country in every session, even when playing. Overridable per session.
+          The standing bank settles for its country every session (overridable per session).
+          Open a country&apos;s ledger to see who still owes it across all sessions.
         </p>
       </div>
-      <div className="p-5 space-y-2">
+      <div className="divide-y divide-slate-800/70">
         {COUNTRIES.map((c) => (
-          <div key={c.code} className="flex items-center justify-between gap-3">
-            <span className="text-sm text-slate-200">{c.flag} {c.name}</span>
+          <div key={c.code} className="flex items-center gap-3 px-5 py-3">
+            <span className="text-sm text-slate-200 shrink-0 w-32">{c.flag} {c.name}</span>
             <select
               value={value[c.code] || ''}
               onChange={(e) => onChange(c.code, e.target.value)}
-              className="bg-slate-800 border border-slate-700 rounded-md text-xs px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 max-w-[55%]"
+              className="bg-slate-800 border border-slate-700 rounded-md text-xs px-2 py-1 outline-none focus:border-emerald-500 text-slate-200"
             >
-              <option value="">— none —</option>
+              <option value="">— no bank —</option>
               {profiles.map((p) => (
                 <option key={p.id} value={p.id}>{p.display_name}</option>
               ))}
             </select>
+            <Link
+              to={`/settlement/${c.code.toLowerCase()}`}
+              className="flex items-center gap-0.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 shrink-0 ml-auto"
+            >
+              Ledger <ChevronRight className="w-3.5 h-3.5" />
+            </Link>
           </div>
         ))}
         {profiles.length === 0 && (
-          <p className="text-xs text-slate-600">No player profiles yet — link players in a session first.</p>
+          <p className="text-xs text-slate-600 px-5 py-3">
+            No player profiles yet — link players in a session first.
+          </p>
         )}
       </div>
+      <Link
+        to="/settlement"
+        className="flex items-center justify-between gap-3 px-5 py-3 border-t border-slate-800 hover:bg-slate-800/40 transition-colors"
+      >
+        <span className="text-xs text-slate-400">All outstanding balances across every session</span>
+        <ChevronRight className="w-4 h-4 text-slate-500" />
+      </Link>
     </div>
   );
 }
