@@ -377,6 +377,23 @@ export default function AdminPage() {
 
       const playerIdForKey = (k) => unitPlayerId[k] || resolvedByKey[k]?.playerId || null;
 
+      // Every session nickname the seats in a unit went by (for the ledger's
+      // "DB Name (alias, alias…)" display). Excludes synthetic bank participants.
+      const aliasesForUnit = (unitKey) => {
+        const memberKeys = groups.find((m) => m.includes(unitKey)) || [unitKey];
+        const set = new Set();
+        for (const mk of memberKeys) {
+          if (!realToken(mk)) continue;
+          const src = entries.find((e) => keyOfEntry(e) === mk);
+          if (!src) continue;
+          for (const a of [src.name, ...(Array.isArray(src.aliases) ? src.aliases : [])]) {
+            const t = String(a || '').trim();
+            if (t) set.add(t);
+          }
+        }
+        return [...set];
+      };
+
       // Render-ready cumulative-net blob — same pipeline SessionPage runs on the
       // hand log, resolved once here so a normal page load never re-parses. Only
       // the hand-log CSV carries per-hand data; a ledger-only upload has no chart.
@@ -389,6 +406,7 @@ export default function AdminPage() {
 
       const dbEntries = (game.entries || []).map((entry) => ({
         name: entry.name,
+        aliases: aliasesForUnit(keyOfEntry(entry)),
         pokerNowId: entry.pokerNowId || null,
         externalId: entry.externalId || null,
         playerId: playerIdForKey(keyOfEntry(entry)),
@@ -397,6 +415,11 @@ export default function AdminPage() {
         stack: Number(entry.stack) || 0,
         currency: entry.currency || 'USD',
         isBank: Boolean(entry.isBank)
+      }));
+      // Carry aliases onto the stash too, so the immediate navigation matches a refresh.
+      game.entries = (game.entries || []).map((entry) => ({
+        ...entry,
+        aliases: aliasesForUnit(keyOfEntry(entry))
       }));
 
       const seenProfile = new Set();

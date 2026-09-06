@@ -70,6 +70,7 @@ export function parseSessionLedger(csvText) {
     // A real ledger CSV already balances exactly; no reconciliation needed.
     return parseFinalLedger(csvText).map(p => ({
       name: p.nicknames[p.nicknames.length - 1] || p.playerId,
+      aliases: [...p.nicknames],
       externalId: p.playerId,
       pokerNowId: p.playerId,
       buyIn: Number(p.totalBuyIn) || 0,
@@ -84,6 +85,7 @@ export function parseSessionLedger(csvText) {
   const entries = [...players.entries()]
     .map(([id, p]) => ({
       name: [...p.nicknames].slice(-1)[0] || id,
+      aliases: [...p.nicknames],
       externalId: id,
       pokerNowId: id,
       buyIn: Number(p.buyIn) || 0,

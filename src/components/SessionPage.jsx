@@ -22,6 +22,35 @@ const isAbsentBank = (e) =>
 
 const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
 
+// The session nicknames a player went by, minus the one already shown as their
+// name, as { short } (≤ ~20 visible chars, whole names then "…") and { full }.
+const ALIAS_BUDGET = 20;
+function aliasSummary(displayName, sessionNames) {
+  const dn = String(displayName || '').trim().toLowerCase();
+  const others = [
+    ...new Set(
+      (sessionNames || [])
+        .map((n) => String(n || '').trim())
+        .filter((n) => n && n.toLowerCase() !== dn)
+    )
+  ];
+  if (others.length === 0) return { short: null, full: null };
+  const full = others.join(', ');
+  if (full.length <= ALIAS_BUDGET) return { short: full, full };
+
+  let acc = '';
+  let shown = 0;
+  for (const n of others) {
+    const candidate = acc ? `${acc}, ${n}` : n;
+    if (candidate.length + 1 > ALIAS_BUDGET) break;
+    acc = candidate;
+    shown += 1;
+  }
+  const short =
+    shown === 0 ? `${others[0].slice(0, ALIAS_BUDGET - 1)}…` : `${acc}…`;
+  return { short, full };
+}
+
 function downloadCumulativeNetCSV(sessionId, series) {
   const rows = [['playerId', 'nickname', 'handNumber', 'timestamp', 'net']];
   for (const [playerId, { nicknames, points }] of Object.entries(series)) {
@@ -138,17 +167,25 @@ export default function SessionPage() {
     if (ledgerEntries) {
       return ledgerEntries
         .filter((e) => e && (e.name || '').trim() !== '' && !isAbsentBank(e))
-        .map((e) => ({
-          key: e.pokerNowId || e.externalId || e.name,
-          nickname: nameOf(e.playerId) || e.name,
-          net: entryNet(e)
-        }))
+        .map((e) => {
+          const name = nameOf(e.playerId) || e.name;
+          const sessionNames =
+            Array.isArray(e.aliases) && e.aliases.length ? e.aliases : [e.name];
+          const { short, full } = aliasSummary(name, sessionNames);
+          return {
+            key: e.pokerNowId || e.externalId || e.name,
+            name,
+            aliasShort: short,
+            aliasFull: full,
+            net: entryNet(e)
+          };
+        })
         .sort((a, b) => b.net - a.net);
     }
     if (!parsed || parsed.snapshots.length === 0) return [];
     const latest = parsed.snapshots[parsed.snapshots.length - 1];
     return Object.entries(latest.nets)
-      .map(([key, { nickname, net }]) => ({ key, nickname, net }))
+      .map(([key, { nickname, net }]) => ({ key, name: nickname, aliasShort: null, aliasFull: null, net }))
       .sort((a, b) => b.net - a.net);
   }, [ledgerEntries, parsed, nameOf]);
 
@@ -251,11 +288,16 @@ export default function SessionPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {latestLedger.map(({ key, nickname, net }, i) => (
+                    {latestLedger.map(({ key, name, aliasShort, aliasFull, net }, i) => (
                       <tr key={key} className="border-t border-slate-800/80 hover:bg-slate-800/40 transition-colors">
                         <td className="px-5 py-3">
                           <span className="text-slate-600 text-xs tabular-nums mr-2 w-4 inline-block">{i + 1}</span>
-                          {nickname}
+                          <span title={aliasFull ? `Session names: ${aliasFull}` : undefined}>
+                            {name}
+                            {aliasShort && (
+                              <span className="text-slate-500"> ({aliasShort})</span>
+                            )}
+                          </span>
                         </td>
                         <td className={`px-5 py-3 text-right font-medium tabular-nums ${net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {net >= 0 ? '+' : ''}{net.toLocaleString()}

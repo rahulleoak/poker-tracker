@@ -559,7 +559,14 @@ wired to them.
 >   (`sessionApi.listBankDefaults` / `setBankDefault`); matched to a seat by its
 >   resolved profile id. `src/utils/adminBankDefaults.js` is a name-based
 >   fallback for seats that don't resolve. The reviewer can override; an explicit
->   pick (including "No bank") sticks. **If the standing banker didn't play**, a
+>   pick (including "No bank") sticks.
+> - **Session aliases.** `parseSessionLedger` now returns `aliases[]` (every
+>   nickname a seat used); `admin_sessions.entries[].aliases` carries the merged
+>   set per player. The Latest Ledger shows `DB Name (alias, alias…)` — the
+>   parenthetical is capped ~20 visible chars (whole names, then `…`) and the
+>   row's `title` tooltip lists them all.
+>
+> Absent-banker handling: **if the standing banker didn't play**, a
 >   zero-balance `bank:<playerId>` participant is injected so settlement still
 >   routes through them — it's labelled "didn't play · bank" in the dialog,
 >   hidden from the Latest Ledger, and never written to `player_links`.
