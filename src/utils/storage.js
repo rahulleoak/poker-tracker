@@ -1,5 +1,4 @@
 export const STORAGE_KEY = 'poker_tracker_games_v1';
-export const ADMIN_STORAGE_KEY = 'poker_tracker_games_admin';
 export const CSV_STORAGE_PREFIX = 'poker_tracker_csv_';
 
 /**
@@ -39,61 +38,9 @@ export function saveGamesToStorage(games, storage = (typeof window !== 'undefine
 }
 
 /**
- * Loads admin-uploaded games from localStorage. Kept separate from STORAGE_KEY
- * so admin uploads never get swept up by the main app's local-to-cloud sync.
- *
- * @param {Storage} [storage=window?.localStorage]
- * @returns {Array<Object>} Array of game objects.
- */
-export function loadAdminGamesFromStorage(storage = (typeof window !== 'undefined' ? window.localStorage : null)) {
-  if (!storage) return [];
-  try {
-    const raw = storage.getItem(ADMIN_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return parsed;
-    }
-  } catch (err) {
-    console.error("Failed to load admin games from localStorage:", err);
-  }
-  return [];
-}
-
-/**
- * Saves admin-uploaded games array to localStorage.
- *
- * @param {Array<Object>} games
- * @param {Storage} [storage=window?.localStorage]
- */
-export function saveAdminGamesToStorage(games, storage = (typeof window !== 'undefined' ? window.localStorage : null)) {
-  if (!storage) return;
-  try {
-    storage.setItem(ADMIN_STORAGE_KEY, JSON.stringify(Array.isArray(games) ? games : []));
-  } catch (err) {
-    console.error("Failed to save admin games to localStorage:", err);
-  }
-}
-
-/**
- * Saves a session's raw PokerNow CSV text to localStorage, keyed by session id,
- * so pages can re-parse it later (e.g. for hand-log analytics) without re-uploading.
- *
- * @param {string} sessionId
- * @param {string} csvText
- * @param {Storage} [storage=window?.localStorage]
- */
-export function saveSessionCsv(sessionId, csvText, storage = (typeof window !== 'undefined' ? window.localStorage : null)) {
-  if (!storage || !sessionId) return;
-  try {
-    storage.setItem(`${CSV_STORAGE_PREFIX}${sessionId}`, csvText || '');
-  } catch (err) {
-    console.error("Failed to save session CSV to localStorage:", err);
-  }
-}
-
-/**
- * Loads a session's raw PokerNow CSV text from localStorage.
+ * Loads a session's raw PokerNow CSV text from localStorage, if one was cached
+ * by an older build. Nothing writes this key anymore (the /admin preview passes
+ * the CSV in-memory via router state), but the read is kept as a fallback.
  *
  * @param {string} sessionId
  * @param {Storage} [storage=window?.localStorage]

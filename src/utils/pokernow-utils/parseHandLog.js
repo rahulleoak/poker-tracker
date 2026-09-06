@@ -165,6 +165,131 @@ export function parseCumulativeNet(csvText) {
 }
 
 /**
+ * Collapses parseCumulativeNet output so players linked in the /admin review
+ * dialog chart as one line. `groups` is a list of identity-token lists (a
+ * PokerNow id, or any nickname the player used) — the same shape applyPlayerGroups
+ * consumes. Each group's members are summed per snapshot and folded onto the
+ * first-resolved member's id, keeping that member's latest nickname as the
+ * label. A no-op when there are no multi-member groups.
+ *
+ * @param {ReturnType<typeof parseCumulativeNet>} parsed
+ * @param {Array<Array<string>>} groups
+ * @returns {ReturnType<typeof parseCumulativeNet>}
+ */
+export function groupCumulativeNet(parsed, groups) {
+  const safeGroups = (Array.isArray(groups) ? groups : [])
+    .map(g => (Array.isArray(g) ? g.map(t => (t || '').trim().toLowerCase()).filter(Boolean) : []))
+    .filter(g => g.length > 1);
+  if (!parsed || safeGroups.length === 0) return parsed;
+
+  const { players, snapshots } = parsed;
+  const allIds = [...players.keys()];
+
+  const tokensFor = (id) => {
+    const p = players.get(id);
+    const t = [String(id).toLowerCase()];
+    if (p) for (const nk of p.nicknames) t.push(String(nk).toLowerCase());
+    return t;
+  };
+
+  const primaryOf = new Map(); // memberId -> primaryId
+  for (const group of safeGroups) {
+    const memberIds = [];
+    for (const token of group) {
+      const id = allIds.find(
+        x => !memberIds.includes(x) && !primaryOf.has(x) && tokensFor(x).includes(token)
+      );
+      if (id) memberIds.push(id);
+    }
+    if (memberIds.length < 2) continue;
+    for (const mid of memberIds) primaryOf.set(mid, memberIds[0]);
+  }
+  if (primaryOf.size === 0) return parsed;
+
+  const canon = (id) => primaryOf.get(id) || id;
+
+  const newPlayers = new Map();
+  for (const id of allIds) {
+    if (canon(id) !== id) continue; // folded into its primary
+    const merged = { ...players.get(id), nicknames: new Set() };
+    for (const mid of allIds) {
+      if (canon(mid) !== id || mid === id) continue;
+      const m = players.get(mid);
+      for (const nk of m.nicknames) merged.nicknames.add(nk);
+      // Keep buy-in/cash-out aggregate parity with applyPlayerGroups so the
+      // chart and the ledger table reconcile against the same weights.
+      merged.buyIn = (merged.buyIn || 0) + (m.buyIn || 0);
+      merged.cashOut = (merged.cashOut || 0) + (m.cashOut || 0);
+      merged.currentStack = (merged.currentStack || 0) + (m.currentStack || 0);
+    }
+    for (const nk of players.get(id).nicknames) merged.nicknames.add(nk); // primary's last => label
+    newPlayers.set(id, merged);
+  }
+
+  const labelFor = (id) => [...(newPlayers.get(id)?.nicknames || [])].slice(-1)[0] || id;
+
+  const newSnapshots = snapshots.map(s => {
+    const nets = {};
+    for (const [mid, val] of Object.entries(s.nets)) {
+      const c = canon(mid);
+      if (!nets[c]) nets[c] = { nickname: labelFor(c), net: 0 };
+      nets[c].net += val.net;
+    }
+    return { ...s, nets };
+  });
+
+  return { players: newPlayers, snapshots: newSnapshots };
+}
+
+/**
+ * Nudges a cumulative-net timeline so its final point sums to exactly zero,
+ * matching the reconciled ledger table. The residual (admin stack resets,
+ * off-log top-ups — see reconcileToZero in parseSessionLedger) is split across
+ * players by buy-in weight and eased in linearly from hand 1 to Final, so the
+ * curve shape is untouched and there's no jump at the end. Left alone if the
+ * residual is larger than slop (> 2% of buy-in) or already zero.
+ *
+ * @param {ReturnType<typeof parseCumulativeNet>} parsed
+ * @returns {ReturnType<typeof parseCumulativeNet>}
+ */
+export function reconcileCumulativeNet(parsed) {
+  if (!parsed || parsed.snapshots.length < 2) return parsed;
+
+  const { players, snapshots } = parsed;
+  const finalNets = snapshots[snapshots.length - 1].nets;
+  const ids = Object.keys(finalNets);
+
+  const residual = Math.round(ids.reduce((sum, id) => sum + finalNets[id].net, 0));
+  if (residual === 0) return parsed;
+
+  const weights = ids.map(id => Math.max(1, Number(players.get(id)?.buyIn) || 0));
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  if (Math.abs(residual) > totalWeight * 0.02) return parsed;
+
+  const shareById = {};
+  let allocated = 0;
+  ids.forEach((id, i) => {
+    const share = i === ids.length - 1
+      ? residual - allocated
+      : Math.round((residual * weights[i]) / totalWeight);
+    allocated += share;
+    shareById[id] = share;
+  });
+
+  const lastIdx = snapshots.length - 1;
+  const newSnapshots = snapshots.map((s, k) => {
+    const ramp = k / lastIdx; // 0 at hand 1, 1 at Final
+    const nets = {};
+    for (const [id, v] of Object.entries(s.nets)) {
+      nets[id] = { ...v, net: v.net - (shareById[id] || 0) * ramp };
+    }
+    return { ...s, nets };
+  });
+
+  return { players, snapshots: newSnapshots };
+}
+
+/**
  * Reshapes parseCumulativeNet's output into one time series per player,
  * ready for charting: { [playerId]: { nicknames: string[], points: [{ handNumber, timestamp, net }] } }
  */
