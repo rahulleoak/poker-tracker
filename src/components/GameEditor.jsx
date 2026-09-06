@@ -361,6 +361,11 @@ export default function GameEditor({
   const handleEntryChange = (index, field, value) => {
     const newEntries = [...entries];
     if (newEntries[index]) {
+      // If we are changing currency, and they are a bank, we must un-bank them
+      // because they can only be a bank for their current currency.
+      if (field === 'currency' && newEntries[index].isBank) {
+        newEntries[index] = { ...newEntries[index], isBank: false };
+      }
       newEntries[index] = { ...newEntries[index], [field]: value };
       setEntries(newEntries);
     }
