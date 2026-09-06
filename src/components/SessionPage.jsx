@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Download } from 'lucide-react';
 import { loadSessionCsv } from '../utils/storage';
@@ -6,10 +6,19 @@ import { extractSessionStartDate } from '../utils/pokernow-utils/sessionMeta';
 import { computeBankSettlement } from '../utils/bankSettlement';
 import { peekSessionPreview, clearSessionPreview } from '../utils/sessionHandoff';
 import { parseCumulativeNet, groupCumulativeNet, reconcileCumulativeNet, toPerPlayerSeries } from '../utils/pokernow-utils/parseHandLog';
+import { fromChartData } from '../utils/chartData';
+import { sessionApi } from '../utils/sessionApi';
+import { useIdentityGraph } from '../hooks/useIdentityGraph';
+import { makeNameResolver } from '../utils/adminIdentity';
 import CumulativeNetChart from './CumulativeNetChart';
 
 const entryNet = (e) =>
   (Number(e?.buyOut) || 0) + (Number(e?.stack) || 0) - (Number(e?.buyIn) || 0);
+
+// A "bank:<id>" entry with no money is a standing banker who didn't play — it
+// exists only so settlement can route through them; hide it from the ledger.
+const isAbsentBank = (e) =>
+  String(e?.pokerNowId || '').startsWith('bank:') && entryNet(e) === 0;
 
 const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
 
@@ -37,40 +46,101 @@ function downloadCumulativeNetCSV(sessionId, series) {
   URL.revokeObjectURL(url);
 }
 
+
 export default function SessionPage() {
   const { sessionId } = useParams();
 
-  // The /admin preview hands us everything in-memory (single-shot); fall back to
-  // the localStorage cache for any other entry point or a hard refresh.
+  // The /admin preview hands us everything in-memory (single-shot); every other
+  // entry point (refresh, shared link, list click) falls back to the DB.
   const preview = useMemo(() => peekSessionPreview(sessionId), [sessionId]);
   useEffect(() => {
     if (preview) clearSessionPreview();
   }, [preview]);
 
+  const [dbRow, setDbRow] = useState(null);
+  const [fetchState, setFetchState] = useState('loading'); // loading | ready | not-found | error
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    if (preview) return undefined;
+    let cancelled = false;
+    setDbRow(null);
+    setFetchState('loading');
+    sessionApi
+      .get(sessionId)
+      .then((row) => {
+        if (cancelled) return;
+        setDbRow(row || null);
+        setFetchState(row ? 'ready' : 'not-found');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('Failed to load session:', err);
+        setFetchState('error');
+      });
+    return () => { cancelled = true; };
+  }, [sessionId, preview, reloadKey]);
+
+  // The stash (if present) is always ready; otherwise follow the fetch.
+  const loadState = preview ? 'ready' : fetchState;
+
+  // Live master-profile names (shared admin identity graph; see design doc Stage 2).
+  const { players } = useIdentityGraph();
+  const nameOf = useMemo(() => makeNameResolver(players), [players]);
+
   const csvText = useMemo(
     () => preview?.csvText ?? loadSessionCsv(sessionId),
     [preview, sessionId]
   );
-  const passedEntries = Array.isArray(preview?.game?.entries) ? preview.game.entries : null;
+
+  // Ledger entries drive the Latest Ledger table + Settlement input.
+  const ledgerEntries = useMemo(() => {
+    if (Array.isArray(preview?.game?.entries)) return preview.game.entries;
+    if (Array.isArray(dbRow?.entries)) return dbRow.entries;
+    return null;
+  }, [preview, dbRow]);
 
   const parsed = useMemo(() => {
-    if (!csvText) return null;
-    let p = parseCumulativeNet(csvText);
-    // Fold players linked in the /admin dialog into a single charted line, then
-    // ease the reconstruction residual to zero so the chart ends where the
-    // ledger table does.
-    if (preview?.groups) p = groupCumulativeNet(p, preview.groups);
-    return reconcileCumulativeNet(p);
-  }, [csvText, preview]);
-  const series = useMemo(() => (parsed ? toPerPlayerSeries(parsed) : null), [parsed]);
+    if (preview?.csvText) {
+      let p = parseCumulativeNet(preview.csvText);
+      if (preview.groups) p = groupCumulativeNet(p, preview.groups);
+      return reconcileCumulativeNet(p);
+    }
+    if (dbRow?.chart_data) return fromChartData(dbRow.chart_data);
+    if (csvText) return reconcileCumulativeNet(parseCumulativeNet(csvText));
+    return null;
+  }, [preview, dbRow, csvText]);
+
+  // Swap each charted line's label to its live master name when the column
+  // carries a resolved playerId (fromChartData keys the map by playerId then).
+  const displayParsed = useMemo(() => {
+    if (!parsed) return null;
+    let touched = false;
+    const players = new Map();
+    for (const [id, p] of parsed.players) {
+      const name = nameOf(id);
+      if (name) {
+        touched = true;
+        players.set(id, { ...p, nicknames: [name] });
+      } else {
+        players.set(id, p);
+      }
+    }
+    return touched ? { players, snapshots: parsed.snapshots } : parsed;
+  }, [parsed, nameOf]);
+
+  const series = useMemo(
+    () => (displayParsed ? toPerPlayerSeries(displayParsed) : null),
+    [displayParsed]
+  );
 
   const latestLedger = useMemo(() => {
-    if (passedEntries) {
-      return passedEntries
-        .filter((e) => e && (e.name || '').trim() !== '')
+    if (ledgerEntries) {
+      return ledgerEntries
+        .filter((e) => e && (e.name || '').trim() !== '' && !isAbsentBank(e))
         .map((e) => ({
-          playerId: e.pokerNowId || e.externalId || e.name,
-          nickname: e.name,
+          key: e.pokerNowId || e.externalId || e.name,
+          nickname: nameOf(e.playerId) || e.name,
           net: entryNet(e)
         }))
         .sort((a, b) => b.net - a.net);
@@ -78,21 +148,25 @@ export default function SessionPage() {
     if (!parsed || parsed.snapshots.length === 0) return [];
     const latest = parsed.snapshots[parsed.snapshots.length - 1];
     return Object.entries(latest.nets)
-      .map(([playerId, { nickname, net }]) => ({ playerId, nickname, net }))
+      .map(([key, { nickname, net }]) => ({ key, nickname, net }))
       .sort((a, b) => b.net - a.net);
-  }, [passedEntries, parsed]);
+  }, [ledgerEntries, parsed, nameOf]);
 
-  const settlement = useMemo(
-    () =>
-      passedEntries
-        ? computeBankSettlement({ entries: passedEntries, ...(preview?.settlement || {}) })
-        : null,
-    [passedEntries, preview]
-  );
+  const settlement = useMemo(() => {
+    if (!ledgerEntries) return null;
+    const config = preview?.settlement || dbRow?.settlement || {};
+    // keyOfEntry prefers pokerNowId, so swapping in the master name doesn't move
+    // the settlement/bank keys — it just labels rows with the live profile name.
+    const named = ledgerEntries.map((e) => ({ ...e, name: nameOf(e.playerId) || e.name }));
+    return computeBankSettlement({ entries: named, ...config });
+  }, [ledgerEntries, preview, dbRow, nameOf]);
 
   const handCount = parsed?.snapshots.length ? parsed.snapshots.length - 1 : 0;
 
-  const startDate = preview?.game?.date || (csvText ? extractSessionStartDate(csvText) : null);
+  const startDate =
+    preview?.game?.date ||
+    (dbRow?.date ? String(dbRow.date).slice(0, 10) : null) ||
+    (csvText ? extractSessionStartDate(csvText) : null);
   const startLabel = startDate
     ? new Date(`${startDate}T00:00:00`).toLocaleDateString('en-US', {
         year: 'numeric',
@@ -100,10 +174,13 @@ export default function SessionPage() {
         day: 'numeric'
       })
     : null;
+  const hasChart = Boolean(parsed && parsed.snapshots.length > 0);
+  const hasLedger = latestLedger.length > 0;
+
   const subtitle = [
     startLabel && `Started ${startLabel}`,
-    parsed && `${handCount.toLocaleString()} hands`,
-    parsed && `${latestLedger.length} players`
+    hasChart && `${handCount.toLocaleString()} hands`,
+    (hasLedger || hasChart) && `${latestLedger.length} players`
   ].filter(Boolean);
 
   return (
@@ -117,27 +194,51 @@ export default function SessionPage() {
           )}
         </header>
 
-        {!csvText ? (
-          <p className="text-sm text-slate-500">No hand log data found for this session.</p>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-            <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
-              <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
-                <h2 className="text-sm font-medium text-slate-300">Cumulative Net</h2>
-                <button
-                  onClick={() => downloadCumulativeNetCSV(sessionId, series)}
-                  className="flex items-center gap-2 text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  Download cumulative net
-                </button>
-              </div>
-              <div className="p-5 flex-1 flex flex-col justify-center">
-                <CumulativeNetChart parsed={parsed} />
-              </div>
-            </div>
+        {loadState === 'loading' && (
+          <p className="text-sm text-slate-500">Loading session…</p>
+        )}
 
-            <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+        {loadState === 'not-found' && (
+          <p className="text-sm text-slate-500">Session not found.</p>
+        )}
+
+        {loadState === 'error' && (
+          <div className="flex items-center gap-4">
+            <p className="text-sm text-rose-400">Couldn&apos;t load this session.</p>
+            <button
+              onClick={() => setReloadKey((k) => k + 1)}
+              className="text-xs font-medium text-emerald-400 hover:text-emerald-300"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {loadState === 'ready' && !hasChart && !hasLedger && (
+          <p className="text-sm text-slate-500">No hand log data found for this session.</p>
+        )}
+
+        {loadState === 'ready' && (hasChart || hasLedger) && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
+            {hasChart && (
+              <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+                <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+                  <h2 className="text-sm font-medium text-slate-300">Cumulative Net</h2>
+                  <button
+                    onClick={() => downloadCumulativeNetCSV(sessionId, series)}
+                    className="flex items-center gap-2 text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download cumulative net
+                  </button>
+                </div>
+                <div className="p-5 flex-1 flex flex-col justify-center">
+                  <CumulativeNetChart parsed={displayParsed} />
+                </div>
+              </div>
+            )}
+
+            <div className={`${hasChart ? 'lg:col-span-1' : 'lg:col-span-3'} bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col`}>
               <div className="px-5 py-4 border-b border-slate-800">
                 <h2 className="text-sm font-medium text-slate-300">Latest Ledger</h2>
               </div>
@@ -150,8 +251,8 @@ export default function SessionPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {latestLedger.map(({ playerId, nickname, net }, i) => (
-                      <tr key={playerId} className="border-t border-slate-800/80 hover:bg-slate-800/40 transition-colors">
+                    {latestLedger.map(({ key, nickname, net }, i) => (
+                      <tr key={key} className="border-t border-slate-800/80 hover:bg-slate-800/40 transition-colors">
                         <td className="px-5 py-3">
                           <span className="text-slate-600 text-xs tabular-nums mr-2 w-4 inline-block">{i + 1}</span>
                           {nickname}
@@ -168,7 +269,7 @@ export default function SessionPage() {
           </div>
         )}
 
-        {settlement && settlement.countries.length > 0 && (
+        {loadState === 'ready' && settlement && settlement.countries.length > 0 && (
           <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
             <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
               <h2 className="text-sm font-medium text-slate-300">Settlement</h2>

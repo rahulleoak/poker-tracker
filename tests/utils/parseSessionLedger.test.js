@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
-import { parseSessionLedger } from '../../src/utils/pokernow-utils/parseSessionLedger.js';
+import { parseSessionLedger, isLedgerCsv } from '../../src/utils/pokernow-utils/parseSessionLedger.js';
 
 const SAMPLE_LOG = new URL(
   '../../test_data/poker_now_log_pgl6xUx0lKtST2abD42AiiMbI.csv',
@@ -9,6 +9,16 @@ const SAMPLE_LOG = new URL(
 );
 
 const netOf = (e) => e.buyOut + e.stack - e.buyIn;
+
+test('isLedgerCsv distinguishes a ledger export from a hand-history log', () => {
+  assert.strictEqual(
+    isLedgerCsv('player_nickname,player_id,session_start_at,session_end_at,buy_in,buy_out,stack,net'),
+    true
+  );
+  assert.strictEqual(isLedgerCsv('entry,at,order'), false);
+  assert.strictEqual(isLedgerCsv(''), false);
+  assert.strictEqual(isLedgerCsv(null), false);
+});
 
 test('parseSessionLedger returns [] for empty/invalid input', () => {
   assert.deepStrictEqual(parseSessionLedger(''), []);

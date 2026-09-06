@@ -1,12 +1,26 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { X, Link2, Unlink, Users, GripVertical, Landmark, Sparkles } from 'lucide-react';
 import { formatChips } from '../utils/formatters';
 import { COUNTRIES, DEFAULT_COUNTRY, country } from '../utils/countries';
 import { keyOfEntry } from '../utils/bankSettlement';
 import { autoGroupEntries } from '../utils/playerAutoGroup';
+import { bankerConfigFor } from '../utils/adminBankDefaults';
 import { useLiveCadToUsd } from '../hooks/useLiveCadToUsd';
 
 const generateId = () => `grp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+// The country a seat is the standing bank for, if any: the DB `admin_bank_defaults`
+// table (keyed by resolved profile id) wins, else the name-based fallback list.
+function standingBankCountry(key, name, resolvedByKey, bankDefaultByCountry) {
+  const info = resolvedByKey[key];
+  if (info?.playerId) {
+    for (const [code, pid] of Object.entries(bankDefaultByCountry || {})) {
+      if (pid && pid === info.playerId) return code;
+    }
+  }
+  const cfg = bankerConfigFor(info?.displayName) || bankerConfigFor(name);
+  return cfg ? cfg.country : null;
+}
 
 const netOf = (entry) =>
   (Number(entry?.buyOut) || 0) + (Number(entry?.stack) || 0) - (Number(entry?.buyIn) || 0);
@@ -52,7 +66,20 @@ function CountrySelect({ value, onChange, className = '' }) {
  *
  * @param {{ entries: Array<Object>, onCancel: () => void, onConfirm: (result: Object) => void }} props
  */
-export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfirm }) {
+export default function AdminPlayerLinkDialog({
+  entries = [],
+  onCancel,
+  onConfirm,
+  ledgerSource = null, // 'file' | 'fetched' | null (reconstructed from hand log)
+  suggestedId = '',
+  idIsFallback = false,
+  initialGroups = [],
+  initialSettlement = null,
+  resolvedByKey = {}, // entry key -> { playerId, displayName } already known to the DB
+  profiles = [], // [{ id, display_name }] master profiles for the "link to profile" picker
+  bankDefaultByCountry = {}, // country code -> profile id: standing banker (admin_bank_defaults)
+  error = null,
+}) {
   const players = useMemo(
     () => entries.filter((e) => e && (e.name || '').trim() !== ''),
     [entries]
@@ -69,21 +96,60 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
 
   const nameFor = (key) => entryByKey.get(key)?.name || key;
 
+  // Editable session id — the PokerNow game id, or a generated fallback the
+  // upload flow suggested. Becomes admin_sessions.id and the /admin/session route.
+  const [sessionId, setSessionId] = useState(suggestedId);
+
   // groups: [{ id, members: [key, ...], source }]  — first member is the primary
   // identity; `source` is 'auto' (made by the Auto-group toggle) or 'manual'
   // (dragged or curated by hand). Toggling auto-group off only clears 'auto'.
-  const [groups, setGroups] = useState([]);
+  // Seeded from `initialGroups` (member-key lists) when re-opening to overwrite.
+  const [groups, setGroups] = useState(() =>
+    (Array.isArray(initialGroups) ? initialGroups : [])
+      .filter((m) => Array.isArray(m) && m.length > 1)
+      .map((members) => ({ id: generateId(), members: [...members], source: 'manual' }))
+  );
   const [dragKey, setDragKey] = useState(null);
   const [dropTarget, setDropTarget] = useState(null); // key | groupId | null
   const [autoGroupOn, setAutoGroupOn] = useState(false);
 
-  const [countryByKey, setCountryByKey] = useState({}); // unitKey -> country code
-  const [bankByCountry, setBankByCountry] = useState({}); // country code -> unitKey
-  const [chipsPerCad, setChipsPerCad] = useState(100);
+  // unitKey -> '' (none) | '__create__' | <profileId>. Seeded from entries the DB
+  // already recognises, so those come pre-bound.
+  const [assignments, setAssignments] = useState(() => {
+    const seed = {};
+    for (const [key, info] of Object.entries(resolvedByKey || {})) {
+      if (info?.playerId) seed[key] = info.playerId;
+    }
+    return seed;
+  });
+
+  // Seed each standing banker (see adminBankDefaults) into its country, unless
+  // the reviewer / a saved session already placed that seat somewhere.
+  const [countryByKey, setCountryByKey] = useState(() => {
+    const seeded = { ...(initialSettlement?.countryByKey || {}) };
+    for (const e of entries) {
+      const k = keyOfEntry(e);
+      if (seeded[k]) continue;
+      const code = standingBankCountry(k, e.name, resolvedByKey, bankDefaultByCountry);
+      if (code) seeded[k] = code;
+    }
+    return seeded;
+  }); // unitKey -> country code
+  const [bankByCountry, setBankByCountry] = useState(initialSettlement?.bankByCountry || {}); // country code -> unitKey
+  // Countries whose bank the reviewer (or a saved session) has set explicitly —
+  // the standing-banker default won't overwrite these.
+  const [bankTouched, setBankTouched] = useState(
+    () => new Set(Object.keys(initialSettlement?.bankByCountry || {}))
+  );
+  const [chipsPerCad, setChipsPerCad] = useState(
+    Number(initialSettlement?.chipsPerCad) > 0 ? Number(initialSettlement.chipsPerCad) : 100
+  );
   // `cadToUsd` defaults to the live FX rate (same source as the main app) and is
   // overridable in the field below; `null` override means "track the live rate".
   const { cadToUsd: liveCadToUsd, isLive: cadToUsdIsLive } = useLiveCadToUsd(0.73);
-  const [cadToUsdOverride, setCadToUsdOverride] = useState(null);
+  const [cadToUsdOverride, setCadToUsdOverride] = useState(
+    Number(initialSettlement?.cadToUsd) > 0 ? Number(initialSettlement.cadToUsd) : null
+  );
   const cadToUsd =
     cadToUsdOverride ?? (cadToUsdIsLive ? Number(liveCadToUsd.toFixed(4)) : liveCadToUsd);
 
@@ -131,6 +197,7 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
   };
 
   const setCountryBank = (code, key) => {
+    setBankTouched((prev) => new Set(prev).add(code));
     setBankByCountry((prev) => {
       const next = { ...prev };
       if (!key) delete next[code];
@@ -138,6 +205,27 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
       return next;
     });
   };
+
+  // Standing bankers: for every active country the reviewer hasn't touched and
+  // that has no bank yet, pick the configured banker if they're playing in it.
+  useEffect(() => {
+    setBankByCountry((prev) => {
+      let next = prev;
+      for (const { code } of COUNTRIES) {
+        if (prev[code] || bankTouched.has(code) || !activeCountryCodes.includes(code)) continue;
+        const hit = units.find(
+          (u) =>
+            (countryByKey[u.key] || DEFAULT_COUNTRY) === code &&
+            standingBankCountry(u.key, u.name, resolvedByKey, bankDefaultByCountry) === code
+        );
+        if (hit) {
+          if (next === prev) next = { ...prev };
+          next[code] = hit.key;
+        }
+      }
+      return next;
+    });
+  }, [activeCountryCodes, units, countryByKey, bankTouched, resolvedByKey, bankDefaultByCountry]);
 
   // A group the user pulls a member out of, or adds a member to, is now
   // hand-curated — mark it 'manual' so the auto-group toggle won't discard it.
@@ -232,9 +320,26 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
     if (dropTarget !== targetKey) setDropTarget(targetKey);
   };
 
+  const trimmedId = (sessionId || '').trim();
+
+  const setUnitProfile = (key, value) => setAssignments((prev) => ({ ...prev, [key]: value }));
+
   const handleConfirm = () => {
+    if (!trimmedId) return;
+
+    // { unitKey -> { playerId } | { create: displayName } } for the units the
+    // reviewer bound to a master profile.
+    const profileAssignments = {};
+    for (const u of units) {
+      const v = assignments[u.key];
+      if (!v) continue;
+      profileAssignments[u.key] = v === '__create__' ? { create: u.name } : { playerId: v };
+    }
+
     onConfirm({
+      sessionId: trimmedId,
       groups: groups.map((g) => g.members).filter((m) => m.length > 1),
+      profileAssignments,
       countryByKey,
       bankByCountry,
       chipsPerCad: Number(chipsPerCad) > 0 ? Number(chipsPerCad) : 100,
@@ -270,6 +375,23 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
 
         {/* Body */}
         <div className="p-5 space-y-6 overflow-y-auto">
+          {/* Session ID */}
+          <div className="space-y-1.5">
+            <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Session ID</h4>
+            <input
+              type="text"
+              value={sessionId}
+              onChange={(e) => setSessionId(e.target.value)}
+              spellCheck={false}
+              className="w-full bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 text-sm font-mono text-slate-200 outline-none focus:border-emerald-500"
+            />
+            <p className="text-[11px] text-slate-600">
+              {idIsFallback
+                ? "Couldn't read a PokerNow game id — using a generated one. Edit if you want a specific id."
+                : 'From the PokerNow export. Editing it changes the saved id and the /admin/session URL.'}
+            </p>
+          </div>
+
           {/* Linked groups */}
           <div className="space-y-2">
             <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
@@ -358,9 +480,13 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
             }`}
           >
             <span className="font-medium">
-              {isBalanced
-                ? 'Ledger balances (reconstructed from hand log)'
-                : 'Ledger does not balance — check the source CSV'}
+              {!isBalanced
+                ? 'Ledger does not balance — check the source CSV'
+                : ledgerSource === 'file'
+                ? 'From uploaded ledger CSV (exact)'
+                : ledgerSource === 'fetched'
+                ? 'From PokerNow ledger CSV (exact)'
+                : 'Reconstructed from hand log — add the ledger CSV for exact amounts'}
             </span>
             <span className={`font-bold ${isBalanced ? 'text-slate-400' : ''}`}>
               Σ net {formatNet(totalNet)}
@@ -426,7 +552,12 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
                     }`}
                   >
                     <GripVertical className="w-4 h-4 text-slate-600 shrink-0" />
-                    <span className="text-sm text-slate-200 truncate flex-1">{p.name}</span>
+                    <span className="text-sm text-slate-200 truncate flex-1">
+                      {p.name}
+                      {String(p.pokerNowId || '').startsWith('bank:') && (
+                        <span className="ml-1.5 text-[10px] uppercase font-bold text-slate-500">didn&apos;t play · bank</span>
+                      )}
+                    </span>
                     <CountrySelect value={countryOf(key)} onChange={(c) => setUnitCountry(key, c)} />
                     <span className={`text-sm font-bold shrink-0 ${netClass(net)}`}>{formatNet(net)}</span>
                   </div>
@@ -435,6 +566,48 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
               {poolPlayers.length === 0 && (
                 <p className="text-xs text-slate-600 italic col-span-full py-2">All players linked.</p>
               )}
+            </div>
+          </div>
+
+          {/* Profiles — link each unit to a saved master player profile */}
+          <div className="space-y-2">
+            <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <Link2 className="w-3.5 h-3.5" /> Profiles
+              <span className="text-slate-600 normal-case font-normal tracking-normal">
+                · link to a saved player (optional)
+              </span>
+            </h4>
+            <div className="space-y-1.5">
+              {units.map((u) => {
+                const resolved = resolvedByKey[u.key];
+                const value = assignments[u.key] ?? '';
+                return (
+                  <div
+                    key={u.key}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2"
+                  >
+                    <span className="text-sm text-slate-200 truncate flex items-center gap-1.5">
+                      {u.name}
+                      {resolved && value === resolved.playerId && (
+                        <span className="text-[10px] uppercase font-bold text-emerald-500/80">matched</span>
+                      )}
+                    </span>
+                    <select
+                      value={value}
+                      onChange={(e) => setUnitProfile(u.key, e.target.value)}
+                      className="bg-slate-800 border border-slate-700 rounded-md text-xs px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 max-w-[55%]"
+                    >
+                      <option value="">— no profile —</option>
+                      <option value="__create__">＋ Create “{u.name}”</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.display_name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -509,27 +682,33 @@ export default function AdminPlayerLinkDialog({ entries = [], onCancel, onConfir
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900 flex items-center justify-between gap-3">
-          <span className="text-xs text-slate-500">
-            {linkedCount > 0
-              ? `${linkedCount} player${linkedCount === 1 ? '' : 's'} linked into ${groups.length} profile${
-                  groups.length === 1 ? '' : 's'
-                }`
-              : 'No links — all players kept separate'}
-          </span>
-          <div className="flex gap-2">
-            <button
-              onClick={onCancel}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleConfirm}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition-colors"
-            >
-              Create Session
-            </button>
+        <div className="border-t border-slate-800 bg-slate-900">
+          {error && (
+            <p className="px-4 pt-3 text-xs text-rose-400">{error}</p>
+          )}
+          <div className="p-4 flex items-center justify-between gap-3">
+            <span className="text-xs text-slate-500">
+              {linkedCount > 0
+                ? `${linkedCount} player${linkedCount === 1 ? '' : 's'} linked into ${groups.length} profile${
+                    groups.length === 1 ? '' : 's'
+                  }`
+                : 'No links — all players kept separate'}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={onCancel}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-semibold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={!trimmedId}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 text-white px-4 py-2 rounded-xl text-xs font-bold transition-colors"
+              >
+                Create Session
+              </button>
+            </div>
           </div>
         </div>
       </div>

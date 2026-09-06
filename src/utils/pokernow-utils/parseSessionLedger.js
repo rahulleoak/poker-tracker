@@ -9,8 +9,8 @@ const EMPTY_STATS = {
   threeBetHands: 0
 };
 
-function isLedgerCsv(csvText) {
-  const header = (csvText.split('\n')[0] || '').toLowerCase();
+export function isLedgerCsv(csvText) {
+  const header = ((csvText || '').split('\n')[0] || '').toLowerCase();
   return header.includes('player_id') && (header.includes('buy_in') || header.includes('net'));
 }
 

@@ -89,3 +89,79 @@ CREATE POLICY "Player links are viewable by everyone" ON public.player_links FOR
 CREATE POLICY "Player links can be inserted by anyone" ON public.player_links FOR INSERT WITH CHECK (true);
 CREATE POLICY "Player links can be updated by anyone" ON public.player_links FOR UPDATE USING (true);
 CREATE POLICY "Player links can be deleted by anyone" ON public.player_links FOR DELETE USING (true);
+
+-- =========================================================================
+-- 6. ADMIN SESSIONS  (see design/admin-session.md — the /admin CSV upload flow)
+--    Separate namespace from `sessions` / `ledger`. Keyed on the PokerNow game
+--    id (or a generated fallback). Not gated: public read + write, same as the
+--    rest of the app. Render-ready blobs (`chart_data`, `entries`) are the read
+--    source; `raw_csv_path` / `parser_version` are reserved scaffold.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.admin_sessions (
+    id             TEXT PRIMARY KEY,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by     TEXT,
+
+    date           DATE,
+    currency       TEXT NOT NULL DEFAULT 'USD',
+    chip_value     NUMERIC NOT NULL DEFAULT 1,
+    poker_now_url  TEXT,
+
+    player_count   INT NOT NULL DEFAULT 0,
+    hand_count     INT NOT NULL DEFAULT 0,
+
+    chart_data     JSONB NOT NULL,
+    entries        JSONB NOT NULL,
+
+    groups         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    profiles       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    settlement     JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    raw_csv_path   TEXT,                        -- SCAFFOLD ONLY, not written/read yet
+    parser_version INT NOT NULL DEFAULT 1       -- SCAFFOLD ONLY
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_date ON public.admin_sessions(date DESC);
+
+-- Keep updated_at fresh on every update/upsert-conflict.
+CREATE OR REPLACE FUNCTION public.touch_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_admin_sessions_touch ON public.admin_sessions;
+CREATE TRIGGER trg_admin_sessions_touch
+  BEFORE UPDATE ON public.admin_sessions
+  FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+
+ALTER TABLE public.admin_sessions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "admin_sessions readable by everyone" ON public.admin_sessions;
+CREATE POLICY "admin_sessions readable by everyone" ON public.admin_sessions FOR SELECT USING (true);
+DROP POLICY IF EXISTS "admin_sessions insertable by anyone" ON public.admin_sessions;
+CREATE POLICY "admin_sessions insertable by anyone" ON public.admin_sessions FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS "admin_sessions updatable by anyone" ON public.admin_sessions;
+CREATE POLICY "admin_sessions updatable by anyone" ON public.admin_sessions FOR UPDATE USING (true);
+DROP POLICY IF EXISTS "admin_sessions deletable by anyone" ON public.admin_sessions;
+CREATE POLICY "admin_sessions deletable by anyone" ON public.admin_sessions FOR DELETE USING (true);
+
+-- =========================================================================
+-- 7. ADMIN BANK DEFAULTS  (standing banker per country for the /admin review
+--    dialog — see src/utils/adminBankDefaults.js for the name-based fallback)
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.admin_bank_defaults (
+    country    TEXT PRIMARY KEY,                 -- code from src/utils/countries.js ('CA' | 'US')
+    player_id  UUID NOT NULL REFERENCES public.players(id) ON DELETE CASCADE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.admin_bank_defaults ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "admin_bank_defaults readable by everyone" ON public.admin_bank_defaults;
+CREATE POLICY "admin_bank_defaults readable by everyone" ON public.admin_bank_defaults FOR SELECT USING (true);
+DROP POLICY IF EXISTS "admin_bank_defaults writable by anyone" ON public.admin_bank_defaults;
+CREATE POLICY "admin_bank_defaults writable by anyone" ON public.admin_bank_defaults FOR ALL USING (true) WITH CHECK (true);
