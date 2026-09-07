@@ -33,6 +33,7 @@ export function calculateSettlement({
   const balanced = tBuyIn === tCashOut && tBuyIn > 0;
   const chipsOnTable = tBuyIn - tCashOut;
   let trans = [];
+  const validationErrors = [];
 
   if (balanced) {
     const fxRate = (exchangeRates && exchangeRates[settlementCurrency] && exchangeRates[gameCurrency]) 
@@ -53,7 +54,13 @@ export function calculateSettlement({
         playersFiat.forEach(p => {
             if (!zones[p.currency]) zones[p.currency] = { currency: p.currency, players: [], bankBuddy: null, net: 0 };
             zones[p.currency].players.push({...p}); 
-            if (p.isBank && !zones[p.currency].bankBuddy) zones[p.currency].bankBuddy = p.name;
+            if (p.isBank) {
+                if (zones[p.currency].bankBuddy) {
+                    validationErrors.push(`Multiple banks detected for currency ${p.currency}: ${zones[p.currency].bankBuddy} and ${p.name}`);
+                } else {
+                    zones[p.currency].bankBuddy = p.name;
+                }
+            }
             zones[p.currency].net += p.fiatAmount;
         });
 
@@ -158,5 +165,5 @@ export function calculateSettlement({
     }
   }
 
-  return { totalBuyIn: tBuyIn, totalCashOut: tCashOut, isBalanced: balanced, settlements: trans, chipsOnTable };
+  return { totalBuyIn: tBuyIn, totalCashOut: tCashOut, isBalanced: balanced, settlements: trans, chipsOnTable, validationErrors };
 }

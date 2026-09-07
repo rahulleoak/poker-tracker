@@ -82,12 +82,26 @@ export default function GameEditor({
   const [linkError, setLinkError] = useState(null);
 
   // --- RESET STATE WHEN GAME PROP CHANGES ---
+  const sanitizeEntries = (entries, currency) => {
+    const seenBanks = {};
+    return entries.map(entry => {
+      const entryCurrency = entry.currency || currency;
+      if (entry.isBank) {
+        if (seenBanks[entryCurrency]) {
+          return { ...entry, isBank: false };
+        }
+        seenBanks[entryCurrency] = true;
+      }
+      return entry;
+    });
+  };
+
   useEffect(() => {
     if (!game) return;
     setGameCurrency(game.currency || 'USD');
     setIsActive(game.isActive !== false);
     setPokerNowUrl(game.pokerNowUrl || '');
-    setEntries(Array.isArray(game.entries) ? game.entries : []);
+    setEntries(sanitizeEntries(Array.isArray(game.entries) ? game.entries : [], game.currency || 'USD'));
     setSettlementCurrency(game.currency || 'USD');
 
     const chipVal = Number(game.chipValue) || 1;
@@ -145,7 +159,7 @@ export default function GameEditor({
   }, [date, gameCurrency, chipValue, isActive, pokerNowUrl, entries]);
 
   // Derived calculations for the current session via extracted utility function
-  const { totalBuyIn, totalCashOut, isBalanced, settlements, chipsOnTable } = useMemo(() => {
+  const { totalBuyIn, totalCashOut, isBalanced, settlements, chipsOnTable, validationErrors } = useMemo(() => {
     return calculateSettlement({
       entries,
       chipValue,
@@ -1023,6 +1037,11 @@ export default function GameEditor({
               <Plus className="w-4 h-4" /> Add Player Row
             </button>
           </div>
+          {validationErrors.length > 0 && (
+            <div className="p-4 bg-rose-950/30 border-t border-rose-900/50">
+                {validationErrors.map((err, i) => <p key={i} className="text-rose-400 text-sm flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {err}</p>)}
+            </div>
+          )}
         </div>
 
         {/* Settlement Panel */}
