@@ -44,7 +44,7 @@ export function calculateSettlement({
     let playersFiat = nets.map(p => ({
        ...p,
        fiatAmount: p.netChips * chipToTargetFiatMultiplier,
-       currency: safeEntries[p.id]?.currency || gameCurrency || 'USD',
+       currency: (safeEntries[p.id]?.currency || gameCurrency || 'USD').toUpperCase(),
        isBank: Boolean(safeEntries[p.id]?.isBank)
     }));
     
@@ -53,7 +53,7 @@ export function calculateSettlement({
         playersFiat.forEach(p => {
             if (!zones[p.currency]) zones[p.currency] = { currency: p.currency, players: [], bankBuddy: null, net: 0 };
             zones[p.currency].players.push({...p}); 
-            if (p.isBank) zones[p.currency].bankBuddy = p.name;
+            if (p.isBank && !zones[p.currency].bankBuddy) zones[p.currency].bankBuddy = p.name;
             zones[p.currency].net += p.fiatAmount;
         });
 
