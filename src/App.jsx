@@ -6,6 +6,7 @@ import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
 import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries, extractPokerNowUrl, findMatchingSession, mergeSessionEntries } from './utils/sessionMapper';
 import { loadGamesFromStorage, saveGamesToStorage, mergeRemoteAndLocalGames } from './utils/storage';
+import { fetchExchangeRates } from './utils/fx';
 import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
@@ -15,6 +16,7 @@ import AdminPage from './components/AdminPage';
 import HomePage from './components/HomePage';
 import SessionPage from './components/SessionPage';
 import ConfirmationModal from './components/ConfirmationModal';
+import SettlementPage from './components/SettlementPage';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -135,14 +137,9 @@ export function AppContent() {
   // --- FETCH DATA & FX RATES ---
   useEffect(() => {
     // 1. Fetch live exchange rates with offline fallback
-    fetch('https://open.er-api.com/v6/latest/USD')
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.rates) {
-          setExchangeRates(data.rates);
-        }
-      })
-      .catch(err => console.error("Failed to fetch FX rates, using fallback:", err));
+    fetchExchangeRates().then(rates => {
+      if (rates) setExchangeRates(rates);
+    });
 
     // 2. Fetch games from DB when component mounts
     const fetchGames = async () => {
@@ -748,7 +745,9 @@ export default function App() {
         <Route path="/" element={<AppContent />} />
         <Route path="/home" element={<HomePage />} />
         <Route path="/admin" element={<AdminPage />} />
-        <Route path="/session/:sessionId" element={<SessionPage />} />
+        <Route path="/admin/session/:sessionId" element={<SessionPage />} />
+        <Route path="/settlement" element={<SettlementPage />} />
+        <Route path="/settlement/:country" element={<SettlementPage />} />
       </Routes>
     </BrowserRouter>
   );

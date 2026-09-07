@@ -1,4 +1,4 @@
-import { parsePokerNowCSV, parsePokerNowLogStats } from './csvParser.js';
+import { parsePokerNowCSV, parsePokerNowLogStats } from '../../src/utils/csvParser.js';
 import assert from 'node:assert';
 import test from 'node:test';
 

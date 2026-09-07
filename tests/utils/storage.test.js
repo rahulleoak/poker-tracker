@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { loadGamesFromStorage, saveGamesToStorage, mergeRemoteAndLocalGames, STORAGE_KEY } from './storage.js';
+import { loadGamesFromStorage, saveGamesToStorage, mergeRemoteAndLocalGames, STORAGE_KEY } from '../../src/utils/storage.js';
 
 // Mock localStorage for testing
 class MemoryStorage {

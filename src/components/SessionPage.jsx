@@ -1,9 +1,56 @@
-import { useMemo } from 'react';
-import { useParams } from 'react-router-dom';
-import { Download } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { Download, Copy, Check, ArrowLeft } from 'lucide-react';
 import { loadSessionCsv } from '../utils/storage';
-import { parseCumulativeNet, toPerPlayerSeries } from '../utils/pokernow-utils/parseHandLog';
+import { extractSessionStartDate } from '../utils/pokernow-utils/sessionMeta';
+import { computeBankSettlement, keyOfEntry } from '../utils/bankSettlement';
+import { peekSessionPreview, clearSessionPreview } from '../utils/sessionHandoff';
+import { parseCumulativeNet, groupCumulativeNet, reconcileCumulativeNet, toPerPlayerSeries } from '../utils/pokernow-utils/parseHandLog';
+import { fromChartData } from '../utils/chartData';
+import { sessionApi } from '../utils/sessionApi';
+import { useIdentityGraph } from '../hooks/useIdentityGraph';
+import { makeNameResolver } from '../utils/adminIdentity';
+import { buildSettlementText } from '../utils/settlementText';
 import CumulativeNetChart from './CumulativeNetChart';
+
+const entryNet = (e) =>
+  (Number(e?.buyOut) || 0) + (Number(e?.stack) || 0) - (Number(e?.buyIn) || 0);
+
+// A "bank:<id>" entry with no money is a standing banker who didn't play — it
+// exists only so settlement can route through them; hide it from the ledger.
+const isAbsentBank = (e) =>
+  String(e?.pokerNowId || '').startsWith('bank:') && entryNet(e) === 0;
+
+const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
+
+// The session nicknames a player went by, minus the one already shown as their
+// name, as { short } (≤ ~20 visible chars, whole names then "…") and { full }.
+const ALIAS_BUDGET = 20;
+function aliasSummary(displayName, sessionNames) {
+  const dn = String(displayName || '').trim().toLowerCase();
+  const others = [
+    ...new Set(
+      (sessionNames || [])
+        .map((n) => String(n || '').trim())
+        .filter((n) => n && n.toLowerCase() !== dn)
+    )
+  ];
+  if (others.length === 0) return { short: null, full: null };
+  const full = others.join(', ');
+  if (full.length <= ALIAS_BUDGET) return { short: full, full };
+
+  let acc = '';
+  let shown = 0;
+  for (const n of others) {
+    const candidate = acc ? `${acc}, ${n}` : n;
+    if (candidate.length + 1 > ALIAS_BUDGET) break;
+    acc = candidate;
+    shown += 1;
+  }
+  const short =
+    shown === 0 ? `${others[0].slice(0, ALIAS_BUDGET - 1)}…` : `${acc}…`;
+  return { short, full };
+}
 
 function downloadCumulativeNetCSV(sessionId, series) {
   const rows = [['playerId', 'nickname', 'handNumber', 'timestamp', 'net']];
@@ -29,57 +76,289 @@ function downloadCumulativeNetCSV(sessionId, series) {
   URL.revokeObjectURL(url);
 }
 
+
 export default function SessionPage() {
   const { sessionId } = useParams();
-  const csvText = useMemo(() => loadSessionCsv(sessionId), [sessionId]);
 
-  const parsed = useMemo(() => (csvText ? parseCumulativeNet(csvText) : null), [csvText]);
-  const series = useMemo(() => (parsed ? toPerPlayerSeries(parsed) : null), [parsed]);
+  // The /admin preview hands us everything in-memory (single-shot); every other
+  // entry point (refresh, shared link, list click) falls back to the DB.
+  const preview = useMemo(() => peekSessionPreview(sessionId), [sessionId]);
+  useEffect(() => {
+    if (preview) clearSessionPreview();
+  }, [preview]);
+
+  const [dbRow, setDbRow] = useState(null);
+  const [fetchState, setFetchState] = useState('loading'); // loading | ready | not-found | error
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    if (preview) return undefined;
+    let cancelled = false;
+    setDbRow(null);
+    setFetchState('loading');
+    sessionApi
+      .get(sessionId)
+      .then((row) => {
+        if (cancelled) return;
+        setDbRow(row || null);
+        setFetchState(row ? 'ready' : 'not-found');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('Failed to load session:', err);
+        setFetchState('error');
+      });
+    return () => { cancelled = true; };
+  }, [sessionId, preview, reloadKey]);
+
+  // The stash (if present) is always ready; otherwise follow the fetch.
+  const loadState = preview ? 'ready' : fetchState;
+
+  // Live master-profile names (shared admin identity graph; see design doc Stage 2).
+  const { players } = useIdentityGraph();
+  const nameOf = useMemo(() => makeNameResolver(players), [players]);
+
+  const csvText = useMemo(
+    () => preview?.csvText ?? loadSessionCsv(sessionId),
+    [preview, sessionId]
+  );
+
+  // Ledger entries drive the Latest Ledger table + Settlement input.
+  const ledgerEntries = useMemo(() => {
+    if (Array.isArray(preview?.game?.entries)) return preview.game.entries;
+    if (Array.isArray(dbRow?.entries)) return dbRow.entries;
+    return null;
+  }, [preview, dbRow]);
+
+  const parsed = useMemo(() => {
+    if (preview?.csvText) {
+      let p = parseCumulativeNet(preview.csvText);
+      if (preview.groups) p = groupCumulativeNet(p, preview.groups);
+      return reconcileCumulativeNet(p);
+    }
+    if (dbRow?.chart_data) return fromChartData(dbRow.chart_data);
+    if (csvText) return reconcileCumulativeNet(parseCumulativeNet(csvText));
+    return null;
+  }, [preview, dbRow, csvText]);
+
+  // Swap each charted line's label to its live master name when the column
+  // carries a resolved playerId (fromChartData keys the map by playerId then).
+  const displayParsed = useMemo(() => {
+    if (!parsed) return null;
+    let touched = false;
+    const players = new Map();
+    for (const [id, p] of parsed.players) {
+      const name = nameOf(id);
+      if (name) {
+        touched = true;
+        players.set(id, { ...p, nicknames: [name] });
+      } else {
+        players.set(id, p);
+      }
+    }
+    return touched ? { players, snapshots: parsed.snapshots } : parsed;
+  }, [parsed, nameOf]);
+
+  const series = useMemo(
+    () => (displayParsed ? toPerPlayerSeries(displayParsed) : null),
+    [displayParsed]
+  );
 
   const latestLedger = useMemo(() => {
+    if (ledgerEntries) {
+      return ledgerEntries
+        .filter((e) => e && (e.name || '').trim() !== '' && !isAbsentBank(e))
+        .map((e) => {
+          const name = nameOf(e.playerId) || e.name;
+          const sessionNames =
+            Array.isArray(e.aliases) && e.aliases.length ? e.aliases : [e.name];
+          const { short, full } = aliasSummary(name, sessionNames);
+          return {
+            key: e.pokerNowId || e.externalId || e.name,
+            name,
+            aliasShort: short,
+            aliasFull: full,
+            net: entryNet(e)
+          };
+        })
+        .sort((a, b) => b.net - a.net);
+    }
     if (!parsed || parsed.snapshots.length === 0) return [];
     const latest = parsed.snapshots[parsed.snapshots.length - 1];
     return Object.entries(latest.nets)
-      .map(([playerId, { nickname, net }]) => ({ playerId, nickname, net }))
+      .map(([key, { nickname, net }]) => ({ key, name: nickname, aliasShort: null, aliasFull: null, net }))
       .sort((a, b) => b.net - a.net);
-  }, [parsed]);
+  }, [ledgerEntries, parsed, nameOf]);
+
+  const settlement = useMemo(() => {
+    if (!ledgerEntries) return null;
+    const config = preview?.settlement || dbRow?.settlement || {};
+    // keyOfEntry prefers pokerNowId, so swapping in the master name doesn't move
+    // the settlement/bank keys — it just labels rows with the live profile name.
+    const named = ledgerEntries.map((e) => ({ ...e, name: nameOf(e.playerId) || e.name }));
+    return computeBankSettlement({ entries: named, ...config });
+  }, [ledgerEntries, preview, dbRow, nameOf]);
+
+  // --- Settlement check-offs (persisted per leg; see design/banks-settlement.md) ---
+  const [marks, setMarks] = useState([]);
+  const [markBusy, setMarkBusy] = useState(false);
+
+  const reloadMarks = useCallback(() => {
+    if (!sessionId) return Promise.resolve();
+    return sessionApi
+      .listMarks({ sessionId })
+      .then((m) => setMarks(Array.isArray(m) ? m : []))
+      .catch((err) => console.error('Failed to load settlement marks:', err));
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (loadState !== 'ready') return;
+    reloadMarks();
+  }, [loadState, reloadMarks]);
+
+  const pidByKey = useMemo(() => {
+    const map = new Map();
+    for (const e of ledgerEntries || []) map.set(keyOfEntry(e), e.playerId || null);
+    return map;
+  }, [ledgerEntries]);
+
+  const markFor = useCallback(
+    (legId) => marks.find((m) => m.leg_id === legId && !m.undone_at) || null,
+    [marks]
+  );
+
+  const toggleMark = useCallback(
+    async (legId, buildRow) => {
+      if (markBusy) return;
+      setMarkBusy(true);
+      try {
+        const existing = markFor(legId);
+        if (existing) await sessionApi.undoMarks([existing.id]);
+        else await sessionApi.addMarks([buildRow()]);
+        await reloadMarks();
+      } catch (err) {
+        console.error('Failed to update settlement mark:', err);
+        window.alert(err.message || 'Failed to update settlement.');
+      } finally {
+        setMarkBusy(false);
+      }
+    },
+    [markBusy, markFor, reloadMarks]
+  );
+
+  const countryOfBankKey = useCallback(
+    (bankKey) => settlement?.countries.find((c) => c.bankKey === bankKey)?.code || null,
+    [settlement]
+  );
+
+  const [copied, setCopied] = useState(false);
+  const handleCopySettlement = useCallback(async () => {
+    if (!settlement) return;
+    const text = buildSettlementText(settlement, {
+      sessionId,
+      isSettled: (legId) => Boolean(markFor(legId))
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [settlement, sessionId, markFor]);
 
   const handCount = parsed?.snapshots.length ? parsed.snapshots.length - 1 : 0;
+
+  const startDate =
+    preview?.game?.date ||
+    (dbRow?.date ? String(dbRow.date).slice(0, 10) : null) ||
+    (csvText ? extractSessionStartDate(csvText) : null);
+  const startLabel = startDate
+    ? new Date(`${startDate}T00:00:00`).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      })
+    : null;
+  const hasChart = Boolean(parsed && parsed.snapshots.length > 0);
+  const hasLedger = latestLedger.length > 0;
+
+  const subtitle = [
+    startLabel && `Started ${startLabel}`,
+    hasChart && `${handCount.toLocaleString()} hands`,
+    (hasLedger || hasChart) && `${latestLedger.length} players`
+  ].filter(Boolean);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans">
       <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-8">
         <header className="space-y-1">
+          <Link
+            to="/admin"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors mb-2"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Admin
+          </Link>
           <p className="text-xs font-medium uppercase tracking-widest text-slate-500">Session</p>
           <h1 className="text-2xl font-bold text-emerald-400 font-mono tracking-tight break-all">{sessionId}</h1>
-          {parsed && (
-            <p className="text-sm text-slate-500">
-              {handCount.toLocaleString()} hands · {latestLedger.length} players
-            </p>
+          {subtitle.length > 0 && (
+            <p className="text-sm text-slate-500">{subtitle.join(' · ')}</p>
           )}
         </header>
 
-        {!csvText ? (
-          <p className="text-sm text-slate-500">No hand log data found for this session.</p>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-            <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
-              <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
-                <h2 className="text-sm font-medium text-slate-300">Cumulative Net</h2>
-                <button
-                  onClick={() => downloadCumulativeNetCSV(sessionId, series)}
-                  className="flex items-center gap-2 text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  Download cumulative net
-                </button>
-              </div>
-              <div className="p-5 flex-1 flex flex-col justify-center">
-                <CumulativeNetChart parsed={parsed} />
-              </div>
-            </div>
+        {loadState === 'loading' && (
+          <p className="text-sm text-slate-500">Loading session…</p>
+        )}
 
-            <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+        {loadState === 'not-found' && (
+          <p className="text-sm text-slate-500">Session not found.</p>
+        )}
+
+        {loadState === 'error' && (
+          <div className="flex items-center gap-4">
+            <p className="text-sm text-rose-400">Couldn&apos;t load this session.</p>
+            <button
+              onClick={() => setReloadKey((k) => k + 1)}
+              className="text-xs font-medium text-emerald-400 hover:text-emerald-300"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {loadState === 'ready' && !hasChart && !hasLedger && (
+          <p className="text-sm text-slate-500">No hand log data found for this session.</p>
+        )}
+
+        {loadState === 'ready' && (hasChart || hasLedger) && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
+            {hasChart && (
+              <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+                <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+                  <h2 className="text-sm font-medium text-slate-300">Cumulative Net</h2>
+                  <button
+                    onClick={() => downloadCumulativeNetCSV(sessionId, series)}
+                    className="flex items-center gap-2 text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    <Download className="w-4 h-4" />
+                    Download cumulative net
+                  </button>
+                </div>
+                <div className="p-5 flex-1 flex flex-col justify-center">
+                  <CumulativeNetChart parsed={displayParsed} />
+                </div>
+              </div>
+            )}
+
+            <div className={`${hasChart ? 'lg:col-span-1' : 'lg:col-span-3'} bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col`}>
               <div className="px-5 py-4 border-b border-slate-800">
                 <h2 className="text-sm font-medium text-slate-300">Latest Ledger</h2>
               </div>
@@ -92,11 +371,16 @@ export default function SessionPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {latestLedger.map(({ playerId, nickname, net }, i) => (
-                      <tr key={playerId} className="border-t border-slate-800/80 hover:bg-slate-800/40 transition-colors">
+                    {latestLedger.map(({ key, name, aliasShort, aliasFull, net }, i) => (
+                      <tr key={key} className="border-t border-slate-800/80 hover:bg-slate-800/40 transition-colors">
                         <td className="px-5 py-3">
                           <span className="text-slate-600 text-xs tabular-nums mr-2 w-4 inline-block">{i + 1}</span>
-                          {nickname}
+                          <span title={aliasFull ? `Session names: ${aliasFull}` : undefined}>
+                            {name}
+                            {aliasShort && (
+                              <span className="text-slate-500"> ({aliasShort})</span>
+                            )}
+                          </span>
                         </td>
                         <td className={`px-5 py-3 text-right font-medium tabular-nums ${net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {net >= 0 ? '+' : ''}{net.toLocaleString()}
@@ -106,6 +390,190 @@ export default function SessionPage() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+        )}
+
+        {loadState === 'ready' && settlement && settlement.countries.length > 0 && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between gap-4">
+              <h2 className="text-sm font-medium text-slate-300">Settlement</h2>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="text-slate-500">
+                  {settlement.chipsPerCad} chips = 1 CAD · 1 CAD = {settlement.cadToUsd} USD
+                </span>
+                <button
+                  onClick={handleCopySettlement}
+                  className="flex items-center gap-1 font-medium text-slate-400 hover:text-slate-200 shrink-0"
+                  title="Copy settlement as text"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+                <Link to="/settlement" className="font-medium text-emerald-400 hover:text-emerald-300 shrink-0">
+                  Cross-session ledger →
+                </Link>
+              </div>
+            </div>
+            <div className="p-5 space-y-5">
+              {settlement.countries.map((c) => {
+                const nonBank = c.members.filter((m) => !m.isBank && Math.abs(m.netLocal) >= 0.005);
+                const converted = c.currency !== 'CAD';
+                const transfersByKey = new Map(
+                  settlement.playerTransfers
+                    .filter((t) => t.country === c.code)
+                    .map((t) => [t.partyKey, t])
+                );
+                return (
+                  <div key={c.code} className="space-y-1.5">
+                    <div className="text-xs font-semibold text-slate-400 flex items-center gap-2 flex-wrap">
+                      <span>{c.flag} {c.name}</span>
+                      <span className="text-slate-600">
+                        {c.bankName ? `Bank · ${c.bankName}` : 'No bank assigned'}
+                      </span>
+                      <span className="text-slate-600">
+                        settles in {c.currency}
+                        {converted && ` (1 CAD = ${c.fxFromCad} ${c.currency})`}
+                      </span>
+                    </div>
+                    {c.bankName ? (
+                      <div className="divide-y divide-slate-800/60">
+                        {nonBank.map((m) => {
+                          const t = transfersByKey.get(m.key);
+                          const settled = t ? Boolean(markFor(t.legId)) : false;
+                          return (
+                            <div key={m.key} className="flex items-center justify-between py-2 text-sm gap-3">
+                              <span className="flex items-center gap-2.5 min-w-0">
+                                {t && (
+                                  <input
+                                    type="checkbox"
+                                    checked={settled}
+                                    disabled={markBusy}
+                                    onChange={() =>
+                                      toggleMark(t.legId, () => ({
+                                        session_id: sessionId,
+                                        leg_id: t.legId,
+                                        scope: 'player',
+                                        country: t.country,
+                                        party_key: pidByKey.get(t.partyKey) || t.partyKey,
+                                        party_name: t.partyName,
+                                        counterparty_key: pidByKey.get(t.bankKey) || t.bankKey,
+                                        counterparty_name: t.bankName,
+                                        direction: t.direction,
+                                        amount_cad: t.amount,
+                                        amount_local: t.amountLocal,
+                                        currency: t.currency,
+                                        session_date: startDate || null
+                                      }))
+                                    }
+                                    className="w-4 h-4 accent-emerald-500 shrink-0"
+                                  />
+                                )}
+                                <span className={`truncate ${settled ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                                  {m.name}
+                                </span>
+                              </span>
+                              <span
+                                className={`shrink-0 text-right ${
+                                  settled
+                                    ? 'text-slate-600'
+                                    : m.netLocal >= 0
+                                    ? 'text-emerald-400'
+                                    : 'text-rose-400'
+                                }`}
+                              >
+                                {settled ? (
+                                  'settled'
+                                ) : (
+                                  <>
+                                    {m.netLocal >= 0
+                                      ? `receives ${money(m.netLocal, c.currency)} from ${c.bankName}`
+                                      : `pays ${money(m.netLocal, c.currency)} to ${c.bankName}`}
+                                    {converted && (
+                                      <span className="text-slate-600"> ({money(m.netCad, 'CAD')})</span>
+                                    )}
+                                  </>
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })}
+                        {nonBank.length === 0 && (
+                          <div className="py-2 text-sm text-slate-600 italic">Everyone in {c.name} broke even.</div>
+                        )}
+                        <div className="flex items-center justify-between py-2 text-sm gap-3">
+                          <span className="text-slate-300 truncate">
+                            {c.bankName} <span className="text-[10px] uppercase font-bold text-emerald-500/70">bank</span>
+                          </span>
+                          <span className="text-slate-500 shrink-0">
+                            country net {c.netLocal >= 0 ? '+' : '−'}{money(c.netLocal, c.currency)}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-600 italic">
+                        Assign a bank for {c.name} in the review dialog to route its settlement.
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+
+              {settlement.bankTransfers.length > 0 && (
+                <div className="space-y-1.5 pt-3 border-t border-slate-800">
+                  <div className="text-xs font-semibold text-slate-400">Between banks</div>
+                  <div className="divide-y divide-slate-800/60">
+                    {settlement.bankTransfers.map((t) => {
+                      const settled = Boolean(markFor(t.legId));
+                      return (
+                        <div key={t.legId} className="flex items-center justify-between py-2 text-sm gap-3">
+                          <span className="flex items-center gap-2.5 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={settled}
+                              disabled={markBusy}
+                              onChange={() =>
+                                toggleMark(t.legId, () => ({
+                                  session_id: sessionId,
+                                  leg_id: t.legId,
+                                  scope: 'bank',
+                                  country: countryOfBankKey(t.fromKey),
+                                  party_key: pidByKey.get(t.fromKey) || t.fromKey,
+                                  party_name: t.from,
+                                  counterparty_key: pidByKey.get(t.toKey) || t.toKey,
+                                  counterparty_name: t.to,
+                                  direction: 'bank',
+                                  amount_cad: t.amount,
+                                  amount_local:
+                                    settlement.cadToUsd !== 1 ? t.amount * settlement.cadToUsd : t.amount,
+                                  currency: 'CAD',
+                                  session_date: startDate || null
+                                }))
+                              }
+                              className="w-4 h-4 accent-emerald-500 shrink-0"
+                            />
+                            <span className={`truncate ${settled ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                              {t.from} <span className="text-slate-600">→</span> {t.to}
+                            </span>
+                          </span>
+                          <span className={`shrink-0 ${settled ? 'text-slate-600' : 'text-slate-200'}`}>
+                            {settled ? (
+                              'settled'
+                            ) : (
+                              <>
+                                {money(t.amount, 'CAD')}
+                                {settlement.cadToUsd !== 1 && (
+                                  <span className="text-slate-600"> ({money(t.amount * settlement.cadToUsd, 'USD')})</span>
+                                )}
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
