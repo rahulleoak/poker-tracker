@@ -84,6 +84,34 @@ export function calculateSettlement({
             zones[p.currency].net += p.fiatAmount;
         });
 
+        // Auto-elect a fallback bank buddy for any zone that has players but no designated banker.
+        // This ensures strict mode and international-only modes can function consistently and mathematically correct
+        // without bypassing normal routing or treating regular players as individual cross-border clearance points.
+        Object.values(zones).forEach(zone => {
+            if (!zone.bankBuddy && zone.players.length > 0) {
+                let bestCandidate = zone.players[0];
+                let maxBuyIn = -1;
+                
+                zone.players.forEach(p => {
+                    const originalEntry = safeEntries[p.id];
+                    const buyIn = originalEntry ? (Number(originalEntry.buyIn) || 0) : 0;
+                    if (buyIn > maxBuyIn) {
+                        maxBuyIn = buyIn;
+                        bestCandidate = p;
+                    }
+                });
+                
+                zone.bankBuddy = bestCandidate.name;
+                
+                // Keep the isBank flag synced for calculations
+                const bbPlayer = zone.players.find(p => p.name === bestCandidate.name);
+                if (bbPlayer) bbPlayer.isBank = true;
+                
+                const origPlayer = playersFiat.find(p => p.name === bestCandidate.name);
+                if (origPlayer) origPlayer.isBank = true;
+            }
+        });
+
         const interZoneDebtors = [];
         const interZoneCreditors = [];
 
