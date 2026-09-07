@@ -4,7 +4,8 @@ export function calculateSettlement({
   gameCurrency = 'USD',
   settlementCurrency = 'USD',
   exchangeRates,
-  useBankBuddies
+  useBankBuddies,
+  bankSettlementMode = 'strict'
 }) {
   let tBuyIn = 0;
   let tCashOut = 0;
@@ -102,7 +103,17 @@ export function calculateSettlement({
         }
 
         Object.values(zones).forEach(zone => {
-            if (zone.bankBuddy) { 
+            if (zone.bankBuddy && bankSettlementMode === 'strict') {
+                zone.players.forEach(p => {
+                    if (p.name === zone.bankBuddy) return;
+                    
+                    if (p.fiatAmount < -0.01) {
+                        trans.push({ from: p.name, to: zone.bankBuddy, amount: Math.abs(p.fiatAmount), type: 'Bank-Settlement' });
+                    } else if (p.fiatAmount > 0.01) {
+                        trans.push({ from: zone.bankBuddy, to: p.name, amount: p.fiatAmount, type: 'Bank-Settlement' });
+                    }
+                });
+            } else if (bankSettlementMode === 'international-only') {
                 let intraDebtors = zone.players.filter(p => p.fiatAmount < -0.01).map(p => ({...p, amount: Math.abs(p.fiatAmount)})).sort((a,b) => b.amount - a.amount);
                 let intraCreditors = zone.players.filter(p => p.fiatAmount > 0.01).map(p => ({...p, amount: p.fiatAmount})).sort((a,b) => b.amount - a.amount);
 
