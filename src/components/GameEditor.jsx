@@ -26,7 +26,11 @@ import InfoTooltip from './InfoTooltip';
 
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-export default function GameEditor({ 
+export default function GameEditor(props) {
+  return <GameEditorInner key={props.game?.id} {...props} />;
+}
+
+function GameEditorInner({ 
   game, 
   globalIncrement = 100, 
   setGlobalIncrement, 
@@ -38,12 +42,27 @@ export default function GameEditor({
   onBack, 
   onDelete 
 }) {
+  // --- RESET STATE WHEN GAME PROP CHANGES ---
+  const sanitizeEntries = (entries, currency) => {
+    const seenBanks = {};
+    return entries.map(entry => {
+      const entryCurrency = entry.currency || currency;
+      if (entry.isBank) {
+        if (seenBanks[entryCurrency]) {
+          return { ...entry, isBank: false };
+        }
+        seenBanks[entryCurrency] = true;
+      }
+      return entry;
+    });
+  };
+
   // Local state to manage edits without hitting DB on every keystroke
   const [date, setDate] = useState(() => game?.date || new Date().toISOString().split('T')[0]);
   const [gameCurrency, setGameCurrency] = useState(() => game?.currency || 'USD');
   const [isActive, setIsActive] = useState(() => game?.isActive !== false);
   const [pokerNowUrl, setPokerNowUrl] = useState(() => game?.pokerNowUrl || '');
-  const [entries, setEntries] = useState(() => Array.isArray(game?.entries) ? game.entries : []);
+  const [entries, setEntries] = useState(() => sanitizeEntries(Array.isArray(game?.entries) ? game.entries : [], game.currency || 'USD'));
   
   const [ratioChips, setRatioChips] = useState(() => {
     const chipVal = Number(game?.chipValue) || 1;
@@ -80,48 +99,6 @@ export default function GameEditor({
   const [popoverNewName, setPopoverNewName] = useState('');
   const [linkLoading, setLinkLoading] = useState(false);
   const [linkError, setLinkError] = useState(null);
-
-  // --- RESET STATE WHEN GAME PROP CHANGES ---
-  const sanitizeEntries = (entries, currency) => {
-    const seenBanks = {};
-    return entries.map(entry => {
-      const entryCurrency = entry.currency || currency;
-      if (entry.isBank) {
-        if (seenBanks[entryCurrency]) {
-          return { ...entry, isBank: false };
-        }
-        seenBanks[entryCurrency] = true;
-      }
-      return entry;
-    });
-  };
-
-  useEffect(() => {
-    if (!game) return;
-    setGameCurrency(game.currency || 'USD');
-    setIsActive(game.isActive !== false);
-    setPokerNowUrl(game.pokerNowUrl || '');
-    setEntries(sanitizeEntries(Array.isArray(game.entries) ? game.entries : [], game.currency || 'USD'));
-    setSettlementCurrency(game.currency || 'USD');
-
-    const chipVal = Number(game.chipValue) || 1;
-    if (chipVal === 1) {
-      setRatioChips(1);
-      setRatioFiat(1);
-    } else if (chipVal > 0) {
-      const inv = 1 / chipVal;
-      if (Math.abs(inv - Math.round(inv)) < 0.001) {
-        setRatioChips(Math.round(inv));
-        setRatioFiat(1);
-      } else {
-        setRatioChips(1000);
-        setRatioFiat(Number((chipVal * 1000).toFixed(2)));
-      }
-    } else {
-      setRatioChips(1000);
-      setRatioFiat(1);
-    }
-  }, [game?.id, game?.chipValue]);
 
   // --- AUTO-SAVE EFFECT ---
   const isMounted = useRef(false);
