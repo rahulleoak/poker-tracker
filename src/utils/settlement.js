@@ -1,23 +1,3 @@
-/**
- * Calculates the settlement for a game session.
- * 
- * @param {Object} options
- * @param {Array} options.entries - The list of player entries.
- * @param {number} options.chipValue - The value of a single chip.
- * @param {string} options.gameCurrency - The currency used in the game.
- * @param {string} options.settlementCurrency - The currency for the final settlement.
- * @param {Object} [options.exchangeRates] - Exchange rates for currencies.
- * @param {boolean} [options.useBankBuddies] - Whether to use bank buddies.
- * @param {string} [options.bankSettlementMode='strict'] - The settlement mode ('strict' or 'international-only').
- * 
- * @returns {Object} Settlement results:
- *   - totalBuyIn: Total buy-in amount.
- *   - totalCashOut: Total cash-out amount.
- *   - isBalanced: Whether the game is balanced.
- *   - settlements: List of settlements.
- *   - chipsOnTable: Net chips on the table.
- *   - validationErrors: List of validation errors (e.g., multiple banks).
- */
 export function calculateSettlement({
   entries = [],
   chipValue = 1,
@@ -53,7 +33,6 @@ export function calculateSettlement({
   const balanced = tBuyIn === tCashOut && tBuyIn > 0;
   const chipsOnTable = tBuyIn - tCashOut;
   let trans = [];
-  const validationErrors = [];
 
   if (balanced) {
     const fxRate = (exchangeRates && exchangeRates[settlementCurrency] && exchangeRates[gameCurrency]) 
@@ -74,41 +53,41 @@ export function calculateSettlement({
         playersFiat.forEach(p => {
             if (!zones[p.currency]) zones[p.currency] = { currency: p.currency, players: [], bankBuddy: null, net: 0 };
             zones[p.currency].players.push({...p}); 
-            if (p.isBank) {
-                if (zones[p.currency].bankBuddy) {
-                    validationErrors.push(`Multiple banks detected for currency ${p.currency}: ${zones[p.currency].bankBuddy} and ${p.name}`);
-                } else {
-                    zones[p.currency].bankBuddy = p.name;
-                }
-            }
+            if (p.isBank && !zones[p.currency].bankBuddy) zones[p.currency].bankBuddy = p.name;
             zones[p.currency].net += p.fiatAmount;
         });
 
-        // Auto-elect a fallback bank buddy for any zone that has players but no designated banker.
-        // This ensures strict mode and international-only modes can function consistently and mathematically correct
-        // without bypassing normal routing or treating regular players as individual cross-border clearance points.
+        // Phase 1: Pre-settle currency zones locally if they have NO bank buddy, 
+        // or if the mode is 'international-only'. This resolves same-currency debts
+        // first, leaving only the actual residual zone imbalance for the cross-border phase.
         Object.values(zones).forEach(zone => {
-            if (!zone.bankBuddy && zone.players.length > 0) {
-                let bestCandidate = zone.players[0];
-                let maxBuyIn = -1;
-                
-                zone.players.forEach(p => {
-                    const originalEntry = safeEntries[p.id];
-                    const buyIn = originalEntry ? (Number(originalEntry.buyIn) || 0) : 0;
-                    if (buyIn > maxBuyIn) {
-                        maxBuyIn = buyIn;
-                        bestCandidate = p;
+            const runLocalFirst = !zone.bankBuddy || bankSettlementMode === 'international-only';
+            if (runLocalFirst) {
+                let intraDebtors = zone.players.filter(p => p.fiatAmount < -0.01).map(p => ({...p, amount: Math.abs(p.fiatAmount)})).sort((a,b) => b.amount - a.amount);
+                let intraCreditors = zone.players.filter(p => p.fiatAmount > 0.01).map(p => ({...p, amount: p.fiatAmount})).sort((a,b) => b.amount - a.amount);
+
+                let iD = 0; let iC = 0;
+                while(iD < intraDebtors.length && iC < intraCreditors.length) {
+                    let debtor = intraDebtors[iD];
+                    let creditor = intraCreditors[iC];
+                    let amount = Math.min(debtor.amount, creditor.amount);
+                    
+                    if (amount > 0.01) {
+                        trans.push({ from: debtor.name, to: creditor.name, amount, type: 'Local' });
+                        
+                        // Keep residual amounts updated for subsequent cross-border matching
+                        const dp = zone.players.find(p => p.name === debtor.name);
+                        if (dp) dp.fiatAmount += amount;
+                        
+                        const cp = zone.players.find(p => p.name === creditor.name);
+                        if (cp) cp.fiatAmount -= amount;
                     }
-                });
-                
-                zone.bankBuddy = bestCandidate.name;
-                
-                // Keep the isBank flag synced for calculations
-                const bbPlayer = zone.players.find(p => p.name === bestCandidate.name);
-                if (bbPlayer) bbPlayer.isBank = true;
-                
-                const origPlayer = playersFiat.find(p => p.name === bestCandidate.name);
-                if (origPlayer) origPlayer.isBank = true;
+                    debtor.amount -= amount;
+                    creditor.amount -= amount;
+                    
+                    if (debtor.amount < 0.01) iD++;
+                    if (creditor.amount < 0.01) iC++;
+                }
             }
         });
 
@@ -120,6 +99,7 @@ export function calculateSettlement({
                 if (zone.net < -0.01) interZoneDebtors.push({ name: zone.bankBuddy, amount: Math.abs(zone.net) });
                 else if (zone.net > 0.01) interZoneCreditors.push({ name: zone.bankBuddy, amount: zone.net });
             } else {
+                // Zone has no bank buddy. Push players' residual imbalances after local resolution.
                 zone.players.forEach(p => {
                     if (p.fiatAmount < -0.01) interZoneDebtors.push({ name: p.name, amount: Math.abs(p.fiatAmount) });
                     else if (p.fiatAmount > 0.01) interZoneCreditors.push({ name: p.name, amount: p.fiatAmount });
@@ -130,6 +110,7 @@ export function calculateSettlement({
         interZoneDebtors.sort((a,b) => b.amount - a.amount);
         interZoneCreditors.sort((a,b) => b.amount - a.amount);
 
+        // Phase 2: Cross-Border Transactions (Only Bank Buddies or residual non-bank players settle)
         let d = 0; let c = 0;
         while(d < interZoneDebtors.length && c < interZoneCreditors.length) {
             let debtor = interZoneDebtors[d];
@@ -151,12 +132,21 @@ export function calculateSettlement({
                     const bb = z.players.find(p => p.name === creditor.name);
                     if (bb) bb.fiatAmount -= amount;
                 }
+                // Also adjust the residual fiatAmount for players in bank-less zones
+                if (!z.bankBuddy) {
+                    const dp = z.players.find(p => p.name === debtor.name);
+                    if (dp) dp.fiatAmount += amount;
+                    
+                    const cp = z.players.find(p => p.name === creditor.name);
+                    if (cp) cp.fiatAmount -= amount;
+                }
             });
 
             if (debtor.amount < 0.01) d++;
             if (creditor.amount < 0.01) c++;
         }
 
+        // Phase 3: Intra-Zone Bank-Settlement (Only for strict mode zones with explicit bank buddies)
         Object.values(zones).forEach(zone => {
             if (zone.bankBuddy && bankSettlementMode === 'strict') {
                 zone.players.forEach(p => {
@@ -168,25 +158,6 @@ export function calculateSettlement({
                         trans.push({ from: zone.bankBuddy, to: p.name, amount: p.fiatAmount, type: 'Bank-Settlement' });
                     }
                 });
-            } else if (bankSettlementMode === 'international-only') {
-                let intraDebtors = zone.players.filter(p => p.fiatAmount < -0.01).map(p => ({...p, amount: Math.abs(p.fiatAmount)})).sort((a,b) => b.amount - a.amount);
-                let intraCreditors = zone.players.filter(p => p.fiatAmount > 0.01).map(p => ({...p, amount: p.fiatAmount})).sort((a,b) => b.amount - a.amount);
-
-                let iD = 0; let iC = 0;
-                while(iD < intraDebtors.length && iC < intraCreditors.length) {
-                    let debtor = intraDebtors[iD];
-                    let creditor = intraCreditors[iC];
-                    let amount = Math.min(debtor.amount, creditor.amount);
-                    
-                    if (amount > 0.01) {
-                        trans.push({ from: debtor.name, to: creditor.name, amount, type: 'Local' });
-                    }
-                    debtor.amount -= amount;
-                    creditor.amount -= amount;
-                    
-                    if (debtor.amount < 0.01) iD++;
-                    if (creditor.amount < 0.01) iC++;
-                }
             }
         });
 
@@ -213,5 +184,5 @@ export function calculateSettlement({
     }
   }
 
-  return { totalBuyIn: tBuyIn, totalCashOut: tCashOut, isBalanced: balanced, settlements: trans, chipsOnTable, validationErrors };
+  return { totalBuyIn: tBuyIn, totalCashOut: tCashOut, isBalanced: balanced, settlements: trans, chipsOnTable };
 }

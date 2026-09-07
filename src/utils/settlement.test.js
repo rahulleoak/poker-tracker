@@ -61,11 +61,11 @@ test('Bank Buddy - Strict Mode with Explicit Banks', () => {
   assert.strictEqual(bobSettle.from, 'Bob_Bank');
 });
 
-test('Bank Buddy - Strict Mode with Auto-Elected Fallback Banks', () => {
+test('Bank Buddy - Strict Mode with Bank-Less Currency Zone', () => {
   const entries = [
     { name: 'Alice', buyIn: 100, buyOut: 0, stack: 0, currency: 'CAD', isBank: false },
-    { name: 'Charlie', buyIn: 50, buyOut: 0, stack: 70, currency: 'CAD', isBank: false }, // Alice has higher buy-in, so she should be elected bank
-    { name: 'Bob', buyIn: 100, buyOut: 0, stack: 180, currency: 'USD', isBank: false } // Bob should be elected bank for USD
+    { name: 'Charlie', buyIn: 50, buyOut: 0, stack: 70, currency: 'CAD', isBank: false }, // Alice & Charlie in CAD (no bank)
+    { name: 'Bob_Bank', buyIn: 100, buyOut: 0, stack: 180, currency: 'USD', isBank: true }  // Bob is bank for USD
   ];
 
   const result = calculateSettlement({
@@ -79,24 +79,27 @@ test('Bank Buddy - Strict Mode with Auto-Elected Fallback Banks', () => {
 
   assert.strictEqual(result.isBalanced, true);
 
-  // Cross-Border should be between elected banks (Alice and Bob)
+  // 1. Local pre-settling should happen in the bank-less CAD zone first:
+  // Alice (net -100) pays Charlie (net +20) 0 locally
+  const localSettlements = result.settlements.filter(tx => tx.type === 'Local');
+  assert.strictEqual(localSettlements.length, 1);
+  assert.deepStrictEqual(localSettlements[0], { from: 'Alice', to: 'Charlie', amount: 20, type: 'Local' });
+
+  // 2. Only Alice's remaining residual CAD debt (0) is settled cross-border with USD's Bank_Bank
   const crossBorder = result.settlements.filter(tx => tx.type === 'Cross-Border');
   assert.strictEqual(crossBorder.length, 1);
-  assert.strictEqual(crossBorder[0].from, 'Alice');
-  assert.strictEqual(crossBorder[0].to, 'Bob');
-  assert.strictEqual(crossBorder[0].amount, 80);
+  assert.deepStrictEqual(crossBorder[0], { from: 'Alice', to: 'Bob_Bank', amount: 80, type: 'Cross-Border' });
 
-  // Local players settle with their elected bank, no non-bank players are treated as banks
+  // No player is assigned a fallback 'bankBuddy' string in the results or forced into a bank role.
   const bankSettlements = result.settlements.filter(tx => tx.type === 'Bank-Settlement');
-  assert.strictEqual(bankSettlements.length, 1); // Only Charlie settles with Alice locally (since Bob is bank)
-  assert.deepStrictEqual(bankSettlements[0], { from: 'Alice', to: 'Charlie', amount: 20, type: 'Bank-Settlement' });
+  assert.strictEqual(bankSettlements.length, 0); // No Bank-Settlement transactions in CAD because there is no bank buddy!
 });
 
-test('Bank Buddy - International-Only Mode with Auto-Elected', () => {
+test('Bank Buddy - International-Only Mode', () => {
   const entries = [
     { name: 'Alice', buyIn: 100, buyOut: 0, stack: 0, currency: 'CAD', isBank: false },
     { name: 'Charlie', buyIn: 50, buyOut: 0, stack: 70, currency: 'CAD', isBank: false },
-    { name: 'Bob', buyIn: 100, buyOut: 0, stack: 180, currency: 'USD', isBank: false }
+    { name: 'Bob_Bank', buyIn: 100, buyOut: 0, stack: 180, currency: 'USD', isBank: true }
   ];
 
   const result = calculateSettlement({
@@ -110,14 +113,12 @@ test('Bank Buddy - International-Only Mode with Auto-Elected', () => {
 
   assert.strictEqual(result.isBalanced, true);
 
-  // Cross-Border between elected banks
+  // Cross-Border CAD -> USD
   const crossBorder = result.settlements.filter(tx => tx.type === 'Cross-Border');
   assert.strictEqual(crossBorder.length, 1);
-  assert.strictEqual(crossBorder[0].from, 'Alice');
-  assert.strictEqual(crossBorder[0].to, 'Bob');
-  assert.strictEqual(crossBorder[0].amount, 80);
+  assert.deepStrictEqual(crossBorder[0], { from: 'Alice', to: 'Bob_Bank', amount: 80, type: 'Cross-Border' });
 
-  // Local settlements between non-banks in the same zone
+  // Local settlements between non-banks in CAD
   const localSettlements = result.settlements.filter(tx => tx.type === 'Local');
   assert.strictEqual(localSettlements.length, 1);
   assert.deepStrictEqual(localSettlements[0], { from: 'Alice', to: 'Charlie', amount: 20, type: 'Local' });
