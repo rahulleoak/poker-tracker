@@ -54,18 +54,22 @@ export default function CumulativeNetChart({ parsed }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
-  const { players, snapshots } = parsed;
-  const playerIds = useMemo(() => [...players.keys()], [players]);
-  const n = snapshots.length;
+  const players = parsed?.players instanceof Map ? parsed.players : null;
+  const snapshots = Array.isArray(parsed?.snapshots) ? parsed.snapshots : null;
+
+  const playerIds = useMemo(() => (players ? [...players.keys()] : []), [players]);
+  const n = snapshots ? snapshots.length : 0;
 
   // Color and nickname are assigned from the full roster so a slot never
   // shifts when a player is hidden or isolated.
   const colorById = useMemo(() => {
+    if (!players) return new Map();
     const m = new Map();
     playerIds.forEach((id, idx) => m.set(id, SERIES_COLORS[idx % SERIES_COLORS.length]));
     return m;
-  }, [playerIds]);
+  }, [playerIds, players]);
   const nicknameById = useMemo(() => {
+    if (!players) return new Map();
     const m = new Map();
     for (const id of playerIds) {
       const p = players.get(id);
@@ -90,6 +94,7 @@ export default function CumulativeNetChart({ parsed }) {
   // Rescale to whoever is currently visible, so isolating a player zooms in
   // on their range instead of leaving them flat against the full session's scale.
   const { yMin, yMax } = useMemo(() => {
+    if (!snapshots) return { yMin: 0, yMax: 0 };
     let min = 0;
     let max = 0;
     for (const s of snapshots) {
@@ -115,6 +120,7 @@ export default function CumulativeNetChart({ parsed }) {
   const yScale = (v) => MARGIN.top + (1 - (v - yMin) / (yMax - yMin)) * PLOT_H;
 
   const lines = useMemo(() => {
+    if (!snapshots) return [];
     return visibleIds.map((id) => {
       const nickname = nicknameById.get(id);
       const color = colorById.get(id);
@@ -168,8 +174,8 @@ export default function CumulativeNetChart({ parsed }) {
     setHoverIndex(idx);
   };
 
-  if (playerIds.length === 0 || n < 2) {
-    return <p className="text-sm text-slate-500 px-4 py-6">Not enough hand data yet to chart.</p>;
+  if (!players || !snapshots || snapshots.length === 0) {
+    return <p className="text-sm text-slate-500 px-4 py-6">Chart data unavailable.</p>;
   }
 
   const hoverSnapshot = hoverIndex !== null ? snapshots[hoverIndex] : null;
