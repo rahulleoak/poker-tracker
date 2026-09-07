@@ -1,3 +1,4 @@
+/* global process */
 const ledgerUrl = (gameId) => `https://www.pokernow.com/games/${gameId}/ledger_${gameId}.csv`;
 
 export function extractGameId(input) {

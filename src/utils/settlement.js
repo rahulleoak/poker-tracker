@@ -1,3 +1,23 @@
+/**
+ * Calculates the settlement for a game session.
+ * 
+ * @param {Object} options
+ * @param {Array} options.entries - The list of player entries.
+ * @param {number} options.chipValue - The value of a single chip.
+ * @param {string} options.gameCurrency - The currency used in the game.
+ * @param {string} options.settlementCurrency - The currency for the final settlement.
+ * @param {Object} [options.exchangeRates] - Exchange rates for currencies.
+ * @param {boolean} [options.useBankBuddies] - Whether to use bank buddies.
+ * @param {string} [options.bankSettlementMode='strict'] - The settlement mode ('strict' or 'international-only').
+ * 
+ * @returns {Object} Settlement results:
+ *   - totalBuyIn: Total buy-in amount.
+ *   - totalCashOut: Total cash-out amount.
+ *   - isBalanced: Whether the game is balanced.
+ *   - settlements: List of settlements.
+ *   - chipsOnTable: Net chips on the table.
+ *   - validationErrors: List of validation errors (e.g., multiple banks).
+ */
 export function calculateSettlement({
   entries = [],
   chipValue = 1,
@@ -33,6 +53,7 @@ export function calculateSettlement({
   const balanced = tBuyIn === tCashOut && tBuyIn > 0;
   const chipsOnTable = tBuyIn - tCashOut;
   let trans = [];
+  const validationErrors = [];
 
   if (balanced) {
     const fxRate = (exchangeRates && exchangeRates[settlementCurrency] && exchangeRates[gameCurrency]) 
@@ -53,7 +74,13 @@ export function calculateSettlement({
         playersFiat.forEach(p => {
             if (!zones[p.currency]) zones[p.currency] = { currency: p.currency, players: [], bankBuddy: null, net: 0 };
             zones[p.currency].players.push({...p}); 
-            if (p.isBank && !zones[p.currency].bankBuddy) zones[p.currency].bankBuddy = p.name;
+            if (p.isBank) {
+                if (zones[p.currency].bankBuddy) {
+                    validationErrors.push(`Multiple banks detected for currency ${p.currency}: ${zones[p.currency].bankBuddy} and ${p.name}`);
+                } else {
+                    zones[p.currency].bankBuddy = p.name;
+                }
+            }
             zones[p.currency].net += p.fiatAmount;
         });
 
@@ -158,5 +185,5 @@ export function calculateSettlement({
     }
   }
 
-  return { totalBuyIn: tBuyIn, totalCashOut: tCashOut, isBalanced: balanced, settlements: trans, chipsOnTable };
+  return { totalBuyIn: tBuyIn, totalCashOut: tCashOut, isBalanced: balanced, settlements: trans, chipsOnTable, validationErrors };
 }

@@ -1,3 +1,4 @@
+/* global process */
 function parseCSVLine(line) {
   const result = [];
   let current = '';

@@ -75,7 +75,7 @@ export default function PlayerProfile({ playerName, games = [], exchangeRates, g
       threeBetOpps,
       threeBetHands
     };
-  }, [playerName, games]);
+  }, [playerName, games, getPlayerDisplayName]);
 
   const totalNet = playerHistory.reduce((sum, s) => sum + (s?.netFiat || 0), 0);
   const totalBuyIn = playerHistory.reduce((sum, s) => sum + (s?.buyInFiat || 0), 0);

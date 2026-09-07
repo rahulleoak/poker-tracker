@@ -93,6 +93,7 @@ export function AppContent() {
   }, []);
 
   useEffect(() => {
+    /* eslint-disable-next-line */
     fetchPlayersAndLinks();
   }, [games.length, fetchPlayersAndLinks]);
 
