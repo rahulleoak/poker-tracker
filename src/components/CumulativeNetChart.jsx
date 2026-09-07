@@ -54,6 +54,10 @@ export default function CumulativeNetChart({ parsed }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
 
+  if (!parsed || !parsed.players || !parsed.snapshots || parsed.snapshots.length === 0) {
+    return <p className="text-sm text-slate-500 px-4 py-6">Chart data unavailable.</p>;
+  }
+
   const { players, snapshots } = parsed;
   const playerIds = useMemo(() => [...players.keys()], [players]);
   const n = snapshots.length;
