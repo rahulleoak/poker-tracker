@@ -40,8 +40,12 @@ CREATE INDEX IF NOT EXISTS idx_ledger_session_id ON public.ledger(session_id);
 CREATE TABLE IF NOT EXISTS public.players (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     display_name TEXT NOT NULL UNIQUE,
+    country TEXT,                          -- 'CA' | 'US' (see src/utils/countries.js); null = unset
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Additive for deployments created before the country column existed.
+ALTER TABLE public.players ADD COLUMN IF NOT EXISTS country TEXT;
 
 CREATE TABLE IF NOT EXISTS public.player_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -213,3 +217,44 @@ DROP POLICY IF EXISTS "settlement_marks readable by everyone" ON public.settleme
 CREATE POLICY "settlement_marks readable by everyone" ON public.settlement_marks FOR SELECT USING (true);
 DROP POLICY IF EXISTS "settlement_marks writable by anyone" ON public.settlement_marks;
 CREATE POLICY "settlement_marks writable by anyone" ON public.settlement_marks FOR ALL USING (true) WITH CHECK (true);
+
+-- =========================================================================
+-- 9. ADMIN SESSION LEGS  (see design/banks-settlement.md)
+--    Denormalised settlement breakdown: one row per checkable unit
+--    (`computeBankSettlement` playerTransfer / bankTransfer), written at
+--    session-save time by sessionApi so the /settlement roll-up is one indexed
+--    query instead of re-parsing every session's entries. Derived data —
+--    regenerated wholesale on every (re)save, never hand-edited. Not gated.
+-- =========================================================================
+CREATE TABLE IF NOT EXISTS public.admin_session_legs (
+    session_id      TEXT NOT NULL REFERENCES public.admin_sessions(id) ON DELETE CASCADE,
+    leg_id          TEXT NOT NULL,               -- 'player:<key>' | 'bank:<from>><to>'
+    scope           TEXT NOT NULL,               -- 'player' | 'bank'
+    country         TEXT,                        -- player: the bank's country; bank: the debtor country
+    counter_country TEXT,                        -- bank scope only: the creditor country
+
+    party_key       TEXT NOT NULL,               -- master playerId when resolved, else keyOfEntry
+    party_name      TEXT,                        -- display fallback (names resolve live otherwise)
+    bank_key        TEXT,                        -- the banker's playerId / key at save time
+    bank_name       TEXT,
+    direction       TEXT NOT NULL,               -- 'to_bank' | 'from_bank' | 'bank'
+
+    amount_cad      NUMERIC NOT NULL,            -- canonical
+    amount_local    NUMERIC NOT NULL,            -- converted at THIS session's fx
+    currency        TEXT NOT NULL,
+    session_date    DATE,
+
+    PRIMARY KEY (session_id, leg_id)
+);
+
+CREATE INDEX IF NOT EXISTS admin_session_legs_country_idx
+  ON public.admin_session_legs (country, scope);
+CREATE INDEX IF NOT EXISTS admin_session_legs_party_idx
+  ON public.admin_session_legs (party_key);
+
+ALTER TABLE public.admin_session_legs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "admin_session_legs readable by everyone" ON public.admin_session_legs;
+CREATE POLICY "admin_session_legs readable by everyone" ON public.admin_session_legs FOR SELECT USING (true);
+DROP POLICY IF EXISTS "admin_session_legs writable by anyone" ON public.admin_session_legs;
+CREATE POLICY "admin_session_legs writable by anyone" ON public.admin_session_legs FOR ALL USING (true) WITH CHECK (true);

@@ -23,8 +23,10 @@ function greedyMatch(nodes) {
         legId: `bank:${d.key}>${c.key}`,
         fromKey: d.key,
         from: d.name,
+        fromCountry: d.country || null,
         toKey: c.key,
         to: c.name,
+        toCountry: c.country || null,
         amount
       });
     }
@@ -125,9 +127,9 @@ export function computeBankSettlement({ entries = [], countryByKey = {}, bankByC
           playerTransfers.push({ ...common, direction: 'to_bank', fromKey: m.key, from: m.name, toKey: bankKey, to: bankUnit.name, amount: -m.netCad, amountLocal: -m.netCad * fx });
         }
       }
-      interNodes.push({ key: bankKey, name: bankUnit.name, amount: countryNet });
+      interNodes.push({ key: bankKey, name: bankUnit.name, amount: countryNet, country: code });
     } else {
-      for (const m of members) interNodes.push({ key: m.key, name: m.name, amount: m.netCad });
+      for (const m of members) interNodes.push({ key: m.key, name: m.name, amount: m.netCad, country: code });
     }
   }
 

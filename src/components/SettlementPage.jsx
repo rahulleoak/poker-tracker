@@ -36,7 +36,7 @@ export default function SettlementPage() {
   const { players } = useIdentityGraph();
   const nameOf = useMemo(() => makeNameResolver(players), [players]);
 
-  const [sessions, setSessions] = useState([]);
+  const [legs, setLegs] = useState([]);
   const [marks, setMarks] = useState([]);
   const [state, setState] = useState('loading'); // loading | ready | error
   const [busy, setBusy] = useState(false);
@@ -49,10 +49,13 @@ export default function SettlementPage() {
   useEffect(() => {
     let cancelled = false;
     setState('loading');
-    Promise.all([sessionApi.listForSettlement(), sessionApi.listMarks()])
-      .then(([s, m]) => {
+    sessionApi
+      .ensureLegs()
+      .catch((err) => console.warn('ensureLegs failed:', err))
+      .then(() => Promise.all([sessionApi.listLegs(), sessionApi.listMarks()]))
+      .then(([l, m]) => {
         if (cancelled) return;
-        setSessions(Array.isArray(s) ? s : []);
+        setLegs(Array.isArray(l) ? l : []);
         setMarks(Array.isArray(m) ? m : []);
         setState('ready');
       })
@@ -112,9 +115,9 @@ export default function SettlementPage() {
   const perCountry = useMemo(
     () =>
       COUNTRIES.map((c) =>
-        buildCountrySettlement({ sessions, marks, countryCode: c.code, nameOf })
+        buildCountrySettlement({ legs, marks, countryCode: c.code, nameOf })
       ),
-    [sessions, marks, nameOf]
+    [legs, marks, nameOf]
   );
 
   const detail = code ? perCountry.find((c) => c.countryCode === code) : null;
@@ -252,7 +255,7 @@ function IndexView({ countries }) {
 
 function DetailView({ data, marks, nameOf, busy, onSettleRows, onUndoIds }) {
   const resolve = typeof nameOf === 'function' ? nameOf : () => null;
-  const { countryCode, currency, bankName, players, bankLines, cadToUsd } = data;
+  const { countryCode, currency, bankName, players, bankLines } = data;
 
   const markIdFor = useCallback(
     (sessionId, legId) => {
@@ -307,7 +310,7 @@ function DetailView({ data, marks, nameOf, busy, onSettleRows, onUndoIds }) {
           counterparty_name: line.to,
           direction: 'bank',
           amount_cad: line.amountCad,
-          amount_local: cadToUsd !== 1 ? line.amountCad * cadToUsd : line.amountCad,
+          amount_local: line.amountLocal ?? line.amountCad,
           currency: 'CAD',
           session_date: line.date
         }

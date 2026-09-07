@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Download } from 'lucide-react';
+import { Download, Copy, Check, ArrowLeft } from 'lucide-react';
 import { loadSessionCsv } from '../utils/storage';
 import { extractSessionStartDate } from '../utils/pokernow-utils/sessionMeta';
 import { computeBankSettlement, keyOfEntry } from '../utils/bankSettlement';
@@ -10,6 +10,7 @@ import { fromChartData } from '../utils/chartData';
 import { sessionApi } from '../utils/sessionApi';
 import { useIdentityGraph } from '../hooks/useIdentityGraph';
 import { makeNameResolver } from '../utils/adminIdentity';
+import { buildSettlementText } from '../utils/settlementText';
 import CumulativeNetChart from './CumulativeNetChart';
 
 const entryNet = (e) =>
@@ -250,6 +251,29 @@ export default function SessionPage() {
     [settlement]
   );
 
+  const [copied, setCopied] = useState(false);
+  const handleCopySettlement = useCallback(async () => {
+    if (!settlement) return;
+    const text = buildSettlementText(settlement, {
+      sessionId,
+      isSettled: (legId) => Boolean(markFor(legId))
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }, [settlement, sessionId, markFor]);
+
   const handCount = parsed?.snapshots.length ? parsed.snapshots.length - 1 : 0;
 
   const startDate =
@@ -276,6 +300,13 @@ export default function SessionPage() {
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans">
       <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-8">
         <header className="space-y-1">
+          <Link
+            to="/admin"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors mb-2"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            Admin
+          </Link>
           <p className="text-xs font-medium uppercase tracking-widest text-slate-500">Session</p>
           <h1 className="text-2xl font-bold text-emerald-400 font-mono tracking-tight break-all">{sessionId}</h1>
           {subtitle.length > 0 && (
@@ -371,6 +402,14 @@ export default function SessionPage() {
                 <span className="text-slate-500">
                   {settlement.chipsPerCad} chips = 1 CAD · 1 CAD = {settlement.cadToUsd} USD
                 </span>
+                <button
+                  onClick={handleCopySettlement}
+                  className="flex items-center gap-1 font-medium text-slate-400 hover:text-slate-200 shrink-0"
+                  title="Copy settlement as text"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
                 <Link to="/settlement" className="font-medium text-emerald-400 hover:text-emerald-300 shrink-0">
                   Cross-session ledger →
                 </Link>

@@ -25,6 +25,7 @@ import { useIdentityGraph } from '../hooks/useIdentityGraph';
 import { resolveEntryIdentity, ensureProfile, linkTokens } from '../utils/adminIdentity';
 import { stashSessionPreview } from '../utils/sessionHandoff';
 import AdminPlayerLinkDialog from './AdminPlayerLinkDialog';
+import PlayerEditor from './PlayerEditor';
 
 const generateFallbackId = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID
@@ -315,6 +316,7 @@ export default function AdminPage() {
     groups,
     profileAssignments,
     countryByKey,
+    profileCountryByKey = {},
     bankByCountry,
     chipsPerCad,
     cadToUsd
@@ -372,6 +374,16 @@ export default function AdminPage() {
         unitPlayerId[unitKey] = pid;
         const tokens = tokensForUnit(unitKey);
         if (tokens.length > 0) await linkTokens(pid, tokens, { playerLinks });
+        // The dialog locks a linked unit's country to its profile; if the profile
+        // had none (or was just created) the reviewer's pick is persisted here.
+        const wantCountry = profileCountryByKey[unitKey];
+        if (wantCountry) {
+          try {
+            await sessionApi.updatePlayer(pid, { country: wantCountry });
+          } catch (e) {
+            console.warn('Failed to set profile country:', e.message);
+          }
+        }
       }
       if (Object.keys(unitPlayerId).length > 0) refreshIdentity();
 
@@ -537,6 +549,19 @@ export default function AdminPage() {
               console.error('Failed to save bank default:', err);
               window.alert(err.message || 'Failed to save bank default.');
             }
+          }}
+        />
+
+        <PlayerEditor
+          players={players}
+          bankByCountry={bankDefaults}
+          onCreate={async ({ display_name, country }) => {
+            await sessionApi.createPlayer({ display_name, country });
+            refreshIdentity();
+          }}
+          onUpdate={async (id, patch) => {
+            await sessionApi.updatePlayer(id, patch);
+            refreshIdentity();
           }}
         />
         </div>

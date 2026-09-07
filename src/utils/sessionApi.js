@@ -3,13 +3,39 @@
 // Supabase directly with the anon key, same pattern as App.jsx / GameEditor.jsx.
 
 import { supabase } from './supabase';
+import { legsFromSession } from './settlementLedger';
 
 const LIST_COLUMNS =
   'id, date, currency, poker_now_url, player_count, hand_count, created_at, updated_at';
 
+const LEG_COLUMNS =
+  'session_id, leg_id, scope, country, counter_country, party_key, party_name, ' +
+  'bank_key, bank_name, direction, amount_cad, amount_local, currency, session_date';
+
+/** Replace a session's denormalised settlement legs (derived data). */
+async function rebuildLegs(sessionRow) {
+  if (!supabase || !sessionRow?.id) return;
+  const { error: delErr } = await supabase
+    .from('admin_session_legs')
+    .delete()
+    .eq('session_id', sessionRow.id);
+  if (delErr) {
+    console.warn('sessionApi: failed to clear session legs:', delErr.message);
+    return;
+  }
+  const legs = legsFromSession(sessionRow);
+  if (legs.length === 0) return;
+  const { error: insErr } = await supabase.from('admin_session_legs').insert(legs);
+  if (insErr) console.warn('sessionApi: failed to write session legs:', insErr.message);
+}
+
 /**
  * Insert or replace an admin session row. Upserts on the primary key so a
  * re-upload of the same PokerNow game overwrites rather than duplicating.
+ *
+ * A (re)save redefines the session's ledger + settlement config from scratch, so
+ * every settlement check-off for this id is dropped — settled or not. Marks are
+ * session-scoped state, not a league-wide fact.
  *
  * @param {Object} row - full `admin_sessions` row (see design doc for shape)
  * @returns {Promise<Object>} the stored row
@@ -22,6 +48,14 @@ async function create(row) {
     .select()
     .single();
   if (error) throw error;
+  if (row?.id) {
+    const { error: wipeErr } = await supabase
+      .from('settlement_marks')
+      .delete()
+      .eq('session_id', row.id);
+    if (wipeErr) console.warn('sessionApi.create: failed to clear settlement marks:', wipeErr.message);
+    await rebuildLegs(row);
+  }
   return data;
 }
 
@@ -89,22 +123,57 @@ async function remove(id) {
   // CSV is retained (see "Raw CSV (deferred)" in the design doc).
 }
 
-// --- Cross-session settlement (settlement_marks) ------------------------------
+// --- Cross-session settlement (admin_session_legs + settlement_marks) ---------
 
 /**
- * Every session's ledger + settlement config, minus the heavy `chart_data`
- * blob. Feeds the /settlement cross-session roll-up (see design doc).
+ * Denormalised settlement legs for the /settlement roll-up. One light indexed
+ * read — the heavy `chart_data` / `entries` blobs are never touched.
  *
- * @returns {Promise<Array<{ id, date, entries, settlement }>>}
+ * @returns {Promise<Array<Object>>}
  */
-async function listForSettlement() {
+async function listLegs() {
   if (!supabase) return [];
   const { data, error } = await supabase
-    .from('admin_sessions')
-    .select('id, date, entries, settlement')
-    .order('date', { ascending: false, nullsFirst: false });
+    .from('admin_session_legs')
+    .select(LEG_COLUMNS)
+    .order('session_date', { ascending: false, nullsFirst: false });
   if (error) throw error;
   return data || [];
+}
+
+/**
+ * Backfill / self-heal: build legs for any session that has none yet (rows
+ * saved before the legs table, or a prior write that failed). Cheap no-op once
+ * every session is covered.
+ *
+ * @returns {Promise<number>} sessions backfilled
+ */
+async function ensureLegs() {
+  if (!supabase) return 0;
+  const [sessRes, legRes] = await Promise.all([
+    supabase.from('admin_sessions').select('id'),
+    supabase.from('admin_session_legs').select('session_id')
+  ]);
+  if (sessRes.error || legRes.error) return 0;
+
+  const covered = new Set((legRes.data || []).map((r) => r.session_id));
+  const missing = (sessRes.data || []).map((r) => r.id).filter((id) => !covered.has(id));
+  if (missing.length === 0) return 0;
+
+  const { data: rows, error } = await supabase
+    .from('admin_sessions')
+    .select('id, date, entries, settlement')
+    .in('id', missing);
+  if (error) return 0;
+
+  let n = 0;
+  for (const row of rows || []) {
+    const legs = legsFromSession(row);
+    if (legs.length === 0) continue;
+    const { error: insErr } = await supabase.from('admin_session_legs').insert(legs);
+    if (!insErr) n += 1;
+  }
+  return n;
 }
 
 /**
@@ -183,6 +252,72 @@ async function setBankDefault(country, playerId) {
   if (error) throw error;
 }
 
+// --- Player profiles (players) ----------------------------------------------
+
+/**
+ * Every master player profile with its optional country association. Feeds the
+ * /admin Player editor; the identity graph hook is the read path everywhere else.
+ *
+ * @returns {Promise<Array<{ id: string, display_name: string, country: string|null }>>}
+ */
+async function listPlayers() {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from('players')
+    .select('id, display_name, country')
+    .order('display_name');
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Create a master player profile with an optional country association.
+ *
+ * @param {{ display_name: string, country?: string|null }} row
+ * @returns {Promise<{ id: string, display_name: string, country: string|null }>}
+ */
+async function createPlayer({ display_name, country = null } = {}) {
+  if (!supabase) throw new Error('Supabase is not configured (VITE_SUPABASE_URL / _ANON_KEY).');
+  const name = String(display_name || '').trim();
+  if (!name) throw new Error('A display name is required.');
+  const { data, error } = await supabase
+    .from('players')
+    .insert([{ display_name: name, country: country || null }])
+    .select('id, display_name, country')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Update a player's display name and/or country association. Only the keys
+ * present in `patch` are written.
+ *
+ * @param {string} id
+ * @param {{ display_name?: string, country?: string|null }} patch
+ * @returns {Promise<{ id: string, display_name: string, country: string|null }>}
+ */
+async function updatePlayer(id, patch = {}) {
+  if (!supabase) throw new Error('Supabase is not configured (VITE_SUPABASE_URL / _ANON_KEY).');
+  if (!id) throw new Error('A player id is required.');
+  const next = {};
+  if (patch.display_name != null) {
+    const name = String(patch.display_name).trim();
+    if (!name) throw new Error('A display name is required.');
+    next.display_name = name;
+  }
+  if ('country' in patch) next.country = patch.country || null;
+  if (Object.keys(next).length === 0) throw new Error('Nothing to update.');
+  const { data, error } = await supabase
+    .from('players')
+    .update(next)
+    .eq('id', id)
+    .select('id, display_name, country')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 // --- Raw CSV: scaffold only, not wired up (see "Raw CSV (deferred)") -----------
 
 /** @todo not wired up */
@@ -201,12 +336,16 @@ export const sessionApi = {
   list,
   exists,
   remove,
-  listForSettlement,
+  listLegs,
+  ensureLegs,
   listMarks,
   addMarks,
   undoMarks,
   listBankDefaults,
   setBankDefault,
+  listPlayers,
+  createPlayer,
+  updatePlayer,
   uploadRawCsv,
   downloadRawCsv,
 };

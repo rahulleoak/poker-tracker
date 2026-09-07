@@ -86,50 +86,71 @@ Write a denormalised **leg** row per transfer at session-save time (regenerated
 alongside `chart_data` / `entries`, same "both or neither" rule), and keep
 **marks** separate:
 
+The natural grain is `(session_id, leg_id)` — `leg_id` is `computeBankSettlement`'s
+own `player:<key>` / `bank:<from>><to>`, unique within a session and the exact key
+`settlement_marks` points at. (An earlier sketch keyed on
+`(session_id, scope, party_key)`; that breaks for `bank` scope, where `party_key`
+is one endpoint of a pair and isn't unique.)
+
 ```sql
+-- as shipped in supabase_schema.sql §9
 create table admin_session_legs (
-  session_id   text not null references admin_sessions(id) on delete cascade,
-  session_date date,
-  country      text not null,               -- 'CA' / 'US' — leg belongs to this country's bank
-  scope        text not null,               -- 'player' | 'bank'
-  party_key    text not null,               -- master playerId (else keyOfEntry fallback)
-  party_name   text,                        -- snapshot for display fallback
-  bank_key     text,                        -- the banker's playerId at the time
-  direction    text not null,               -- 'to_bank' | 'from_bank'
-  amount_cad   numeric not null,
-  amount_local numeric not null,
-  currency     text not null,
-  primary key (session_id, scope, party_key)
+  session_id      text not null references admin_sessions(id) on delete cascade,
+  leg_id          text not null,             -- 'player:<key>' | 'bank:<from>><to>'
+  scope           text not null,             -- 'player' | 'bank'
+  country         text,                      -- player: the bank's country; bank: the debtor country
+  counter_country text,                      -- bank scope only: the creditor country
+  party_key       text not null,             -- master playerId (else keyOfEntry fallback)
+  party_name      text,                      -- display fallback (names resolve live otherwise)
+  bank_key        text,                      -- the banker's playerId / key at save time
+  bank_name       text,
+  direction       text not null,             -- 'to_bank' | 'from_bank' | 'bank'
+  amount_cad      numeric not null,
+  amount_local    numeric not null,          -- converted at THIS session's fx
+  currency        text not null,
+  session_date    date,
+  primary key (session_id, leg_id)
 );
 
 create table settlement_marks (
-  id          uuid primary key default gen_random_uuid(),
-  session_id  text not null references admin_sessions(id) on delete cascade,
-  scope       text not null,                -- 'player' | 'bank'
-  party_key   text not null,
-  bank_key    text,
-  amount_cad  numeric,                      -- snapshot at settle time
-  settled_at  timestamptz not null default now(),
-  settled_by  text,                         -- adamzartin@gmail.com; best effort, anon
-  undone_at   timestamptz                   -- soft-delete → drives Undo + audit trail
+  id               uuid primary key default gen_random_uuid(),
+  session_id       text not null references admin_sessions(id) on delete cascade,
+  leg_id           text not null,
+  scope            text not null,            -- 'player' | 'bank'
+  country          text,
+  party_key        text not null,
+  party_name       text,
+  counterparty_key text,
+  counterparty_name text,
+  direction        text,
+  amount_cad       numeric,                  -- snapshot at settle time
+  amount_local     numeric,
+  currency         text,
+  session_date     date,
+  settled_by       text,                     -- best effort, anon
+  settled_at       timestamptz not null default now(),
+  undone_at        timestamptz               -- soft-delete → drives Undo + audit trail
 );
 
 create unique index settlement_marks_active_uq
-  on settlement_marks (session_id, scope, party_key)
+  on settlement_marks (session_id, leg_id)
   where undone_at is null;
 ```
 
-Also add a denormalised **`countries text[]`** column to `admin_sessions` (set at
-write time like `player_count`) so the index page knows which countries have
-activity without opening rows.
+Legs are derived data: `sessionApi.create` regenerates a session's legs wholesale
+after each (re)save (`delete where session_id = $1` + `insert`), and
+`sessionApi.ensureLegs()` backfills any session missing them on first
+`/settlement` load. No `admin_sessions.countries[]` column was needed — the
+`/settlement` index just runs `buildCountrySettlement` per country over the one
+`admin_session_legs` fetch.
 
-`/settlement/{country}` is then one indexed query:
+`/settlement/{country}` is one indexed query:
 
 ```sql
 select l.*
 from admin_session_legs l
 left join settlement_marks m
-  on (m.session_id, m.scope, m.party_key) = (l.session_id, l.scope, l.party_key)
+  on (m.session_id, m.leg_id) = (l.session_id, l.leg_id)
   and m.undone_at is null
 where l.country = $1
   and l.scope = 'player'
@@ -222,10 +243,12 @@ Soft-delete makes undo reversible (redo) and gives a full audit trail.
 - **Partial payments.** v1 is binary (checkbox). `settlement_marks.amount_cad` is
   already per-mark, so "paid $30 of $88" later is a mark with `amount <
   leg.amount` (or multiple marks) — no schema change.
-- **Re-upload / Overwrite of a session.** Legs regenerate. Keep marks where
-  `(session_id, party_key)` still exists and the amount matches; flag "amount
-  changed $X→$Y since you marked it settled — re-confirm" on drift; auto-undo
-  marks whose `party_key` vanished.
+- **Re-upload / Overwrite of a session.** A (re)save redefines the session's
+  ledger + settlement config, so `sessionApi.create` **hard-deletes every
+  `settlement_marks` row for that `session_id`** — settled or not, no audit
+  trail kept. Marks are session-scoped state, not a league-wide fact (unlike
+  `player_links`). The banker re-checks off from a clean slate against the new
+  numbers. No amount-drift reconciliation needed because no marks survive.
 - **Session deleted.** `on delete cascade` drops legs + marks. Extend the
   admin-session delete copy: "…chart, ledger, settlement **and its check-offs**
   are removed."
@@ -244,27 +267,29 @@ Soft-delete makes undo reversible (redo) and gives a full audit trail.
 
 ## Status — implemented
 
-> Shipped as Stages 0–3 in one pass. `npm test` 91/91, `npm run build` clean.
-> The main app (`App.jsx` and everything it renders with props) is untouched
-> except two additive `<Route>`s.
+> Shipped as Stages 0–3 in one pass, **Option B (legs table) included**.
+> `npm test` 94/94, `npm run build` clean. The main app (`App.jsx` and
+> everything it renders with props) is untouched except two additive `<Route>`s.
 >
-> **Deviation from "Option B": no `admin_session_legs` table.** Legs are computed
-> on the client. `sessionApi.listForSettlement()` selects `id, date, entries,
-> settlement` (never `chart_data`) for every session; `buildCountrySettlement`
-> (`src/utils/settlementLedger.js`) runs `computeBankSettlement` per session and
-> rolls the player legs up. This avoids a write-path change + a backfill for
-> existing sessions. If the league outgrows a full-table scan, promote to the
-> legs table then — the mark shape doesn't change.
+> **`admin_session_legs` — the denormalised legs table.** `legsFromSession(row)`
+> (`src/utils/settlementLedger.js`) flattens `computeBankSettlement` output to
+> leg rows; `sessionApi.create` regenerates a session's legs wholesale after
+> every (re)save (delete-by-`session_id` + insert). `buildCountrySettlement`
+> now takes `{ legs, marks }` — one indexed read, no per-session
+> `computeBankSettlement` on the client. `sessionApi.ensureLegs()` self-heals:
+> on `/settlement` load it backfills legs for any session that has none yet
+> (rows saved before the table existed, or a failed prior write).
 >
 > New:
-> - `settlement_marks` table + partial-unique / country indexes + RLS — appended
+> - `admin_session_legs` + `settlement_marks` tables + indexes + RLS — appended
 >   to `supabase_schema.sql`. **Run it against Supabase before using the pages.**
-> - `src/utils/settlementLedger.js` (+ `tests/utils/settlementLedger.test.js`).
+> - `src/utils/settlementLedger.js` (`legsFromSession` + `buildCountrySettlement`)
+>   (+ `tests/utils/settlementLedger.test.js`).
 > - `src/components/SettlementPage.jsx` — `/settlement` index + `/settlement/:country`
 >   detail, bulk "settle player" + per-session check-offs, "Recently settled"
 >   list, ephemeral undo banner (9s) with a persistent per-row Undo.
-> - `sessionApi`: `listForSettlement`, `listMarks({sessionId?})`, `addMarks(rows)`,
->   `undoMarks(ids)` (soft-delete via `undone_at`).
+> - `sessionApi`: `listLegs`, `ensureLegs`, `listMarks({sessionId?})`,
+>   `addMarks(rows)`, `undoMarks(ids)` (soft-delete via `undone_at`).
 >
 > Modified:
 > - `bankSettlement.js` — Stage 0: `playerTransfers` gain `scope` / `legId`
@@ -278,11 +303,12 @@ Soft-delete makes undo reversible (redo) and gives a full audit trail.
 >   confirm copy mentions check-offs.
 > - `App.jsx` — `/settlement` + `/settlement/:country` routes.
 >
+> Re-upload / Overwrite: `sessionApi.create` hard-deletes all `settlement_marks`
+> for that `session_id` after the upsert (settled or not) — the session's
+> settlement state starts fresh against the new numbers.
+>
 > Not done (deferred, as in the plan): partial-amount payments (binary only;
-> `amount_cad` is already per-mark so it's a non-breaking add later), the
-> `admin_session_legs` table, re-upload drift reconciliation (a mark keyed on a
-> `(session_id, leg_id)` that changes amount after re-upload keeps its snapshot;
-> no "amount changed" flag yet).
+> `amount_cad` is already per-mark so it's a non-breaking add later).
 
 ## Staging
 
