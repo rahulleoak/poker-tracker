@@ -71,6 +71,7 @@ export default function GameEditor({
   const [activeSettingsTab, setActiveSettingsTab] = useState('general');
   const [settlementCurrency, setSettlementCurrency] = useState(() => game?.currency || 'USD');
   const [useBankBuddies, setUseBankBuddies] = useState(false);
+  const [bankSettlementMode, setBankSettlementMode] = useState('strict');
   const [uploadSuccess, setUploadSuccess] = useState(null);
 
   // In-place identity linking popover state
@@ -151,9 +152,10 @@ export default function GameEditor({
       gameCurrency,
       settlementCurrency,
       exchangeRates,
-      useBankBuddies
+      useBankBuddies,
+      bankSettlementMode
     });
-  }, [entries, chipValue, gameCurrency, settlementCurrency, exchangeRates, useBankBuddies]);
+  }, [entries, chipValue, gameCurrency, settlementCurrency, exchangeRates, useBankBuddies, bankSettlementMode]);
 
   // Identity Linking Helpers
   const getLinkedPlayerInfo = (entry) => {
@@ -596,6 +598,25 @@ export default function GameEditor({
                    <p className="text-xs text-slate-400 mb-4 bg-slate-950/50 p-3 rounded-lg border border-slate-800">
                      Assign regional currencies and designate a <strong className="text-emerald-400">Bank Buddy</strong>. The algorithm will consolidate cross-border debts so players only transfer money locally.
                    </p>
+                   
+                   <div className="flex items-center justify-between p-3 bg-slate-950/50 border border-slate-800 rounded-lg mb-4">
+                     <span className="text-xs font-medium text-slate-400">Settlement Mode</span>
+                     <div className="flex bg-slate-900 rounded-lg p-1 border border-slate-700">
+                       <button
+                         onClick={() => setBankSettlementMode('strict')}
+                         className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${bankSettlementMode === 'strict' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                       >
+                         Strict
+                       </button>
+                       <button
+                         onClick={() => setBankSettlementMode('international-only')}
+                         className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${bankSettlementMode === 'international-only' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                       >
+                         Intl. Only
+                       </button>
+                     </div>
+                   </div>
+
                    <div className="space-y-2">
                      {entries.filter(e => e && (e.name || '').trim() !== '').map((entry, idx) => {
                         const trueIdx = entries.indexOf(entry);
