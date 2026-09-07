@@ -1014,9 +1014,9 @@ function GameEditorInner({
               <Plus className="w-4 h-4" /> Add Player Row
             </button>
           </div>
-          {validationErrors.length > 0 && (
+          {(validationErrors?.length ?? 0) > 0 && (
             <div className="p-4 bg-rose-950/30 border-t border-rose-900/50">
-                {validationErrors.map((err, i) => <p key={i} className="text-rose-400 text-sm flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {err}</p>)}
+                {validationErrors.map((err, i) =><p key={i} className="text-rose-400 text-sm flex items-center gap-2"><AlertCircle className="w-4 h-4" /> {err}</p>)}
             </div>
           )}
         </div>
