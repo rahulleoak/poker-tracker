@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Users, Plus, Trash2, Link, Unlink } from 'lucide-react';
 import { supabase } from '../utils/supabase';
+import ConfirmationModal from './ConfirmationModal';
 
 export default function PlayerManager({ players, playerLinks, onUpdate }) {
   const [newPlayerName, setNewPlayerName] = useState('');
@@ -9,6 +10,8 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
   const [linkExternalId, setLinkExternalId] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [pendingDeletePlayerId, setPendingDeletePlayerId] = useState(null);
+  const [pendingUnlinkId, setPendingUnlinkId] = useState(null);
 
   const handleAddPlayer = async (e) => {
     e.preventDefault();
@@ -86,7 +89,6 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
   };
 
   const handleDeletePlayer = async (playerId) => {
-    if (!window.confirm("Are you sure you want to delete this player profile? This will unlink all associated IDs.")) return;
     setLoading(true);
     setError(null);
 
@@ -111,7 +113,6 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
   };
 
   const handleUnlinkIdentity = async (linkId) => {
-    if (!window.confirm("Are you sure you want to unlink this identity?")) return;
     setLoading(true);
     setError(null);
 
@@ -270,7 +271,7 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
                                 <span className="text-[10px] text-emerald-400 uppercase tracking-wider font-bold">{link.platform}:</span>
                                 <span className="text-xs font-semibold text-slate-300 font-mono">{link.external_id}</span>
                                 <button
-                                  onClick={() => handleUnlinkIdentity(link.id)}
+                                  onClick={() => setPendingUnlinkId(link.id)}
                                   className="text-slate-500 hover:text-rose-400 p-0.5 ml-0.5 transition-colors"
                                   title="Unlink"
                                 >
@@ -283,7 +284,7 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
                       </div>
                       
                       <button
-                        onClick={() => handleDeletePlayer(player.id)}
+                        onClick={() => setPendingDeletePlayerId(player.id)}
                         className="p-2 border border-slate-800 hover:border-rose-500/20 rounded-xl text-slate-500 hover:text-rose-400 hover:bg-rose-500/5 transition-all self-start md:self-center"
                         title="Delete Profile"
                       >
@@ -297,6 +298,34 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
           </div>
         </div>
       </div>
+
+      <ConfirmationModal 
+        isOpen={pendingDeletePlayerId !== null}
+        onClose={() => setPendingDeletePlayerId(null)}
+        onConfirm={() => {
+          if (pendingDeletePlayerId) {
+            handleDeletePlayer(pendingDeletePlayerId);
+          }
+        }}
+        title="Delete Player Profile"
+        message="Are you sure you want to delete this player profile? This will unlink all associated IDs and nicknames."
+        confirmText="Delete Profile"
+        isDestructive={true}
+      />
+
+      <ConfirmationModal 
+        isOpen={pendingUnlinkId !== null}
+        onClose={() => setPendingUnlinkId(null)}
+        onConfirm={() => {
+          if (pendingUnlinkId) {
+            handleUnlinkIdentity(pendingUnlinkId);
+          }
+        }}
+        title="Unlink Player Handle"
+        message="Are you sure you want to unlink this PokerNow handle/alias from this profile?"
+        confirmText="Unlink Alias"
+        isDestructive={true}
+      />
     </div>
   );
 }

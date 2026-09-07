@@ -14,6 +14,7 @@ import PlayerManager from './components/PlayerManager';
 import AdminPage from './components/AdminPage';
 import HomePage from './components/HomePage';
 import SessionPage from './components/SessionPage';
+import ConfirmationModal from './components/ConfirmationModal';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -63,6 +64,8 @@ export function AppContent() {
 
   // --- PLAYER IDENTITIES STATE & SYNCHRONIZATION ---
   const [players, setPlayers] = useState(() => JSON.parse(localStorage.getItem('offsuite_players') || '[]'));
+  const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState(null);
+  const [pendingMergeData, setPendingMergeData] = useState(null);
   const [playerLinks, setPlayerLinks] = useState(() => JSON.parse(localStorage.getItem('offsuite_player_links') || '[]'));
 
   const fetchPlayersAndLinks = useCallback(async () => {
@@ -400,6 +403,89 @@ export function AppContent() {
     }
   };
 
+  const executeCreateNewGame = async (newGame) => {
+    setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
+    setEditingGameId(newGame.id);
+    setSelectedPlayer(null);
+
+    if (supabase) {
+      try {
+        const sessionPayload = {
+          date: newGame.date,
+          currency: globalCurrency,
+          chip_value: 1,
+          is_active: false,
+          poker_now_url: newGame.pokerNowUrl
+        };
+
+        const { data: sessionData, error: sessionError } = await supabase
+          .from('sessions')
+          .insert([sessionPayload])
+          .select()
+          .single();
+          
+        if (sessionError) {
+          console.error("Error creating uploaded session in DB:", sessionError);
+        } else if (sessionData && sessionData.id) {
+          const oldId = newGame.id;
+
+          const dbEntriesWithStats = newGame.entries.map(entry => ({
+            session_id: sessionData.id,
+            player_name: entry.name,
+            buy_in: entry.buyIn,
+            cash_out: entry.buyOut + entry.stack,
+            currency: globalCurrency,
+            is_bank: false,
+            hands_played: entry.handsPlayed,
+            vpip_hands: entry.vpipHands,
+            pfr_hands: entry.pfrHands,
+            three_bet_opps: entry.threeBetOpps,
+            three_bet_hands: entry.threeBetHands,
+            external_player_id: entry.externalId || entry.pokerNowId || null,
+            player_external_id: entry.externalId || entry.pokerNowId || null,
+            player_poker_now_id: entry.pokerNowId || entry.externalId || null
+          }));
+
+          const { error: ledgerError } = await supabase.from('ledger').insert(dbEntriesWithStats);
+          if (ledgerError) {
+            console.warn("Ledger insert with stats failed, attempting legacy insert:", ledgerError);
+            const legacyEntries = dbEntriesWithStats.map(e => ({
+              session_id: e.session_id,
+              player_name: e.player_name,
+              buy_in: e.buy_in,
+              cash_out: e.cash_out,
+              currency: e.currency,
+              is_bank: e.is_bank,
+              external_player_id: e.external_player_id,
+              player_external_id: e.player_external_id,
+              player_poker_now_id: e.player_poker_now_id
+            }));
+            await supabase.from('ledger').insert(legacyEntries);
+          }
+
+          setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id, pokerNowUrl: newGame.pokerNowUrl } : g));
+          setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
+        }
+      } catch (dbErr) {
+        console.error("Failed to sync uploaded session to DB:", dbErr);
+      }
+    }
+  };
+
+  const executeMergeGame = async (newGame, matchingSession) => {
+    const mergedEntries = mergeSessionEntries(matchingSession.entries, newGame.entries);
+    const targetGame = {
+      ...matchingSession,
+      pokerNowUrl: matchingSession.pokerNowUrl || newGame.pokerNowUrl,
+      entries: mergedEntries
+    };
+
+    setGames(prevGames => prevGames.map(g => g.id === targetGame.id ? targetGame : g));
+    setEditingGameId(targetGame.id);
+    setSelectedPlayer(null);
+    await handleUpdateGame(targetGame);
+  };
+
   const handleFileUpload = (event) => {
     const file = event?.target?.files?.[0];
     if (!file) return;
@@ -420,100 +506,15 @@ export function AppContent() {
           newGame.pokerNowUrl = pokerNowUrl;
         }
 
-        // Smart Session Matching
         const matchingSession = findMatchingSession(games, newGame);
-        let targetGame = newGame;
-        let isMerge = false;
 
         if (matchingSession) {
-          const shouldMerge = typeof window === 'undefined' || !window.confirm || window.confirm(
-            `A session for date ${matchingSession.date}${matchingSession.pokerNowUrl ? ' (matching PokerNow URL)' : ''} already exists. Would you like to merge the new ledger/hand data into this existing session rather than creating a duplicate?`
-          );
-          if (shouldMerge) {
-            isMerge = true;
-            const mergedEntries = mergeSessionEntries(matchingSession.entries, newGame.entries);
-            targetGame = {
-              ...matchingSession,
-              pokerNowUrl: matchingSession.pokerNowUrl || newGame.pokerNowUrl,
-              entries: mergedEntries
-            };
-          }
-        }
-
-        if (isMerge) {
-          setGames(prevGames => prevGames.map(g => g.id === targetGame.id ? targetGame : g));
-          setEditingGameId(targetGame.id);
-          setSelectedPlayer(null);
-          await handleUpdateGame(targetGame);
+          setPendingMergeData({
+            newGame,
+            matchingSession
+          });
         } else {
-          // Immediately update local state so editingGameId resolves to a valid game
-          setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
-          setEditingGameId(newGame.id);
-          setSelectedPlayer(null);
-
-          if (supabase) {
-            try {
-              const sessionPayload = {
-                date: newGame.date,
-                currency: globalCurrency,
-                chip_value: 1,
-                is_active: false,
-                poker_now_url: newGame.pokerNowUrl
-              };
-
-              const { data: sessionData, error: sessionError } = await supabase
-                .from('sessions')
-                .insert([sessionPayload])
-                .select()
-                .single();
-                
-              if (sessionError) {
-                console.error("Error creating uploaded session in DB:", sessionError);
-              } else if (sessionData && sessionData.id) {
-                const oldId = newGame.id;
-
-                const dbEntriesWithStats = newGame.entries.map(entry => ({
-                  session_id: sessionData.id,
-                  player_name: entry.name,
-                  buy_in: entry.buyIn,
-                  cash_out: entry.buyOut + entry.stack,
-                  currency: globalCurrency,
-                  is_bank: false,
-                  hands_played: entry.handsPlayed,
-                  vpip_hands: entry.vpipHands,
-                  pfr_hands: entry.pfrHands,
-                  three_bet_opps: entry.threeBetOpps,
-                  three_bet_hands: entry.threeBetHands,
-                  external_player_id: entry.externalId || entry.pokerNowId || null,
-                  player_external_id: entry.externalId || entry.pokerNowId || null,
-                  player_poker_now_id: entry.pokerNowId || entry.externalId || null
-                }));
-
-                const { error: ledgerError } = await supabase.from('ledger').insert(dbEntriesWithStats);
-                if (ledgerError) {
-                  console.warn("Ledger insert with stats failed, attempting legacy insert:", ledgerError);
-                  const legacyEntries = dbEntriesWithStats.map(e => ({
-                    session_id: e.session_id,
-                    player_name: e.player_name,
-                    buy_in: e.buy_in,
-                    cash_out: e.cash_out,
-                    currency: e.currency,
-                    is_bank: e.is_bank,
-                    external_player_id: e.external_player_id,
-                    player_external_id: e.player_external_id,
-                    player_poker_now_id: e.player_poker_now_id
-                  }));
-                  await supabase.from('ledger').insert(legacyEntries);
-                }
-
-                // Update game ID in local state if changed
-                setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id, pokerNowUrl: newGame.pokerNowUrl } : g));
-                setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
-              }
-            } catch (dbErr) {
-              console.error("Failed to sync uploaded session to DB:", dbErr);
-            }
-          }
+          await executeCreateNewGame(newGame);
         }
       } catch (err) {
         console.error("Error parsing/processing CSV file:", err);
@@ -671,7 +672,7 @@ export function AppContent() {
               onUpdatePlayers={fetchPlayersAndLinks}
               onSave={handleUpdateGame}
               onBack={() => setEditingGameId(null)}
-              onDelete={() => handleDeleteGame(editingGameId)}
+              onDelete={() => setPendingDeleteSessionId(editingGameId)}
             />
           ) : selectedPlayer ? (
             <PlayerProfile 
@@ -699,6 +700,41 @@ export function AppContent() {
             <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
           )}
         </main>
+
+        <ConfirmationModal 
+          isOpen={pendingDeleteSessionId !== null}
+          onClose={() => setPendingDeleteSessionId(null)}
+          onConfirm={() => {
+            if (pendingDeleteSessionId) {
+              handleDeleteGame(pendingDeleteSessionId);
+            }
+          }}
+          title="Delete Poker Session"
+          message="Are you sure you want to delete this poker session? This action is permanent and cannot be undone."
+          confirmText="Delete"
+          isDestructive={true}
+        />
+
+        <ConfirmationModal 
+          isOpen={pendingMergeData !== null}
+          onClose={() => {
+            if (pendingMergeData) {
+              executeCreateNewGame(pendingMergeData.newGame);
+            }
+            setPendingMergeData(null);
+          }}
+          onConfirm={() => {
+            if (pendingMergeData) {
+              executeMergeGame(pendingMergeData.newGame, pendingMergeData.matchingSession);
+            }
+            setPendingMergeData(null);
+          }}
+          title="Merge Sessions"
+          message={pendingMergeData ? ("A session for date " + pendingMergeData.matchingSession.date + (pendingMergeData.matchingSession.pokerNowUrl ? " (matching PokerNow URL)" : "") + " already exists. Would you like to merge the new ledger/hand data into this existing session rather than creating a duplicate?") : ""}
+          confirmText="Merge Ledger"
+          cancelText="Create Duplicate"
+          isDestructive={false}
+        />
       </div>
     </ErrorBoundary>
   );
