@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Users, Plus, Trash2, Link, Unlink } from 'lucide-react';
 import { supabase } from '../utils/supabase';
+import { TOP_CURRENCIES } from '../utils/formatters';
 import ConfirmationModal from './ConfirmationModal';
 
 export default function PlayerManager({ players, playerLinks, onUpdate }) {
@@ -25,14 +26,14 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
       if (supabase) {
         const { error: dbErr } = await supabase
           .from('players')
-          .insert([{ display_name: displayName }]);
+          .insert([{ display_name: displayName, preferred_currency: 'USD' }]);
 
         if (dbErr) throw dbErr;
         setNewPlayerName('');
         onUpdate();
       } else {
         // Offline-only mock
-        const newLocal = { id: `local-player-${Date.now()}`, display_name: displayName, created_at: new Date().toISOString() };
+        const newLocal = { id: `local-player-${Date.now()}`, display_name: displayName, preferred_currency: 'USD', created_at: new Date().toISOString() };
         const current = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
         localStorage.setItem('offsuite_players', JSON.stringify([...current, newLocal]));
         setNewPlayerName('');
@@ -129,6 +130,33 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
     } catch (err) {
       console.error(err);
       setError(err.message || "Failed to unlink identity");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUpdatePreferredCurrency = async (playerId, currency) => {
+    setLoading(true);
+    setError(null);
+    try {
+      if (supabase) {
+        const { error: dbErr } = await supabase
+          .from('players')
+          .update({ preferred_currency: currency })
+          .eq('id', playerId);
+
+        if (dbErr) throw dbErr;
+        onUpdate();
+      } else {
+        // Offline-only mock
+        const current = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
+        const updated = current.map(p => p.id === playerId ? { ...p, preferred_currency: currency } : p);
+        localStorage.setItem('offsuite_players', JSON.stringify(updated));
+        onUpdate();
+      }
+    } catch (err) {
+      console.error(err);
+      setError(err.message || "Failed to update preferred currency");
     } finally {
       setLoading(false);
     }
@@ -283,13 +311,27 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
                         </div>
                       </div>
                       
-                      <button
-                        onClick={() => setPendingDeletePlayerId(player.id)}
-                        className="p-2 border border-slate-800 hover:border-rose-500/20 rounded-xl text-slate-500 hover:text-rose-400 hover:bg-rose-500/5 transition-all self-start md:self-center"
-                        title="Delete Profile"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-4 self-start md:self-center shrink-0">
+                        <div className="flex flex-col items-start md:items-end">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">Pref. Currency</span>
+                          <select
+                            value={player.preferred_currency || 'USD'}
+                            onChange={(e) => handleUpdatePreferredCurrency(player.id, e.target.value)}
+                            disabled={loading}
+                            className="bg-slate-950 border border-slate-800 text-slate-300 text-xs font-semibold rounded-xl px-2.5 py-1.5 outline-none focus:border-emerald-500 transition-all cursor-pointer"
+                          >
+                            {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+
+                        <button
+                          onClick={() => setPendingDeletePlayerId(player.id)}
+                          className="p-2.5 border border-slate-800 hover:border-rose-500/20 rounded-xl text-slate-500 hover:text-rose-400 hover:bg-rose-500/5 transition-all mt-4 md:mt-0"
+                          title="Delete Profile"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })

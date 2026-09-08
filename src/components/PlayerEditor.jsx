@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { UserPlus, Check, ChevronDown, Landmark, User } from 'lucide-react';
 import { COUNTRIES } from '../utils/countries';
+import { TOP_CURRENCIES } from '../utils/formatters';
 
 // Compact create / edit surface for master player profiles + their country
 // association. Rendered under Banks & settlement on /admin. Writes go through
@@ -26,12 +27,13 @@ function CountrySelect({ value, onChange, disabled }) {
 }
 
 // Uncontrolled from props: the parent gives each row a key that includes the
-// saved country, so a graph refresh remounts it with a fresh draft. The name is
-// display-only — only the country is editable here.
+// saved country/currency, so a graph refresh remounts it with a fresh draft. The name is
+// display-only — the country and preferred currency are editable here.
 function PlayerRow({ player, saving, saved, isBank, onSave }) {
   const [country, setCountry] = useState(player.country || '');
+  const [preferredCurrency, setPreferredCurrency] = useState(player.preferred_currency || 'USD');
 
-  const dirty = (country || '') !== (player.country || '');
+  const dirty = (country || '') !== (player.country || '') || preferredCurrency !== (player.preferred_currency || 'USD');
   const canSave = dirty && !saving;
 
   return (
@@ -43,8 +45,22 @@ function PlayerRow({ player, saving, saved, isBank, onSave }) {
       )}
       <span className="flex-1 min-w-0 truncate text-sm text-slate-200">{player.display_name}</span>
       <CountrySelect value={country} onChange={(c) => setCountry(c || '')} disabled={saving} />
+      
+      <select
+        value={preferredCurrency}
+        onChange={(e) => setPreferredCurrency(e.target.value)}
+        disabled={saving}
+        className="bg-slate-800 border border-slate-700 rounded-md text-xs px-2 py-1 outline-none focus:border-emerald-500 text-slate-200 disabled:opacity-50 shrink-0 w-20"
+      >
+        {TOP_CURRENCIES.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
+
       <button
-        onClick={() => onSave({ display_name: player.display_name, country: country || null })}
+        onClick={() => onSave({ display_name: player.display_name, country: country || null, preferred_currency: preferredCurrency })}
         disabled={!canSave}
         className="flex items-center justify-end gap-1 w-14 text-xs font-medium text-emerald-400 hover:text-emerald-300 disabled:opacity-30 disabled:hover:text-emerald-400 shrink-0"
       >
@@ -205,7 +221,7 @@ export default function PlayerEditor({ players = [], bankByCountry = {}, onCreat
                   <div className="divide-y divide-slate-800/70">
                     {g.players.map((p) => (
                       <PlayerRow
-                        key={`${p.id}:${p.display_name}:${p.country || ''}`}
+                        key={`${p.id}:${p.display_name}:${p.country || ''}:${p.preferred_currency || 'USD'}`}
                         player={p}
                         saving={savingId === p.id}
                         saved={savedId === p.id}

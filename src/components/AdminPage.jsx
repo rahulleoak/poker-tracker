@@ -416,18 +416,22 @@ export default function AdminPage() {
           )
         : toChartData({ players: new Map(), snapshots: [] });
 
-      const dbEntries = (game.entries || []).map((entry) => ({
-        name: entry.name,
-        aliases: aliasesForUnit(keyOfEntry(entry)),
-        pokerNowId: entry.pokerNowId || null,
-        externalId: entry.externalId || null,
-        playerId: playerIdForKey(keyOfEntry(entry)),
-        buyIn: Number(entry.buyIn) || 0,
-        buyOut: Number(entry.buyOut) || 0,
-        stack: Number(entry.stack) || 0,
-        currency: entry.currency || 'USD',
-        isBank: Boolean(entry.isBank)
-      }));
+      const dbEntries = (game.entries || []).map((entry) => {
+        const pid = playerIdForKey(keyOfEntry(entry));
+        const prof = pid ? players.find((p) => p.id === pid) : null;
+        return {
+          name: entry.name,
+          aliases: aliasesForUnit(keyOfEntry(entry)),
+          pokerNowId: entry.pokerNowId || null,
+          externalId: entry.externalId || null,
+          playerId: pid,
+          buyIn: Number(entry.buyIn) || 0,
+          buyOut: Number(entry.buyOut) || 0,
+          stack: Number(entry.stack) || 0,
+          currency: (prof && prof.preferred_currency) || entry.currency || 'USD',
+          isBank: Boolean(entry.isBank)
+        };
+      });
       // Carry aliases onto the stash too, so the immediate navigation matches a refresh.
       game.entries = (game.entries || []).map((entry) => ({
         ...entry,
