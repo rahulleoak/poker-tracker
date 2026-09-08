@@ -143,3 +143,71 @@ test('in-place identity mapping allows linking new session names to existing or 
   assert.strictEqual(getPlayerDisplayName("Dave's Laptop", null, players, playerLinks), 'Dave');
 });
 
+// Simulates player preferred currency resolution
+function getPlayerProfile(name, externalId, players = [], playerLinks = []) {
+  if (!name) return null;
+  const normName = name.trim().toLowerCase();
+  const normExtId = (externalId || '').trim().toLowerCase();
+
+  // 1. Check external ID match
+  if (normExtId) {
+    const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normExtId);
+    if (link) {
+      const player = players.find(p => p.id === link.player_id);
+      if (player) return player;
+    }
+  }
+
+  // 2. Check name as external ID match (aliases)
+  if (normName) {
+    const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normName);
+    if (link) {
+      const player = players.find(p => p.id === link.player_id);
+      if (player) return player;
+    }
+  }
+
+  // 3. Check direct display name match (auto-link matching names)
+  const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
+  if (directPlayer) return directPlayer;
+
+  return null;
+}
+
+test('player preferred currency resolution and mapping works as expected', () => {
+  const players = [
+    { id: 'p-1', display_name: 'Rahul', preferred_currency: 'CAD' },
+    { id: 'p-2', display_name: 'John Doe', preferred_currency: 'USD' },
+    { id: 'p-3', display_name: 'Alice' } // defaults/unset
+  ];
+
+  const playerLinks = [
+    { id: 'l-1', player_id: 'p-1', platform: 'pokernow', external_id: 'SPoLg3vOL-' },
+    { id: 'l-2', player_id: 'p-1', platform: 'alias', external_id: '@RahulL' }
+  ];
+
+  // 1. Check match by PokerNow ID gets profile with preferred_currency: 'CAD'
+  const prof1 = getPlayerProfile('Any Name', 'SPoLg3vOL-', players, playerLinks);
+  assert.ok(prof1);
+  assert.strictEqual(prof1.display_name, 'Rahul');
+  assert.strictEqual(prof1.preferred_currency, 'CAD');
+
+  // 2. Check match by alias name gets CAD
+  const prof2 = getPlayerProfile('@RahulL', null, players, playerLinks);
+  assert.ok(prof2);
+  assert.strictEqual(prof2.preferred_currency, 'CAD');
+
+  // 3. Check match by exact display name gets USD
+  const prof3 = getPlayerProfile('John Doe', null, players, playerLinks);
+  assert.ok(prof3);
+  assert.strictEqual(prof3.preferred_currency, 'USD');
+
+  // 4. Check match for profile with unset preferred currency
+  const prof4 = getPlayerProfile('Alice', null, players, playerLinks);
+  assert.ok(prof4);
+  assert.strictEqual(prof4.preferred_currency, undefined);
+
+  // 5. Unregistered player should return null
+  assert.strictEqual(getPlayerProfile('Stranger', null, players, playerLinks), null);
+});
+

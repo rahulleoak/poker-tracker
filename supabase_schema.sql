@@ -41,11 +41,13 @@ CREATE TABLE IF NOT EXISTS public.players (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     display_name TEXT NOT NULL UNIQUE,
     country TEXT,                          -- 'CA' | 'US' (see src/utils/countries.js); null = unset
+    preferred_currency TEXT DEFAULT 'USD',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Additive for deployments created before the country column existed.
+-- Additive for deployments created before the country/currency columns existed.
 ALTER TABLE public.players ADD COLUMN IF NOT EXISTS country TEXT;
+ALTER TABLE public.players ADD COLUMN IF NOT EXISTS preferred_currency TEXT DEFAULT 'USD';
 
 CREATE TABLE IF NOT EXISTS public.player_links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

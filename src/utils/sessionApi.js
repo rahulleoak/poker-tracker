@@ -271,31 +271,31 @@ async function listPlayers() {
 }
 
 /**
- * Create a master player profile with an optional country association.
+ * Create a master player profile with an optional country association and preferred currency.
  *
- * @param {{ display_name: string, country?: string|null }} row
- * @returns {Promise<{ id: string, display_name: string, country: string|null }>}
+ * @param {{ display_name: string, country?: string|null, preferred_currency?: string }} row
+ * @returns {Promise<{ id: string, display_name: string, country: string|null, preferred_currency: string }>}
  */
-async function createPlayer({ display_name, country = null } = {}) {
+async function createPlayer({ display_name, country = null, preferred_currency = 'USD' } = {}) {
   if (!supabase) throw new Error('Supabase is not configured (VITE_SUPABASE_URL / _ANON_KEY).');
   const name = String(display_name || '').trim();
   if (!name) throw new Error('A display name is required.');
   const { data, error } = await supabase
     .from('players')
-    .insert([{ display_name: name, country: country || null }])
-    .select('id, display_name, country')
+    .insert([{ display_name: name, country: country || null, preferred_currency }])
+    .select('id, display_name, country, preferred_currency')
     .single();
   if (error) throw error;
   return data;
 }
 
 /**
- * Update a player's display name and/or country association. Only the keys
+ * Update a player's display name, country association, and/or preferred currency. Only the keys
  * present in `patch` are written.
  *
  * @param {string} id
- * @param {{ display_name?: string, country?: string|null }} patch
- * @returns {Promise<{ id: string, display_name: string, country: string|null }>}
+ * @param {{ display_name?: string, country?: string|null, preferred_currency?: string }} patch
+ * @returns {Promise<{ id: string, display_name: string, country: string|null, preferred_currency: string }>}
  */
 async function updatePlayer(id, patch = {}) {
   if (!supabase) throw new Error('Supabase is not configured (VITE_SUPABASE_URL / _ANON_KEY).');
@@ -307,12 +307,13 @@ async function updatePlayer(id, patch = {}) {
     next.display_name = name;
   }
   if ('country' in patch) next.country = patch.country || null;
+  if ('preferred_currency' in patch) next.preferred_currency = patch.preferred_currency || 'USD';
   if (Object.keys(next).length === 0) throw new Error('Nothing to update.');
   const { data, error } = await supabase
     .from('players')
     .update(next)
     .eq('id', id)
-    .select('id, display_name, country')
+    .select('id, display_name, country, preferred_currency')
     .single();
   if (error) throw error;
   return data;

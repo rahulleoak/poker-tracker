@@ -128,6 +128,36 @@ export function AppContent() {
 
     return null;
   }, [players, playerLinks]);
+
+  const getPlayerProfile = useCallback((name, externalId) => {
+    if (!name) return null;
+    const normName = name.trim().toLowerCase();
+    const normExtId = (externalId || '').trim().toLowerCase();
+
+    // 1. Check external ID match
+    if (normExtId) {
+      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normExtId);
+      if (link) {
+        const player = players.find(p => p.id === link.player_id);
+        if (player) return player;
+      }
+    }
+
+    // 2. Check name as external ID match (aliases)
+    if (normName) {
+      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normName);
+      if (link) {
+        const player = players.find(p => p.id === link.player_id);
+        if (player) return player;
+      }
+    }
+
+    // 3. Check direct display name match (auto-link matching names)
+    const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
+    if (directPlayer) return directPlayer;
+
+    return null;
+  }, [players, playerLinks]);
   
   // FX Rates & Global Config
   const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
@@ -499,6 +529,15 @@ export function AppContent() {
           : new Date().toISOString().split('T')[0];
         
         const newGame = createGameFromCSVEntries(parsedEntries, globalCurrency, date);
+        if (newGame.entries) {
+          newGame.entries = newGame.entries.map(entry => {
+            const profile = getPlayerProfile(entry.name, entry.pokerNowId || entry.externalId);
+            if (profile && profile.preferred_currency) {
+              return { ...entry, currency: profile.preferred_currency };
+            }
+            return entry;
+          });
+        }
         const pokerNowUrl = extractPokerNowUrl(text);
         if (pokerNowUrl) {
           newGame.pokerNowUrl = pokerNowUrl;

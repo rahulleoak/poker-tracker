@@ -360,6 +360,18 @@ function GameEditorInner({
         newEntries[index] = { ...newEntries[index], isBank: false };
       }
       newEntries[index] = { ...newEntries[index], [field]: value };
+
+      if (field === 'name' && value) {
+        const resolved = getLinkedPlayerInfo({ ...newEntries[index], name: value });
+        if (resolved && resolved.player && resolved.player.preferred_currency) {
+          const prefCurr = resolved.player.preferred_currency;
+          if (newEntries[index].isBank && newEntries[index].currency !== prefCurr) {
+            newEntries[index].isBank = false;
+          }
+          newEntries[index].currency = prefCurr;
+        }
+      }
+
       setEntries(newEntries);
     }
   };

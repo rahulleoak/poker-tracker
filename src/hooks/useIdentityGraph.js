@@ -12,7 +12,7 @@ let inflight = null;
 async function load() {
   if (!supabase) return { players: [], playerLinks: [] };
   const [players, playerLinks] = await Promise.all([
-    supabase.from('players').select('id, display_name, country'),
+    supabase.from('players').select('id, display_name, country, preferred_currency'),
     supabase.from('player_links').select('id, player_id, platform, external_id')
   ]);
   return {
