@@ -10,7 +10,8 @@ import {
   Check,
   Pencil,
   ChevronRight,
-  AlertTriangle
+  AlertTriangle,
+  RotateCcw
 } from 'lucide-react';
 import { formatChips } from '../utils/formatters';
 import { COUNTRIES, DEFAULT_COUNTRY, country } from '../utils/countries';
@@ -50,6 +51,40 @@ const sigOf = (members) => [...members].sort().join('|');
 // Stable identity for an entry: a player can share a nickname with someone else
 // (e.g. two "kkkush" accounts), so prefer the PokerNow / external id.
 const keyOf = keyOfEntry;
+
+// Editable net (chips) figure — lets a reviewer patch a bad ledger row (e.g. an
+// unclosed seat) in place, without needing a matching input state per row.
+function NetInput({ value, overridden, onChange, onReset, className = '' }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 shrink-0">
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        draggable={false}
+        title="Edit net (chips)"
+        className={`bg-transparent border rounded-md text-right tabular-nums outline-none px-1 py-0.5 [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+          overridden
+            ? 'border-amber-500/60 focus:border-amber-400'
+            : 'border-transparent hover:border-slate-700 focus:border-emerald-500'
+        } ${netClass(Number(value) || 0)} ${className}`}
+      />
+      {overridden && (
+        <button
+          type="button"
+          onClick={onReset}
+          onMouseDown={(e) => e.stopPropagation()}
+          title="Reset to parsed value"
+          className="p-0.5 text-amber-500/70 hover:text-amber-400 shrink-0"
+        >
+          <RotateCcw className="w-3 h-3" />
+        </button>
+      )}
+    </span>
+  );
+}
 
 function CountrySelect({ value, onChange, disabled = false, title = 'Country', className = '' }) {
   return (
@@ -180,6 +215,14 @@ export default function AdminPlayerLinkDialog({
   const cadToUsd =
     cadToUsdOverride ?? (cadToUsdIsLive ? Number(liveCadToUsd.toFixed(4)) : liveCadToUsd);
 
+  // Per-seat key -> reviewer-edited net (raw input string), overriding the value
+  // derived from buyIn/buyOut/stack. Lets a bad ledger row (e.g. an unclosed
+  // seat whose stack never got credited) be patched here instead of forcing a
+  // re-export of the CSV.
+  const [netOverrides, setNetOverrides] = useState(
+    () => ({ ...(initialSettlement?.netOverrides || {}) })
+  );
+
   const groupedKeys = useMemo(() => {
     const set = new Set();
     groups.forEach((g) => g.members.forEach((m) => set.add(m)));
@@ -188,8 +231,22 @@ export default function AdminPlayerLinkDialog({
 
   const poolPlayers = players.filter((p) => !groupedKeys.has(keyOf(p)));
 
-  const groupNet = (members) =>
-    members.reduce((sum, key) => sum + netOf(entryByKey.get(key)), 0);
+  const netOfKey = (key) => {
+    const ov = netOverrides[key];
+    if (ov === undefined) return netOf(entryByKey.get(key));
+    return ov === '' ? 0 : Number(ov);
+  };
+  const setNetOverride = (key, raw) =>
+    setNetOverrides((prev) => ({ ...prev, [key]: raw }));
+  const clearNetOverride = (key) =>
+    setNetOverrides((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+
+  const groupNet = (members) => members.reduce((sum, key) => sum + netOfKey(key), 0);
 
   // The settleable units: one per group (its primary key) + every ungrouped player.
   const units = useMemo(() => {
@@ -198,10 +255,10 @@ export default function AdminPlayerLinkDialog({
       name: nameFor(grp.members[0]),
       net: groupNet(grp.members)
     }));
-    const p = poolPlayers.map((pl) => ({ key: keyOf(pl), name: pl.name, net: netOf(pl) }));
+    const p = poolPlayers.map((pl) => ({ key: keyOf(pl), name: pl.name, net: netOfKey(keyOf(pl)) }));
     return [...g, ...p];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups, poolPlayers, entryByKey]);
+  }, [groups, poolPlayers, entryByKey, netOverrides]);
 
   // Country from the unit's linked profile wins and locks the picker; otherwise
   // it's the reviewer-set / standing-bank-seeded value, editable here.
@@ -441,8 +498,9 @@ export default function AdminPlayerLinkDialog({
 
   const trimmedId = (sessionId || '').trim();
   const totalNet = useMemo(
-    () => Math.round(players.reduce((sum, p) => sum + netOf(p), 0)),
-    [players]
+    () => Math.round(players.reduce((sum, p) => sum + netOfKey(keyOf(p)), 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [players, netOverrides]
   );
   const isBalanced = totalNet === 0;
 
@@ -479,7 +537,10 @@ export default function AdminPlayerLinkDialog({
       profileCountryByKey,
       bankByCountry,
       chipsPerCad: Number(chipsPerCad) > 0 ? Number(chipsPerCad) : 100,
-      cadToUsd: Number(cadToUsd) > 0 ? Number(cadToUsd) : 1
+      cadToUsd: Number(cadToUsd) > 0 ? Number(cadToUsd) : 1,
+      netOverrides: Object.fromEntries(
+        Object.keys(netOverrides).map((key) => [key, netOfKey(key)])
+      )
     });
   };
 
@@ -781,16 +842,26 @@ export default function AdminPlayerLinkDialog({
                             )}
                           </div>
 
-                          <span className={`text-sm font-bold tabular-nums w-16 text-right shrink-0 ${netClass(r.net)}`}>
-                            {formatNet(r.net)}
-                          </span>
+                          {r.isMerged ? (
+                            <span className={`text-sm font-bold tabular-nums w-16 text-right shrink-0 ${netClass(r.net)}`}>
+                              {formatNet(r.net)}
+                            </span>
+                          ) : (
+                            <NetInput
+                              value={netOverrides[r.key] ?? r.net}
+                              overridden={netOverrides[r.key] !== undefined}
+                              onChange={(raw) => setNetOverride(r.key, raw)}
+                              onReset={() => clearNetOverride(r.key)}
+                              className="w-16 text-sm font-bold"
+                            />
+                          )}
                         </div>
 
                         {/* Merged seats */}
                         {isExpanded && (
                           <div className="flex flex-wrap gap-1.5 px-3 pb-2 pl-8">
                             {r.seats.map((key, idx) => {
-                              const mNet = netOf(entryByKey.get(key));
+                              const mNet = netOfKey(key);
                               return (
                                 <span
                                   key={key}
@@ -803,7 +874,13 @@ export default function AdminPlayerLinkDialog({
                                   {idx === 0 && (
                                     <span className="text-[9px] uppercase font-bold text-emerald-500/80">primary</span>
                                   )}
-                                  <span className={`font-semibold ${netClass(mNet)}`}>{formatNet(mNet)}</span>
+                                  <NetInput
+                                    value={netOverrides[key] ?? mNet}
+                                    overridden={netOverrides[key] !== undefined}
+                                    onChange={(raw) => setNetOverride(key, raw)}
+                                    onReset={() => clearNetOverride(key)}
+                                    className="w-14 font-semibold"
+                                  />
                                   <button
                                     onClick={() => unlink(key)}
                                     title="Unlink"

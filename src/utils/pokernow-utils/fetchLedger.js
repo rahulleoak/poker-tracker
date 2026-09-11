@@ -55,7 +55,7 @@ export function parseFinalLedger(csvText) {
   const players = new Map();
 
   for (const line of lines.slice(1)) {
-    const [nickname, playerId, sessionStartAt, sessionEndAt, buyIn, buyOut, stack, , net] = parseCSVLine(line);
+    const [nickname, playerId, , sessionEndAt, buyIn, buyOut, stack, , net] = parseCSVLine(line);
     if (!playerId) continue;
 
     if (!players.has(playerId)) {
@@ -77,7 +77,10 @@ export function parseFinalLedger(csvText) {
     p.totalBuyOut += parseFloat(buyOut) || 0;
     p.net += parseFloat(net) || 0;
     p.sessions += 1;
-    if (sessionStartAt && !sessionEndAt) {
+    // A row can be unclosed (still holding its stack) with session_start_at
+    // blank too - e.g. a seat approved but never sat in. Key off
+    // session_end_at alone so that stack, not just buy_in, gets counted.
+    if (!sessionEndAt) {
       p.isActive = true;
       p.currentStack += parseFloat(stack) || 0;
     }

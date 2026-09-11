@@ -44,6 +44,23 @@ test('parseSessionLedger reads a ledger CSV keyed by player_id', () => {
   assert.strictEqual(netOf(alice), 0);
 });
 
+test('parseSessionLedger credits an unclosed seat\'s stack even with no session_start_at', () => {
+  // PokerNow can emit a row for an approved-but-uncashed-out seat with both
+  // session_start_at and session_end_at blank. buy_out is blank too (never
+  // cashed out), so the stack must be credited or the buy-in reads as a pure loss.
+  const csv = [
+    'player_nickname,player_id,session_start_at,session_end_at,buy_in,buy_out,stack,nit_escrow,net',
+    '"Miguel","miguel-id",,,1000,,1000,0,0'
+  ].join('\n');
+
+  const entries = parseSessionLedger(csv);
+  const miguel = entries.find((e) => e.pokerNowId === 'miguel-id');
+  assert.strictEqual(miguel.buyIn, 1000);
+  assert.strictEqual(miguel.buyOut, 0);
+  assert.strictEqual(miguel.stack, 1000);
+  assert.strictEqual(netOf(miguel), 0);
+});
+
 test('parseSessionLedger collapses a renamed hand-log account into one node', () => {
   const csvText = fs.readFileSync(SAMPLE_LOG, 'utf8');
   const entries = parseSessionLedger(csvText);

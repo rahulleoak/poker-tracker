@@ -32,6 +32,19 @@ const generateFallbackId = () =>
     ? crypto.randomUUID()
     : `admin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
+// Reviewer edits to a parsed net land as a stack adjustment - buyIn/buyOut stay
+// the audit trail from the CSV, only the "chips still in play" figure moves.
+function applyNetOverrides(entries, netOverrides) {
+  if (!netOverrides || Object.keys(netOverrides).length === 0) return entries;
+  return entries.map((e) => {
+    const key = keyOfEntry(e);
+    if (!(key in netOverrides)) return e;
+    const currentNet = (Number(e.buyOut) || 0) + (Number(e.stack) || 0) - (Number(e.buyIn) || 0);
+    const delta = Number(netOverrides[key]) - currentNet;
+    return { ...e, stack: (Number(e.stack) || 0) + delta };
+  });
+}
+
 const readAsText = (file) =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -319,7 +332,8 @@ export default function AdminPage() {
     profileCountryByKey = {},
     bankByCountry,
     chipsPerCad,
-    cadToUsd
+    cadToUsd,
+    netOverrides = {}
   }) => {
     if (!pending || !sessionId) return;
 
@@ -339,7 +353,8 @@ export default function AdminPage() {
     setStatus('saving');
     setSaveError(null);
     try {
-      const { logText, ledgerText, entries, date } = pending;
+      const { logText, ledgerText, date } = pending;
+      const entries = applyNetOverrides(pending.entries, netOverrides);
       const resolvedByKey = pending.resolvedByKey || {};
       const groupedEntries = applyPlayerGroups(entries, groups);
 
@@ -347,7 +362,7 @@ export default function AdminPage() {
       const pokerNowUrl = extractPokerNowUrl(logText || ledgerText || '');
       if (pokerNowUrl) game.pokerNowUrl = pokerNowUrl;
 
-      const settlement = { countryByKey, bankByCountry, chipsPerCad, cadToUsd };
+      const settlement = { countryByKey, bankByCountry, chipsPerCad, cadToUsd, netOverrides };
 
       // Phase 2 — persist identities. For each unit the reviewer bound to a
       // profile: ensure the `players` row, then idempotently link its tokens.

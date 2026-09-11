@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { Copy, Check as CheckIcon } from 'lucide-react';
 import { COUNTRIES } from '../utils/countries';
 import { sessionApi } from '../utils/sessionApi';
 import { buildCountrySettlement } from '../utils/settlementLedger';
@@ -24,6 +25,28 @@ function ago(iso) {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+const shortSessionId = (id) =>
+  id && id.length > 12 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id || '';
+
+// Plain-text DM to a player about what they currently owe/are owed — settled
+// lines excluded, since the point is to prompt payment of what's open. Full
+// (untrimmed) session ids, since the recipient may need to paste one back.
+function buildPlayerMessage(player, currency) {
+  const outstanding = player.lines.filter((l) => !l.settled);
+  const owes = player.direction === 'owes_bank';
+  const total = money(Math.abs(player.outstandingLocal), currency);
+
+  const blocks = outstanding.map((l) => {
+    const lineOwes = l.direction === 'to_bank';
+    return `${fmtDate(l.date)}\n - ${l.sessionId} - ${lineOwes ? 'you owe' : 'you will be sent'} ${money(
+      l.amountLocal,
+      l.currency
+    )}`;
+  });
+
+  return [...blocks, `Overall you ${owes ? 'owe' : 'will be sent'} ${total}`].join('\n\n');
 }
 
 export default function SettlementPage() {
@@ -462,12 +485,24 @@ function DetailView({ data, marks, nameOf, busy, onSettleRows, onUndoIds }) {
 
 function PlayerRow({ player, currency, busy, cleared, onSettleAll, onToggleLine }) {
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const owes = player.direction === 'owes_bank';
   const summary = cleared
     ? `${player.lines.length} session${player.lines.length === 1 ? '' : 's'} · all settled`
     : `${owes ? 'owes bank' : 'bank owes'} ${money(player.outstandingLocal, currency)} · ${
         player.outstandingCount
       } session${player.outstandingCount === 1 ? '' : 's'}`;
+
+  const copyMessage = async (e) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(buildPlayerMessage(player, currency));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('Failed to copy settlement message:', err);
+    }
+  };
 
   return (
     <div className="px-4 py-3">
@@ -491,6 +526,15 @@ function PlayerRow({ player, currency, busy, cleared, onSettleAll, onToggleLine 
         <span className={`tabular-nums ${cleared ? 'text-slate-600' : owes ? 'text-rose-400' : 'text-emerald-400'}`}>
           {cleared ? '' : money(player.outstandingLocal, currency)}
         </span>
+        {!cleared && (
+          <button
+            onClick={copyMessage}
+            title="Copy a message to send this player"
+            className="text-slate-600 hover:text-emerald-400 shrink-0"
+          >
+            {copied ? <CheckIcon className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+        )}
         <button onClick={() => setOpen((o) => !o)} className="text-slate-600 w-4 text-center">
           {open ? '▾' : '▸'}
         </button>
@@ -501,20 +545,30 @@ function PlayerRow({ player, currency, busy, cleared, onSettleAll, onToggleLine 
           {player.lines.map((line) => {
             const lineOwes = line.direction === 'to_bank';
             return (
-              <label
+              <div
                 key={`${line.sessionId}:${line.legId}`}
-                className="flex items-center gap-2.5 text-xs py-1 cursor-pointer"
+                className="flex items-center gap-2.5 text-xs py-1"
               >
                 <input
                   type="checkbox"
                   checked={line.settled}
                   disabled={busy}
                   onChange={() => onToggleLine(line)}
-                  className="w-3.5 h-3.5 accent-emerald-500 shrink-0"
+                  className="w-3.5 h-3.5 accent-emerald-500 shrink-0 cursor-pointer"
                 />
-                <span className={`flex-1 ${line.settled ? 'text-slate-600 line-through' : 'text-slate-400'}`}>
+                <span
+                  onClick={() => !busy && onToggleLine(line)}
+                  className={`flex-1 cursor-pointer ${line.settled ? 'text-slate-600 line-through' : 'text-slate-400'}`}
+                >
                   {fmtDate(line.date)} · {lineOwes ? 'owes bank' : 'bank owes'}
                 </span>
+                <Link
+                  to={`/admin/session/${line.sessionId}`}
+                  title="Open session"
+                  className="font-mono text-[10px] text-slate-600 hover:text-emerald-400 shrink-0"
+                >
+                  {shortSessionId(line.sessionId)}
+                </Link>
                 <span
                   className={`tabular-nums ${
                     line.settled ? 'text-slate-600' : lineOwes ? 'text-rose-400/80' : 'text-emerald-400/80'
@@ -522,7 +576,7 @@ function PlayerRow({ player, currency, busy, cleared, onSettleAll, onToggleLine 
                 >
                   {money(line.amountLocal, line.currency)}
                 </span>
-              </label>
+              </div>
             );
           })}
         </div>
