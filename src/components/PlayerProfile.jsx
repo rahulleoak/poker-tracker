@@ -11,11 +11,12 @@ export default function PlayerProfile({ playerName, games = [], exchangeRates, g
       .map(game => {
         if (!game) return null;
         const entries = Array.isArray(game.entries) ? game.entries : [];
-        const entry = entries.find(e => e && getPlayerDisplayName(e.name, e.externalId || e.pokerNowId) === playerName);
-        if (entry) {
-          const buyIn = Number(entry.buyIn) || 0;
-          const buyOut = Number(entry.buyOut) || 0;
-          const stack = Number(entry.stack) || 0;
+        const matchingEntries = entries.filter(e => e && getPlayerDisplayName(e.name, e.externalId || e.pokerNowId) === playerName);
+        
+        if (matchingEntries.length > 0) {
+          const buyIn = matchingEntries.reduce((s, e) => s + (Number(e.buyIn) || 0), 0);
+          const buyOut = matchingEntries.reduce((s, e) => s + (Number(e.buyOut) || 0), 0);
+          const stack = matchingEntries.reduce((s, e) => s + (Number(e.stack) || 0), 0);
           const totalCashOutChips = buyOut + stack;
           const netChips = totalCashOutChips - buyIn;
           
@@ -51,14 +52,14 @@ export default function PlayerProfile({ playerName, games = [], exchangeRates, g
     safeGames.forEach(game => {
       if (!game) return;
       const entries = Array.isArray(game.entries) ? game.entries : [];
-      const entry = entries.find(e => e && getPlayerDisplayName(e.name, e.externalId || e.pokerNowId) === playerName);
-      if (entry) {
+      const matchingEntries = entries.filter(e => e && getPlayerDisplayName(e.name, e.externalId || e.pokerNowId) === playerName);
+      matchingEntries.forEach(entry => {
         handsPlayed += Number(entry.handsPlayed) || 0;
         vpipHands += Number(entry.vpipHands) || 0;
         pfrHands += Number(entry.pfrHands) || 0;
         threeBetOpps += Number(entry.threeBetOpps) || 0;
         threeBetHands += Number(entry.threeBetHands) || 0;
-      }
+      });
     });
 
     const vpipPct = handsPlayed > 0 ? `${((vpipHands / handsPlayed) * 100).toFixed(1)}%` : '-';
@@ -91,121 +92,139 @@ export default function PlayerProfile({ playerName, games = [], exchangeRates, g
           <ChevronLeft className="w-5 h-5" />
         </button>
         <div>
-          <h2 className="text-3xl font-bold text-slate-100">{playerName}'s Profile</h2>
+          <h2 className="text-3xl font-bold text-slate-100">{playerName}&apos;s Profile</h2>
           <p className="text-slate-500">All values converted to {globalCurrency}</p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard 
-          title="All-Time Net" 
-          value={formatFiat(totalNet, globalCurrency)} 
-          valueColor={totalNet > 0 ? "text-emerald-400" : totalNet < 0 ? "text-rose-400" : "text-slate-200"}
-          icon={totalNet > 0 ? <TrendingUp className="w-5 h-5 text-emerald-400" /> : <TrendingDown className="w-5 h-5 text-rose-400" />} 
+          title="All-Time Net Profit" 
+          value={`${totalNet > 0 ? '+' : ''}${formatFiat(totalNet, globalCurrency)}`}
+          icon={totalNet >= 0 ? <TrendingUp className="w-5 h-5 text-emerald-400" /> : <TrendingDown className="w-5 h-5 text-rose-400" />}
         />
-        <MetricCard title="Games Played" value={playerHistory.length} icon={<History className="w-5 h-5 text-blue-400" />} />
-        <MetricCard title="Avg. Buy-in" value={formatFiat(avgBuyIn, globalCurrency)} icon={<DollarSign className="w-5 h-5 text-slate-400" />} />
         <MetricCard 
-          title="Total ROI" 
-          value={totalBuyIn > 0 ? `${((totalNet / totalBuyIn) * 100).toFixed(1)}%` : '0%'} 
-          valueColor={totalNet > 0 ? "text-emerald-400" : totalNet < 0 ? "text-rose-400" : "text-slate-200"}
+          title="Total Sessions" 
+          value={playerHistory.length} 
+          icon={<History className="w-5 h-5 text-indigo-400" />}
+        />
+        <MetricCard 
+          title="Total Buy-Ins" 
+          value={formatFiat(totalBuyIn, globalCurrency)} 
+          icon={<DollarSign className="w-5 h-5 text-amber-400" />}
+        />
+        <MetricCard 
+          title="Avg Buy-In / Session" 
+          value={formatFiat(avgBuyIn, globalCurrency)} 
+          icon={<DollarSign className="w-5 h-5 text-purple-400" />}
         />
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl shadow-xl">
-        <h3 className="font-bold text-slate-100 mb-4 text-sm uppercase tracking-wider text-slate-400">Pre-flop Statistics</h3>
+      {/* Advanced Pre-Flop Poker Stats */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl">
+        <h3 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
+          <span>Pre-Flop Playing Style</span>
+          <span className="text-xs font-normal text-slate-400">({advancedStats.handsPlayed.toLocaleString()} hands recorded)</span>
+        </h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <MetricCard 
-            title="VPIP" 
-            value={advancedStats.vpipPct} 
-            subtitle={advancedStats.handsPlayed > 0 ? `${advancedStats.vpipHands} / ${advancedStats.handsPlayed} hands` : 'No hands tracked'}
-          />
-          <MetricCard 
-            title="PFR" 
-            value={advancedStats.pfrPct} 
-            subtitle={advancedStats.handsPlayed > 0 ? `${advancedStats.pfrHands} / ${advancedStats.handsPlayed} hands` : 'No hands tracked'}
-          />
-          <MetricCard 
-            title="3-Bet Frequency" 
-            value={advancedStats.threeBetPct} 
-            subtitle={advancedStats.threeBetOpps > 0 ? `${advancedStats.threeBetHands} / ${advancedStats.threeBetOpps} opportunities` : 'No opportunities faced'}
-          />
+          <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">VPIP</span>
+              <InfoTooltip text="Voluntarily Put Money In Pot: Percentage of hands where the player put money in pre-flop (excluding un-raised blinds). High = Loose, Low = Tight." />
+            </div>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-2xl font-black text-emerald-400">{advancedStats.vpipPct}</span>
+              <span className="text-xs text-slate-500">({advancedStats.vpipHands} hands)</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">PFR</span>
+              <InfoTooltip text="Pre-Flop Raise: Percentage of hands where the player raised or re-raised pre-flop. Measures pre-flop aggression." />
+            </div>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-2xl font-black text-indigo-400">{advancedStats.pfrPct}</span>
+              <span className="text-xs text-slate-500">({advancedStats.pfrHands} hands)</span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">3-Bet</span>
+              <InfoTooltip text="3-Bet Percentage: Percentage of times the player re-raised when facing a pre-flop raise. Measures re-raising aggression." />
+            </div>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-2xl font-black text-amber-400">{advancedStats.threeBetPct}</span>
+              <span className="text-xs text-slate-500">({advancedStats.threeBetHands} / {advancedStats.threeBetOpps} opps)</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
-          <div className="p-5 border-b border-slate-800 bg-slate-950/50">
-            <h3 className="font-bold text-slate-100">Session History</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-slate-900 text-slate-400 text-sm border-b border-slate-800">
-                  <th className="p-4 font-medium"><InfoTooltip label="Date" content="Calendar date when the poker session was played." /></th>
-                  <th className="p-4 font-medium text-right"><InfoTooltip label="Buy In" content="Total fiat currency equivalent contributed as buy-in chips for this session." /></th>
-                  <th className="p-4 font-medium text-right"><InfoTooltip label="Cash Out" content="Total fiat currency equivalent cashed out or held as final stack at session end." /></th>
-                  <th className="p-4 font-medium text-right"><InfoTooltip label="Net" content="Net profit or loss in fiat currency for this specific session." /></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50">
-                {playerHistory.map((session, index) => {
-                  if (!session) return null;
-                  const sessionDate = session.date ? new Date(session.date) : new Date();
-                  const formattedDate = !isNaN(sessionDate.getTime()) 
-                    ? sessionDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-                    : 'Unknown Date';
-
-                  return (
-                    <tr key={index} className="hover:bg-slate-800/20 transition-colors">
-                      <td className="p-4 font-medium text-slate-300">
-                        {formattedDate}
-                      </td>
-                      <td className="p-4 text-right text-slate-400">{formatFiat(session.buyInFiat, globalCurrency)}</td>
-                      <td className="p-4 text-right text-slate-400">{formatFiat(session.cashOutFiat, globalCurrency)}</td>
-                      <td className={`p-4 text-right font-bold ${session.netFiat > 0 ? 'text-emerald-400' : session.netFiat < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
-                        {session.netFiat > 0 ? '+' : ''}{formatFiat(session.netFiat, globalCurrency)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl flex flex-col justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wider text-emerald-500">Best Session</span>
+          {bestSession ? (
+            <div className="mt-4">
+              <div className="text-3xl font-extrabold text-emerald-400">
+                +{formatFiat(bestSession.netFiat, globalCurrency)}
+              </div>
+              <p className="text-sm text-slate-400 mt-1">Date: {bestSession.date}</p>
+            </div>
+          ) : (
+            <p className="text-slate-500 mt-2">No session recorded</p>
+          )}
         </div>
 
-        <div className="space-y-6">
-          <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
-            <h3 className="font-bold text-slate-100 mb-4 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-emerald-400" /> Best Session
-            </h3>
-            {bestSession ? (
-              <div>
-                <p className="text-3xl font-bold text-emerald-400 mb-1">+{formatFiat(bestSession.netFiat, globalCurrency)}</p>
-                <p className="text-sm text-slate-500">
-                  {bestSession.date && !isNaN(new Date(bestSession.date).getTime()) 
-                    ? new Date(bestSession.date).toLocaleDateString() 
-                    : 'Unknown Date'}
-                </p>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-xl flex flex-col justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wider text-rose-500">Worst Session</span>
+          {worstSession ? (
+            <div className="mt-4">
+              <div className="text-3xl font-extrabold text-rose-400">
+                {formatFiat(worstSession.netFiat, globalCurrency)}
               </div>
-            ) : <p className="text-slate-500">No data.</p>}
-          </div>
+              <p className="text-sm text-slate-400 mt-1">Date: {worstSession.date}</p>
+            </div>
+          ) : (
+            <p className="text-slate-500 mt-2">No session recorded</p>
+          )}
+        </div>
+      </div>
 
-          <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl shadow-xl">
-            <h3 className="font-bold text-slate-100 mb-4 flex items-center gap-2">
-              <TrendingDown className="w-5 h-5 text-rose-400" /> Worst Session
-            </h3>
-            {worstSession ? (
-              <div>
-                <p className="text-3xl font-bold text-rose-400 mb-1">{formatFiat(worstSession.netFiat, globalCurrency)}</p>
-                <p className="text-sm text-slate-500">
-                  {worstSession.date && !isNaN(new Date(worstSession.date).getTime()) 
-                    ? new Date(worstSession.date).toLocaleDateString() 
-                    : 'Unknown Date'}
-                </p>
-              </div>
-            ) : <p className="text-slate-500">No data.</p>}
-          </div>
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+        <div className="p-6 border-b border-slate-800">
+          <h3 className="text-lg font-bold text-slate-100">Session History</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-slate-950/50 text-slate-400 text-sm">
+                <th className="p-4 font-medium">Date</th>
+                <th className="p-4 font-medium text-right">Buy-In</th>
+                <th className="p-4 font-medium text-right">Cash-Out</th>
+                <th className="p-4 font-medium text-right">Net Profit</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/50">
+              {playerHistory.length === 0 ? (
+                <tr>
+                  <td colSpan="4" className="p-8 text-center text-slate-500">No session history found for this player.</td>
+                </tr>
+              ) : (
+                playerHistory.map((s, idx) => (
+                  <tr key={`${s.gameId}-${idx}`} className="hover:bg-slate-800/20 transition-colors">
+                    <td className="p-4 font-medium text-slate-200">{s.date}</td>
+                    <td className="p-4 text-right text-slate-400">{formatFiat(s.buyInFiat, globalCurrency)}</td>
+                    <td className="p-4 text-right text-slate-400">{formatFiat(s.cashOutFiat, globalCurrency)}</td>
+                    <td className={`p-4 text-right font-bold ${s.netFiat > 0 ? 'text-emerald-400' : s.netFiat < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                      {s.netFiat > 0 ? '+' : ''}{formatFiat(s.netFiat, globalCurrency)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

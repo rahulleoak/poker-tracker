@@ -43,7 +43,8 @@ export default function ProfitGraph({ games = [], exchangeRates = {}, globalCurr
       const entries = Array.isArray(game.entries) ? game.entries : [];
       entries.forEach(entry => {
         if (!entry || !entry.name) return;
-        const profileName = getPlayerDisplayName ? getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId) : entry.name;
+        // Strictly resolve to master player profile
+        const profileName = getPlayerDisplayName ? getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId, true) : null;
         if (profileName) {
           profileSet.add(profileName);
         }
@@ -78,7 +79,7 @@ export default function ProfitGraph({ games = [], exchangeRates = {}, globalCurr
       const entries = Array.isArray(game.entries) ? game.entries : [];
       entries.forEach(entry => {
         if (!entry || !entry.name) return;
-        const profileName = getPlayerDisplayName ? getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId) : entry.name;
+        const profileName = getPlayerDisplayName ? getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId, true) : null;
         if (!profileName) return;
 
         const buyIn = Number(entry.buyIn) || 0;

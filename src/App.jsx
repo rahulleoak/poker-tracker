@@ -107,29 +107,46 @@ function AppContent() {
 
   const getPlayerProfile = useCallback((sessionName, externalId) => {
     const trimmedName = (sessionName || '').trim();
+    const normName = trimmedName.toLowerCase();
+    const normExtId = (externalId || '').trim().toLowerCase();
 
-    if (externalId) {
-      const link = playerLinks.find(l => l.external_player_id === externalId);
+    // 1. Check external ID / PokerNow ID match
+    if (normExtId) {
+      const link = playerLinks.find(l => {
+        const ext = (l.external_id || l.external_player_id || '').trim().toLowerCase();
+        return ext === normExtId;
+      });
       if (link) {
         const matched = players.find(p => p.id === link.player_id);
         if (matched) return matched;
       }
     }
 
-    if (trimmedName) {
-      const exactMatch = players.find(p => p.display_name.toLowerCase() === trimmedName.toLowerCase());
+    // 2. Check seat-name / alias link match
+    if (normName) {
+      const link = playerLinks.find(l => {
+        const ext = (l.external_id || l.external_player_id || l.session_name || '').trim().toLowerCase();
+        return ext === normName;
+      });
+      if (link) {
+        const matched = players.find(p => p.id === link.player_id);
+        if (matched) return matched;
+      }
+
+      // 3. Direct display_name match with registered player profile
+      const exactMatch = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
       if (exactMatch) return exactMatch;
     }
 
     return null;
   }, [players, playerLinks]);
 
-  const getPlayerDisplayName = useCallback((sessionName, externalId) => {
+  const getPlayerDisplayName = useCallback((sessionName, externalId, requireProfile = false) => {
     const profile = getPlayerProfile(sessionName, externalId);
     if (profile && profile.display_name) {
       return profile.display_name;
     }
-    return (sessionName || '').trim() || 'Unknown Player';
+    return requireProfile ? null : ((sessionName || '').trim() || 'Unknown Player');
   }, [getPlayerProfile]);
 
   // --- INITIAL DATA LOAD & SYNC ---
@@ -197,7 +214,7 @@ function AppContent() {
     }
   }, [games]);
 
-  // --- AGGREGATE DASHBOARD STATS ---
+  // --- AGGREGATE DASHBOARD STATS (STRICTLY PROFILE-BASED) ---
   const playerStats = useMemo(() => {
     const stats = {};
     const safeGames = Array.isArray(games) ? games : [];
@@ -211,10 +228,14 @@ function AppContent() {
         : 1;
 
       const entries = Array.isArray(game.entries) ? game.entries : [];
+      const profilesInGame = new Set();
+
       entries.forEach(entry => {
         if (!entry || !entry.name || entry.name.trim() === '') return;
 
-        const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId);
+        // Leaderboard strictly uses master player profiles
+        const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId, true);
+        if (!mappedName) return; // Ignore unregistered/unmapped session names
 
         if (!stats[mappedName]) {
           stats[mappedName] = {
@@ -227,6 +248,7 @@ function AppContent() {
             buyInFiat: 0,
             cashOutFiat: 0,
             sessions: 0,
+            gamesPlayed: 0,
             handsPlayed: 0,
             vpipHands: 0,
             pfrHands: 0,
@@ -252,7 +274,12 @@ function AppContent() {
         stats[mappedName].buyInFiat += buyInFiat;
         stats[mappedName].cashOutFiat += cashOutFiat;
         stats[mappedName].netFiat += netFiat;
-        stats[mappedName].sessions += 1;
+
+        if (!profilesInGame.has(mappedName)) {
+          profilesInGame.add(mappedName);
+          stats[mappedName].sessions += 1;
+          stats[mappedName].gamesPlayed += 1;
+        }
 
         stats[mappedName].handsPlayed += Number(entry.handsPlayed) || 0;
         stats[mappedName].vpipHands += Number(entry.vpipHands) || 0;
