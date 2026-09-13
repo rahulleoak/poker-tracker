@@ -3,60 +3,60 @@
 -- =========================================================================
 
 -- 1. SESSIONS TABLE
-CREATE TABLE IF NOT EXISTS public.sessions (\
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
-    date TIMESTAMPTZ DEFAULT NOW(),\
-    created_at TIMESTAMPTZ DEFAULT NOW(),\
-    poker_now_url TEXT,\
-    is_active BOOLEAN DEFAULT false,\
-    currency TEXT DEFAULT 'USD',\
-    chip_value NUMERIC DEFAULT 1\
+CREATE TABLE IF NOT EXISTS public.sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    date TIMESTAMPTZ DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    poker_now_url TEXT,
+    is_active BOOLEAN DEFAULT false,
+    currency TEXT DEFAULT 'USD',
+    chip_value NUMERIC DEFAULT 1
 );
 
 -- 2. LEDGER TABLE
-CREATE TABLE IF NOT EXISTS public.ledger (\
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
-    session_id UUID REFERENCES public.sessions(id) ON DELETE CASCADE,\
-    player_name TEXT,\
-    buy_in NUMERIC DEFAULT 0,\
-    cash_out NUMERIC DEFAULT 0,\
-    hands_played INTEGER DEFAULT 0,\
-    vpip_hands INTEGER DEFAULT 0,\
-    pfr_hands INTEGER DEFAULT 0,\
-    three_bet_opps INTEGER DEFAULT 0,\
-    three_bet_hands INTEGER DEFAULT 0,\
-    external_player_id TEXT,\
-    player_external_id TEXT,\
-    player_poker_now_id TEXT,\
-    currency TEXT DEFAULT 'USD',\
-    is_bank BOOLEAN DEFAULT false,\
-    created_at TIMESTAMPTZ DEFAULT NOW()\
+CREATE TABLE IF NOT EXISTS public.ledger (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES public.sessions(id) ON DELETE CASCADE,
+    player_name TEXT,
+    buy_in NUMERIC DEFAULT 0,
+    cash_out NUMERIC DEFAULT 0,
+    hands_played INTEGER DEFAULT 0,
+    vpip_hands INTEGER DEFAULT 0,
+    pfr_hands INTEGER DEFAULT 0,
+    three_bet_opps INTEGER DEFAULT 0,
+    three_bet_hands INTEGER DEFAULT 0,
+    external_player_id TEXT,
+    player_external_id TEXT,
+    player_poker_now_id TEXT,
+    currency TEXT DEFAULT 'USD',
+    is_bank BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- 3. PERFORMANCE INDEXES
 CREATE INDEX IF NOT EXISTS idx_ledger_session_id ON public.ledger(session_id);
 
 -- 3B. PLAYERS AND PLAYER LINKS TABLES
-CREATE TABLE IF NOT EXISTS public.players (\
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
-    display_name TEXT NOT NULL UNIQUE,\
-    country TEXT,                          -- 'CA' | 'US' (see src/utils/countries.js); null = unset\
-    preferred_currency TEXT DEFAULT 'USD',\
-    created_at TIMESTAMPTZ DEFAULT NOW()\
+CREATE TABLE IF NOT EXISTS public.players (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    display_name TEXT NOT NULL UNIQUE,
+    country TEXT,                          -- 'CA' | 'US' (see src/utils/countries.js); null = unset
+    preferred_currency TEXT DEFAULT 'USD',
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Additive for deployments created before the country/currency columns existed.
 ALTER TABLE public.players ADD COLUMN IF NOT EXISTS country TEXT;
 ALTER TABLE public.players ADD COLUMN IF NOT EXISTS preferred_currency TEXT DEFAULT 'USD';
 
-CREATE TABLE IF NOT EXISTS public.player_links (\
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
-    player_id UUID REFERENCES public.players(id) ON DELETE CASCADE,\
-    platform TEXT DEFAULT 'pokernow',\
-    external_id TEXT,\
-    external_player_id TEXT,\
-    session_name TEXT,\
-    created_at TIMESTAMPTZ DEFAULT NOW()\
+CREATE TABLE IF NOT EXISTS public.player_links (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    player_id UUID REFERENCES public.players(id) ON DELETE CASCADE,
+    platform TEXT DEFAULT 'pokernow',
+    external_id TEXT,
+    external_player_id TEXT,
+    session_name TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Additive for deployments created before platform/external_id columns existed.
@@ -107,11 +107,9 @@ CREATE POLICY "Player links can be updated by anyone" ON public.player_links FOR
 CREATE POLICY "Player links can be deleted by anyone" ON public.player_links FOR DELETE USING (true);
 
 -- =========================================================================
--- 6. ADMIN SESSIONS  (see design/admin-session.md — the /admin CSV upload flow)
---    Separate namespace from `sessions` / `ledger`. Keyed on the PokerNow game
---    id (or a generated fallback). Not gated: public read + write, same as the
---    rest of the app. Render-ready blobs (`chart_data`, `entries`) are the read
---    source; `raw_csv_path` / `parser_version` are reserved scaffold.
+-- 6. PROCESSED SESSIONS & ANALYTICS
+--    Stores structured session data, hand charts, and ledger entries.
+--    Render-ready blobs (`chart_data`, `entries`) drive session analytics.
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS public.admin_sessions (
     id             TEXT PRIMARY KEY,
@@ -134,8 +132,8 @@ CREATE TABLE IF NOT EXISTS public.admin_sessions (
     profiles       JSONB NOT NULL DEFAULT '[]'::jsonb,
     settlement     JSONB NOT NULL DEFAULT '{}'::jsonb,
 
-    raw_csv_path   TEXT,                        -- SCAFFOLD ONLY, not written/read yet
-    parser_version INT NOT NULL DEFAULT 1       -- SCAFFOLD ONLY
+    raw_csv_path   TEXT,
+    parser_version INT NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_admin_sessions_date ON public.admin_sessions(date DESC);
@@ -166,8 +164,8 @@ DROP POLICY IF EXISTS "admin_sessions deletable by anyone" ON public.admin_sessi
 CREATE POLICY "admin_sessions deletable by anyone" ON public.admin_sessions FOR DELETE USING (true);
 
 -- =========================================================================
--- 7. ADMIN BANK DEFAULTS  (standing banker per country for the /admin review
---    dialog — see src/utils/adminBankDefaults.js for the name-based fallback)
+-- 7. BANK DEFAULTS
+--    Standing banker per country (see src/utils/countries.js).
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS public.admin_bank_defaults (
     country    TEXT PRIMARY KEY,                 -- code from src/utils/countries.js ('CA' | 'US')
@@ -183,12 +181,9 @@ DROP POLICY IF EXISTS "admin_bank_defaults writable by anyone" ON public.admin_b
 CREATE POLICY "admin_bank_defaults writable by anyone" ON public.admin_bank_defaults FOR ALL USING (true) WITH CHECK (true);
 
 -- =========================================================================
--- 8. SETTLEMENT MARKS  (see design/banks-settlement.md)
---    One row per settled leg. A "leg" is a single player's whole net with
---    their country's bank for one session (`computeBankSettlement` emits one
---    per non-bank member as `player:<key>`), or one inter-bank transfer
---    (`bank:<from>><to>`). Rows are never hard-deleted — Undo sets `undone_at`
---    so the history survives. Not gated: public read + write.
+-- 8. SETTLEMENT MARKS
+--    One row per settled leg. Rows are never hard-deleted — Undo sets
+--    `undone_at` so the transaction history survives.
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS public.settlement_marks (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -231,12 +226,10 @@ DROP POLICY IF EXISTS "settlement_marks writable by anyone" ON public.settlement
 CREATE POLICY "settlement_marks writable by anyone" ON public.settlement_marks FOR ALL USING (true) WITH CHECK (true);
 
 -- =========================================================================
--- 9. ADMIN SESSION LEGS  (see design/banks-settlement.md)
+-- 9. SESSION SETTLEMENT LEGS
 --    Denormalised settlement breakdown: one row per checkable unit
 --    (`computeBankSettlement` playerTransfer / bankTransfer), written at
---    session-save time by sessionApi so the /settlement roll-up is one indexed
---    query instead of re-parsing every session's entries. Derived data —
---    regenerated wholesale on every (re)save, never hand-edited. Not gated.
+--    session-save time so the /settlement roll-up is one indexed query.
 -- =========================================================================
 CREATE TABLE IF NOT EXISTS public.admin_session_legs (
     session_id      TEXT NOT NULL REFERENCES public.admin_sessions(id) ON DELETE CASCADE,

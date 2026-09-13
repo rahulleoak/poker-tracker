@@ -218,11 +218,11 @@ export default function SessionPage() {
       <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-8">
         <header className="space-y-1">
           <Link
-            to="/admin"
+            to="/"
             className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors mb-2"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            Admin
+            Back to Sessions
           </Link>
           <p className="text-xs font-medium uppercase tracking-widest text-slate-500">Session</p>
           <h1 className="text-2xl font-bold text-emerald-400 font-mono tracking-tight break-all">{sessionId}</h1>
