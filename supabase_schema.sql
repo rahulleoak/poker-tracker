@@ -3,61 +3,71 @@
 -- =========================================================================
 
 -- 1. SESSIONS TABLE
-CREATE TABLE IF NOT EXISTS public.sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    date TIMESTAMPTZ DEFAULT NOW(),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    poker_now_url TEXT,
-    is_active BOOLEAN DEFAULT false,
-    currency TEXT DEFAULT 'USD',
-    chip_value NUMERIC DEFAULT 1
+CREATE TABLE IF NOT EXISTS public.sessions (\
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
+    date TIMESTAMPTZ DEFAULT NOW(),\
+    created_at TIMESTAMPTZ DEFAULT NOW(),\
+    poker_now_url TEXT,\
+    is_active BOOLEAN DEFAULT false,\
+    currency TEXT DEFAULT 'USD',\
+    chip_value NUMERIC DEFAULT 1\
 );
 
 -- 2. LEDGER TABLE
-CREATE TABLE IF NOT EXISTS public.ledger (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id UUID REFERENCES public.sessions(id) ON DELETE CASCADE,
-    player_name TEXT,
-    buy_in NUMERIC DEFAULT 0,
-    cash_out NUMERIC DEFAULT 0,
-    hands_played INTEGER DEFAULT 0,
-    vpip_hands INTEGER DEFAULT 0,
-    pfr_hands INTEGER DEFAULT 0,
-    three_bet_opps INTEGER DEFAULT 0,
-    three_bet_hands INTEGER DEFAULT 0,
-    external_player_id TEXT,
-    player_external_id TEXT,
-    player_poker_now_id TEXT,
-    currency TEXT DEFAULT 'USD',
-    is_bank BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS public.ledger (\
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
+    session_id UUID REFERENCES public.sessions(id) ON DELETE CASCADE,\
+    player_name TEXT,\
+    buy_in NUMERIC DEFAULT 0,\
+    cash_out NUMERIC DEFAULT 0,\
+    hands_played INTEGER DEFAULT 0,\
+    vpip_hands INTEGER DEFAULT 0,\
+    pfr_hands INTEGER DEFAULT 0,\
+    three_bet_opps INTEGER DEFAULT 0,\
+    three_bet_hands INTEGER DEFAULT 0,\
+    external_player_id TEXT,\
+    player_external_id TEXT,\
+    player_poker_now_id TEXT,\
+    currency TEXT DEFAULT 'USD',\
+    is_bank BOOLEAN DEFAULT false,\
+    created_at TIMESTAMPTZ DEFAULT NOW()\
 );
 
 -- 3. PERFORMANCE INDEXES
 CREATE INDEX IF NOT EXISTS idx_ledger_session_id ON public.ledger(session_id);
 
 -- 3B. PLAYERS AND PLAYER LINKS TABLES
-CREATE TABLE IF NOT EXISTS public.players (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    display_name TEXT NOT NULL UNIQUE,
-    country TEXT,                          -- 'CA' | 'US' (see src/utils/countries.js); null = unset
-    preferred_currency TEXT DEFAULT 'USD',
-    created_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS public.players (\
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
+    display_name TEXT NOT NULL UNIQUE,\
+    country TEXT,                          -- 'CA' | 'US' (see src/utils/countries.js); null = unset\
+    preferred_currency TEXT DEFAULT 'USD',\
+    created_at TIMESTAMPTZ DEFAULT NOW()\
 );
 
 -- Additive for deployments created before the country/currency columns existed.
 ALTER TABLE public.players ADD COLUMN IF NOT EXISTS country TEXT;
 ALTER TABLE public.players ADD COLUMN IF NOT EXISTS preferred_currency TEXT DEFAULT 'USD';
 
-CREATE TABLE IF NOT EXISTS public.player_links (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    player_id UUID REFERENCES public.players(id) ON DELETE CASCADE,
-    session_name TEXT NOT NULL UNIQUE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS public.player_links (\
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\
+    player_id UUID REFERENCES public.players(id) ON DELETE CASCADE,\
+    platform TEXT DEFAULT 'pokernow',\
+    external_id TEXT,\
+    external_player_id TEXT,\
+    session_name TEXT,\
+    created_at TIMESTAMPTZ DEFAULT NOW()\
 );
+
+-- Additive for deployments created before platform/external_id columns existed.
+ALTER TABLE public.player_links ADD COLUMN IF NOT EXISTS platform TEXT DEFAULT 'pokernow';
+ALTER TABLE public.player_links ADD COLUMN IF NOT EXISTS external_id TEXT;
+ALTER TABLE public.player_links ADD COLUMN IF NOT EXISTS external_player_id TEXT;
+ALTER TABLE public.player_links ADD COLUMN IF NOT EXISTS session_name TEXT;
 
 -- 4. PERFORMANCE INDEXES FOR PLAYERS & LINKS
 CREATE INDEX IF NOT EXISTS idx_player_links_player_id ON public.player_links(player_id);
+CREATE INDEX IF NOT EXISTS idx_player_links_external_id ON public.player_links(external_id);
 CREATE INDEX IF NOT EXISTS idx_player_links_session_name ON public.player_links(session_name);
 
 -- 5. ROW LEVEL SECURITY (RLS) POLICIES
@@ -258,5 +268,3 @@ ALTER TABLE public.admin_session_legs ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "admin_session_legs readable by everyone" ON public.admin_session_legs;
 CREATE POLICY "admin_session_legs readable by everyone" ON public.admin_session_legs FOR SELECT USING (true);
-DROP POLICY IF EXISTS "admin_session_legs writable by anyone" ON public.admin_session_legs;
-CREATE POLICY "admin_session_legs writable by anyone" ON public.admin_session_legs FOR ALL USING (true) WITH CHECK (true);
