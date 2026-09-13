@@ -29,8 +29,22 @@ export default function App() {
   const [globalIncrement, setGlobalIncrement] = useState(50);
   const [exchangeRates, setExchangeRates] = useState({ USD: 1, CAD: 1.35 });
   const [globalCurrency, setGlobalCurrency] = useState('USD');
-  const [players, setPlayers] = useState([]);
-  const [playerLinks, setPlayerLinks] = useState([]);
+  const [players, setPlayers] = useState(() => {
+    try {
+      const raw = localStorage.getItem('offsuite_players');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [playerLinks, setPlayerLinks] = useState(() => {
+    try {
+      const raw = localStorage.getItem('offsuite_player_links');
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
   const [pendingMergeData, setPendingMergeData] = useState(null);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState(null);
 
@@ -55,19 +69,43 @@ export default function App() {
       .catch(err => console.warn('Could not fetch exchange rates:', err));
   }, []);
 
-  // 2. Fetch Players & Links from DB
+  // 2. Fetch Players & Links from DB / Local Storage
   const fetchPlayersAndLinks = useCallback(async () => {
-    if (!supabase) return;
-    try {
-      const [playersRes, linksRes] = await Promise.all([
-        supabase.from('players').select('*'),
-        supabase.from('player_links').select('*')
-      ]);
+    if (supabase) {
+      try {
+        const [playersRes, linksRes] = await Promise.all([
+          supabase.from('players').select('*'),
+          supabase.from('player_links').select('*')
+        ]);
 
-      if (playersRes.data) setPlayers(playersRes.data);
-      if (linksRes.data) setPlayerLinks(linksRes.data);
-    } catch (err) {
-      console.warn('Error fetching players/links from DB:', err);
+        if (playersRes.data && Array.isArray(playersRes.data)) {
+          setPlayers(playersRes.data);
+          try {
+            localStorage.setItem('offsuite_players', JSON.stringify(playersRes.data));
+          } catch (e) {
+            console.warn(e);
+          }
+        }
+        if (linksRes.data && Array.isArray(linksRes.data)) {
+          setPlayerLinks(linksRes.data);
+          try {
+            localStorage.setItem('offsuite_player_links', JSON.stringify(linksRes.data));
+          } catch (e) {
+            console.warn(e);
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching players/links from DB:', err);
+      }
+    } else {
+      try {
+        const localPlayers = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
+        const localLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+        setPlayers(localPlayers);
+        setPlayerLinks(localLinks);
+      } catch (e) {
+        console.warn('Error loading local players/links:', e);
+      }
     }
   }, []);
 
@@ -132,66 +170,89 @@ export default function App() {
     saveGamesToStorage(games);
   }, [games]);
 
-  // Helper to resolve player name via identity links
-  const getPlayerDisplayName = useCallback((rawName, extId) => {
-    if (extId) {
-      const link = playerLinks.find(l => l.external_player_id === extId);
-      if (link) {
-        const master = players.find(p => p.id === link.player_id);
-        if (master) return master.display_name;
-      }
-    }
-    if (rawName) {
-      const match = players.find(p => p.display_name.toLowerCase() === rawName.toLowerCase());
-      if (match) return match.display_name;
-    }
-    return rawName || 'Unknown Player';
-  }, [players, playerLinks]);
+  // Helper to resolve player profile & display name via identity links
+  const getPlayerProfile = useCallback((sessionName, externalId) => {
+    const trimmedName = (sessionName || '').trim();
+    const normName = trimmedName.toLowerCase();
+    const normExtId = (externalId || '').trim().toLowerCase();
 
-  const getPlayerProfile = useCallback((rawName, extId) => {
-    if (extId) {
-      const link = playerLinks.find(l => l.external_player_id === extId);
+    // 1. Check external ID / PokerNow ID match against player_links
+    if (normExtId) {
+      const link = playerLinks.find(l => {
+        const ext = (l.external_id || l.external_player_id || '').trim().toLowerCase();
+        return ext === normExtId;
+      });
       if (link) {
-        return players.find(p => p.id === link.player_id) || null;
+        const matched = players.find(p => p.id === link.player_id);
+        if (matched) return matched;
       }
     }
-    if (rawName) {
-      return players.find(p => p.display_name.toLowerCase() === rawName.toLowerCase()) || null;
+
+    // 2. Check seat-name / alias link match
+    if (normName) {
+      const link = playerLinks.find(l => {
+        const ext = (l.external_id || l.external_player_id || l.session_name || '').trim().toLowerCase();
+        return ext === normName;
+      });
+      if (link) {
+        const matched = players.find(p => p.id === link.player_id);
+        if (matched) return matched;
+      }
+
+      // 3. Direct display_name match with registered master player profile
+      const exactMatch = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
+      if (exactMatch) return exactMatch;
     }
+
     return null;
   }, [players, playerLinks]);
 
-  // Aggregate Stats across games
+  const getPlayerDisplayName = useCallback((sessionName, externalId, requireProfile = false) => {
+    const profile = getPlayerProfile(sessionName, externalId);
+    if (profile && profile.display_name) {
+      return profile.display_name;
+    }
+    return requireProfile ? null : ((sessionName || '').trim() || 'Unknown Player');
+  }, [getPlayerProfile]);
+
+  // Aggregate Stats across games (STRICTLY PROFILE-BASED)
   const playerStats = useMemo(() => {
     const stats = {};
+    const safeGames = Array.isArray(games) ? games : [];
     const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
     const targetFx = fxRate(globalCurrency);
 
-    games.filter(g => g.isActive !== false).forEach(game => {
+    safeGames.filter(g => g && g.isActive !== false).forEach(game => {
       const gChipVal = Number(game.chipValue) || 1;
       const gCurr = game.currency || 'USD';
       const gFx = fxRate(gCurr);
 
-      (game.entries || []).forEach(entry => {
-        const extId = entry.externalId || entry.pokerNowId || null;
-        const displayName = getPlayerDisplayName(entry.name, extId);
-        
-        if (!stats[displayName]) {
-          stats[displayName] = {
-            name: displayName,
-            gamesPlayed: 0,
-            totalBuyInChips: 0,
-            totalBuyOutChips: 0,
-            totalStackChips: 0,
+      const entries = Array.isArray(game.entries) ? game.entries : [];
+      const profilesInGame = new Set();
+
+      entries.forEach(entry => {
+        if (!entry || !entry.name || entry.name.trim() === '') return;
+
+        // Leaderboard strictly uses master player profiles
+        const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId, true);
+        if (!mappedName) return; // Ignore unregistered/unmapped session names
+
+        if (!stats[mappedName]) {
+          stats[mappedName] = {
+            name: mappedName,
+            buyInChips: 0,
+            cashOutChips: 0,
             netChips: 0,
+            buyInFiat: 0,
+            cashOutFiat: 0,
             netFiat: 0,
-            totalBuyInFiat: 0,
-            totalHands: 0,
-            totalVpipHands: 0,
-            totalPfrHands: 0,
-            totalThreeBetOpps: 0,
-            totalThreeBetHands: 0,
-            sessions: []
+            sessions: 0,
+            gamesPlayed: 0,
+            handsPlayed: 0,
+            vpipHands: 0,
+            pfrHands: 0,
+            threeBetOpps: 0,
+            threeBetHands: 0
           };
         }
 
@@ -206,35 +267,31 @@ export default function App() {
 
         // Convert to selected global currency
         const buyInFiat = ((buyIn * gChipVal) / entryFx) * targetFx;
+        const cashOutFiat = ((cashOut * gChipVal) / entryFx) * targetFx;
         const netFiat = ((netChips * gChipVal) / entryFx) * targetFx;
 
-        stats[displayName].gamesPlayed += 1;
-        stats[displayName].totalBuyInChips += buyIn;
-        stats[displayName].totalBuyOutChips += buyOut;
-        stats[displayName].totalStackChips += stack;
-        stats[displayName].netChips += netChips;
-        stats[displayName].netFiat += netFiat;
-        stats[displayName].totalBuyInFiat += buyInFiat;
+        stats[mappedName].buyInChips += buyIn;
+        stats[mappedName].cashOutChips += cashOut;
+        stats[mappedName].netChips += netChips;
+        stats[mappedName].buyInFiat += buyInFiat;
+        stats[mappedName].cashOutFiat += cashOutFiat;
+        stats[mappedName].netFiat += netFiat;
 
-        stats[displayName].totalHands += Number(entry.handsPlayed) || 0;
-        stats[displayName].totalVpipHands += Number(entry.vpipHands) || 0;
-        stats[displayName].totalPfrHands += Number(entry.pfrHands) || 0;
-        stats[displayName].totalThreeBetOpps += Number(entry.threeBetOpps) || 0;
-        stats[displayName].totalThreeBetHands += Number(entry.threeBetHands) || 0;
+        if (!profilesInGame.has(mappedName)) {
+          profilesInGame.add(mappedName);
+          stats[mappedName].sessions += 1;
+          stats[mappedName].gamesPlayed += 1;
+        }
 
-        stats[displayName].sessions.push({
-          gameId: game.id,
-          date: game.date,
-          netChips,
-          netFiat,
-          vpip: entry.handsPlayed ? ((entry.vpipHands || 0) / entry.handsPlayed) * 100 : null,
-          pfr: entry.handsPlayed ? ((entry.pfrHands || 0) / entry.handsPlayed) * 100 : null,
-          threeBet: entry.threeBetOpps ? ((entry.threeBetHands || 0) / entry.threeBetOpps) * 100 : null
-        });
+        stats[mappedName].handsPlayed += Number(entry.handsPlayed) || 0;
+        stats[mappedName].vpipHands += Number(entry.vpipHands) || 0;
+        stats[mappedName].pfrHands += Number(entry.pfrHands) || 0;
+        stats[mappedName].threeBetOpps += Number(entry.threeBetOpps) || 0;
+        stats[mappedName].threeBetHands += Number(entry.threeBetHands) || 0;
       });
     });
 
-    return stats;
+    return Object.values(stats).sort((a, b) => b.netFiat - a.netFiat);
   }, [games, globalCurrency, exchangeRates, getPlayerDisplayName]);
 
   // Overall metrics
@@ -242,7 +299,7 @@ export default function App() {
     const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
     const targetFx = fxRate(globalCurrency);
 
-    return games.filter(g => g.isActive !== false).reduce((sum, game) => {
+    return games.filter(g => g && g.isActive !== false).reduce((sum, game) => {
       const gChipVal = Number(game.chipValue) || 1;
       const gCurr = game.currency || 'USD';
       const gFx = fxRate(gCurr);
@@ -526,9 +583,6 @@ export default function App() {
               <Globe className="w-4 h-4 text-emerald-400 drop-shadow-[0_0_6px_rgba(34,197,94,0.8)]" />
             </div>
             <span className="font-bold tracking-tight text-white font-sans">Off<span className="text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]">Suite</span></span>
-            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 bg-zinc-900 border border-white/10 text-[10px] font-mono text-zinc-400 uppercase tracking-widest">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live HUD
-            </span>
           </div>
           
           <div className="flex items-center gap-2 sm:gap-4">

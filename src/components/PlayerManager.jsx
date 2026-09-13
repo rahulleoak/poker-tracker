@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Users, Plus, Trash2, Link, Unlink, Globe } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Users, Plus, Trash2, Link as LinkIcon, Unlink, Globe, ExternalLink } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { TOP_CURRENCIES } from '../utils/formatters';
 import ConfirmationModal from './ConfirmationModal';
@@ -216,7 +217,7 @@ export default function PlayerManager({ players = [], playerLinks = [], onUpdate
           {/* Link Identity */}
           <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-xl space-y-4 backdrop-blur-xl">
             <h3 className="font-bold text-white text-xs uppercase tracking-wider font-mono flex items-center gap-2">
-              <Link className="w-4 h-4 text-cyan-400" />
+              <LinkIcon className="w-4 h-4 text-cyan-400" />
               Link Player ID / Alias
             </h3>
             <form onSubmit={handleLinkIdentity} className="space-y-3">
@@ -287,7 +288,13 @@ export default function PlayerManager({ players = [], playerLinks = [], onUpdate
                     <div key={player.id} className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-white/[0.02] transition-colors">
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-white text-sm font-sans">{player.display_name}</h4>
+                          <Link 
+                            to={`/players/${encodeURIComponent(player.display_name)}`} 
+                            className="font-bold text-white hover:text-cyan-400 transition-colors text-sm font-sans flex items-center gap-1.5 group"
+                          >
+                            <span>{player.display_name}</span>
+                            <ExternalLink className="w-3 h-3 text-zinc-500 group-hover:text-cyan-400 transition-colors" />
+                          </Link>
                           <span className="text-[10px] font-mono bg-black border border-white/15 text-zinc-400 px-2 py-0.5">
                             ID: {player.id.substring(0, 8)}...
                           </span>
@@ -350,12 +357,13 @@ export default function PlayerManager({ players = [], playerLinks = [], onUpdate
         onConfirm={() => {
           if (pendingDeletePlayerId) {
             handleDeletePlayer(pendingDeletePlayerId);
+            setPendingDeletePlayerId(null);
           }
         }}
         title="Delete Player Profile"
-        message="Are you sure you want to delete this player profile? This will unlink all associated IDs and nicknames."
-        confirmText="Delete Profile"
-        isDestructive={true}
+        message="Are you sure you want to delete this master player profile? All linked PokerNow IDs will be unlinked."
+        confirmLabel="Delete"
+        variant="danger"
       />
 
       <ConfirmationModal 
@@ -364,12 +372,13 @@ export default function PlayerManager({ players = [], playerLinks = [], onUpdate
         onConfirm={() => {
           if (pendingUnlinkId) {
             handleUnlinkIdentity(pendingUnlinkId);
+            setPendingUnlinkId(null);
           }
         }}
-        title="Unlink Player Handle"
-        message="Are you sure you want to unlink this PokerNow handle/alias from this profile?"
-        confirmText="Unlink Alias"
-        isDestructive={true}
+        title="Unlink Identity"
+        message="Are you sure you want to unlink this PokerNow ID / Alias from this profile?"
+        confirmLabel="Unlink"
+        variant="danger"
       />
     </div>
   );
