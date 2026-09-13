@@ -222,7 +222,7 @@ export default function App() {
     const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
     const targetFx = fxRate(globalCurrency);
 
-    safeGames.filter(g => g && g.isActive !== false).forEach(game => {
+    safeGames.filter(Boolean).forEach(game => {
       const gChipVal = Number(game.chipValue) || 1;
       const gCurr = game.currency || 'USD';
       const gFx = fxRate(gCurr);
@@ -299,7 +299,7 @@ export default function App() {
     const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
     const targetFx = fxRate(globalCurrency);
 
-    return games.filter(g => g && g.isActive !== false).reduce((sum, game) => {
+    return (Array.isArray(games) ? games : []).filter(Boolean).reduce((sum, game) => {
       const gChipVal = Number(game.chipValue) || 1;
       const gCurr = game.currency || 'USD';
       const gFx = fxRate(gCurr);
