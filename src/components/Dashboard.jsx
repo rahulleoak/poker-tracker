@@ -1,19 +1,41 @@
-import { History, DollarSign, Crown, HeartHandshake } from 'lucide-react';
+import { History, DollarSign, Crown, HeartHandshake, ShieldCheck, Activity } from 'lucide-react';
+import { motion } from 'framer-motion';
 import MetricCard from './MetricCard';
 import ProfitGraph from './ProfitGraph';
 import { formatFiat } from '../utils/formatters';
 
-export default function Dashboard({ stats = [], totalSessions = 0, totalMoney = 0, globalCurrency = 'USD', onPlayerClick, games = [], exchangeRates = {}, getPlayerDisplayName }) {
+export default function Dashboard({ 
+  stats = [], 
+  totalSessions = 0, 
+  totalMoney = 0, 
+  globalCurrency = 'USD', 
+  onPlayerClick, 
+  games = [], 
+  exchangeRates = {}, 
+  getPlayerDisplayName 
+}) {
   const safeStats = Array.isArray(stats) ? stats : [];
   const topWinner = safeStats.length > 0 && safeStats[0]?.netFiat > 0 ? safeStats[0] : null;
   const topLoser = safeStats.length > 0 && safeStats[safeStats.length - 1]?.netFiat < 0 ? safeStats[safeStats.length - 1] : null;
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 animate-in fade-in duration-500 font-sans">
       {/* Overview Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <MetricCard title="Total Sessions" value={totalSessions} icon={<History className="w-5 h-5 text-indigo-400" />} />
-        <MetricCard title={`Money Wagered (${globalCurrency})`} value={formatFiat(totalMoney, globalCurrency)} icon={<DollarSign className="w-5 h-5 text-emerald-400" />} />
+        <MetricCard 
+          title="Total Sessions" 
+          value={totalSessions} 
+          subtitle="Lifetime tracked games"
+          icon={<History className="w-6 h-6 text-cyan-400 drop-shadow-[0_0_8px_rgba(6,182,212,0.8)]" />} 
+          valueColor="text-white"
+        />
+        <MetricCard 
+          title={`Money Wagered (${globalCurrency})`} 
+          value={formatFiat(totalMoney, globalCurrency)} 
+          subtitle="Total volume in play"
+          icon={<DollarSign className="w-6 h-6 text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]" />} 
+          valueColor="text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.4)]"
+        />
       </div>
 
       {/* Global Profit / Loss Trend Graph */}
@@ -27,90 +49,100 @@ export default function Dashboard({ stats = [], totalSessions = 0, totalMoney = 
       {/* Hall of Fame Podiums */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Top Shark Podium */}
-        <div 
+        <motion.div 
+          whileHover={{ scale: 1.01 }}
+          transition={{ duration: 0.2 }}
           onClick={() => topWinner && topWinner.name && onPlayerClick && onPlayerClick(topWinner.name)}
-          className="bg-slate-900 border border-emerald-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-emerald-500/50 hover:shadow-emerald-500/5 transition-all duration-300"
+          className="hud-corner-reticle hud-corner-emerald bg-hud-card/90 border border-emerald-500/20 p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-emerald-500/60 hover:shadow-neon-emerald transition-all duration-300"
         >
-          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-3xl group-hover:bg-emerald-500/10 transition-colors"></div>
-          <div className="flex items-start justify-between">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl group-hover:bg-emerald-500/20 transition-colors pointer-events-none" />
+          <div className="flex items-start justify-between relative z-10">
             <div className="space-y-4">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-semibold border border-emerald-500/20">
-                🏆 Top Shark
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 text-emerald-400 text-xs font-mono font-bold uppercase tracking-wider border border-emerald-500/30">
+                <Crown className="w-3.5 h-3.5 text-amber-400 drop-shadow-[0_0_6px_rgba(251,191,36,0.8)]" /> Top Shark
               </span>
               <div>
-                <h3 className="text-3xl font-extrabold text-slate-100 group-hover:text-emerald-400 transition-colors">
+                <h3 className="text-2xl sm:text-3xl font-extrabold text-white group-hover:text-emerald-300 transition-colors tracking-tight">
                   {topWinner ? topWinner.name : 'No Shark Yet'}
                 </h3>
-                <p className="text-slate-400 text-sm mt-1">Dominating the table</p>
+                <p className="text-zinc-400 text-xs mt-1 font-sans">Dominating the table</p>
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-black text-emerald-400">
-                  {topWinner ? `+${formatFiat(topWinner.netFiat, globalCurrency)}` : '-'}
+                <span className="text-2xl sm:text-3xl font-mono font-black text-emerald-400 drop-shadow-[0_0_10px_rgba(34,197,94,0.6)] tabular-nums">
+                  {topWinner ? `+${formatFiat(topWinner.netFiat, globalCurrency)}` : '—'}
                 </span>
-                <span className="text-slate-500 text-xs">all-time net profit</span>
+                <span className="text-zinc-500 text-xs font-mono uppercase">all-time net</span>
               </div>
             </div>
-            <div className="w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center border border-emerald-500/20 group-hover:scale-110 transition-transform duration-300 shrink-0">
-              <Crown className="w-8 h-8 text-emerald-400" />
+            <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shrink-0">
+              <Crown className="w-8 h-8 text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]" />
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* Biggest Donor Podium */}
-        <div 
+        <motion.div 
+          whileHover={{ scale: 1.01 }}
+          transition={{ duration: 0.2 }}
           onClick={() => topLoser && topLoser.name && onPlayerClick && onPlayerClick(topLoser.name)}
-          className="bg-slate-900 border border-rose-500/20 rounded-2xl p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-rose-500/50 hover:shadow-rose-500/5 transition-all duration-300"
+          className="hud-corner-reticle hud-corner-rose bg-hud-card/90 border border-rose-500/20 p-6 shadow-2xl relative overflow-hidden group cursor-pointer hover:border-rose-500/60 hover:shadow-neon-rose transition-all duration-300"
         >
-          <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl group-hover:bg-rose-500/10 transition-colors"></div>
-          <div className="flex items-start justify-between">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-rose-500/10 rounded-full blur-3xl group-hover:bg-rose-500/20 transition-colors pointer-events-none" />
+          <div className="flex items-start justify-between relative z-10">
             <div className="space-y-4">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 text-xs font-semibold border border-rose-500/20">
-                🎁 Biggest Donor
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-500/10 text-rose-400 text-xs font-mono font-bold uppercase tracking-wider border border-rose-500/30">
+                <HeartHandshake className="w-3.5 h-3.5 text-rose-400 drop-shadow-[0_0_6px_rgba(244,63,94,0.8)]" /> Biggest Donor
               </span>
               <div>
-                <h3 className="text-3xl font-extrabold text-slate-100 group-hover:text-rose-400 transition-colors">
+                <h3 className="text-2xl sm:text-3xl font-extrabold text-white group-hover:text-rose-300 transition-colors tracking-tight">
                   {topLoser ? topLoser.name : 'No Donor Yet'}
                 </h3>
-                <p className="text-slate-400 text-sm mt-1">Keeping the game alive</p>
+                <p className="text-zinc-400 text-xs mt-1 font-sans">Keeping the action alive</p>
               </div>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-black text-rose-400">
-                  {topLoser ? formatFiat(topLoser.netFiat, globalCurrency) : '-'}
+                <span className="text-2xl sm:text-3xl font-mono font-black text-rose-400 drop-shadow-[0_0_10px_rgba(244,63,94,0.6)] tabular-nums">
+                  {topLoser ? formatFiat(topLoser.netFiat, globalCurrency) : '—'}
                 </span>
-                <span className="text-slate-500 text-xs">all-time contribution</span>
+                <span className="text-zinc-500 text-xs font-mono uppercase">contribution</span>
               </div>
             </div>
-            <div className="w-16 h-16 bg-rose-500/10 rounded-2xl flex items-center justify-center border border-rose-500/20 group-hover:scale-110 transition-transform duration-300 shrink-0">
-              <HeartHandshake className="w-8 h-8 text-rose-400" />
+            <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/30 flex items-center justify-center group-hover:scale-110 transition-transform duration-300 shrink-0">
+              <HeartHandshake className="w-8 h-8 text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.8)]" />
             </div>
           </div>
-        </div>
+        </motion.div>
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
-        <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-          <h2 className="text-lg font-bold text-slate-100">All-Time Leaderboard</h2>
-          <p className="text-xs text-slate-500">Click a player for details</p>
+      {/* Broadcast Leaderboard */}
+      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl">
+        <div className="p-5 border-b border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse drop-shadow-[0_0_6px_rgba(6,182,212,0.8)]" />
+            <h2 className="text-base font-bold text-white uppercase tracking-wider font-sans">All-Time Master Leaderboard</h2>
+          </div>
+          <p className="text-xs text-zinc-500 font-mono">Select player to inspect profile & history</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-slate-950/50 text-slate-400 text-sm">
-                <th className="p-4 font-medium">Rank</th>
-                <th className="p-4 font-medium">Player</th>
-                <th className="p-4 font-medium text-right">Games</th>
-                <th className="p-4 font-medium text-right">VPIP</th>
-                <th className="p-4 font-medium text-right">PFR</th>
-                <th className="p-4 font-medium text-right">3-Bet</th>
-                <th className="p-4 font-medium text-right">Total In</th>
-                <th className="p-4 font-medium text-right">Total Out</th>
-                <th className="p-4 font-medium text-right">Net Profit</th>
+              <tr className="bg-black/80 text-zinc-400 text-xs font-mono uppercase tracking-wider border-b border-white/10">
+                <th className="p-4 font-semibold w-16">Rank</th>
+                <th className="p-4 font-semibold">Player</th>
+                <th className="p-4 font-semibold text-right">Games</th>
+                <th className="p-4 font-semibold text-right">VPIP</th>
+                <th className="p-4 font-semibold text-right">PFR</th>
+                <th className="p-4 font-semibold text-right">3-Bet</th>
+                <th className="p-4 font-semibold text-right">Total In</th>
+                <th className="p-4 font-semibold text-right">Total Out</th>
+                <th className="p-4 font-semibold text-right">Net Profit</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/50">
+            <tbody className="divide-y divide-white/5 text-sm">
               {safeStats.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="p-8 text-center text-slate-500">No data available yet. Play some games!</td>
+                  <td colSpan="9" className="p-10 text-center text-zinc-500 font-mono text-sm">
+                    No player records logged yet. Import a session CSV to initialize telemetry.
+                  </td>
                 </tr>
               ) : (
                 safeStats.map((player, index) => {
@@ -122,28 +154,41 @@ export default function Dashboard({ stats = [], totalSessions = 0, totalMoney = 
                   const threeBetOpps = Number(player.threeBetOpps) || 0;
                   const threeBetHands = Number(player.threeBetHands) || 0;
 
-                  const vpipPct = handsPlayed > 0 ? `${((vpipHands / handsPlayed) * 100).toFixed(1)}%` : '-';
-                  const pfrPct = handsPlayed > 0 ? `${((pfrHands / handsPlayed) * 100).toFixed(1)}%` : '-';
-                  const threeBetPct = threeBetOpps > 0 ? `${((threeBetHands / threeBetOpps) * 100).toFixed(1)}%` : '-';
+                  const vpipPct = handsPlayed > 0 ? `${((vpipHands / handsPlayed) * 100).toFixed(1)}%` : '—';
+                  const pfrPct = handsPlayed > 0 ? `${((pfrHands / handsPlayed) * 100).toFixed(1)}%` : '—';
+                  const threeBetPct = threeBetOpps > 0 ? `${((threeBetHands / threeBetOpps) * 100).toFixed(1)}%` : '—';
                   
+                  const isTop3 = index < 3;
+                  const isPositive = (player.netFiat || 0) > 0;
+                  const isNegative = (player.netFiat || 0) < 0;
+
                   return (
                     <tr 
                       key={player.name || index} 
                       onClick={() => player.name && onPlayerClick && onPlayerClick(player.name)}
-                      className="hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                      className="hover:bg-white/[0.04] transition-colors cursor-pointer group"
                     >
-                      <td className="p-4 font-medium text-slate-500">#{index + 1}</td>
-                      <td className="p-4 font-semibold text-slate-200 group-hover:text-emerald-400 transition-colors flex items-center gap-2">
+                      <td className="p-4 font-mono font-bold text-xs">
+                        {index === 0 && <span className="text-amber-400 drop-shadow-[0_0_6px_rgba(245,158,11,0.8)]">#01</span>}
+                        {index === 1 && <span className="text-slate-300 drop-shadow-[0_0_6px_rgba(255,255,255,0.6)]">#02</span>}
+                        {index === 2 && <span className="text-amber-600 drop-shadow-[0_0_6px_rgba(217,119,6,0.8)]">#03</span>}
+                        {index > 2 && <span className="text-zinc-600">#{String(index + 1).padStart(2, '0')}</span>}
+                      </td>
+                      <td className="p-4 font-semibold text-zinc-100 group-hover:text-cyan-400 transition-colors font-sans flex items-center gap-2">
                         {player.name || 'Unknown'}
                       </td>
-                      <td className="p-4 text-right text-slate-400">{player.gamesPlayed || 0}</td>
-                      <td className="p-4 text-right text-slate-400">{vpipPct}</td>
-                      <td className="p-4 text-right text-slate-400">{pfrPct}</td>
-                      <td className="p-4 text-right text-slate-400">{threeBetPct}</td>
-                      <td className="p-4 text-right text-slate-400">{formatFiat(player.buyInFiat, globalCurrency)}</td>
-                      <td className="p-4 text-right text-slate-400">{formatFiat(player.cashOutFiat, globalCurrency)}</td>
-                      <td className={`p-4 text-right font-bold ${(player.netFiat || 0) > 0 ? 'text-emerald-400' : (player.netFiat || 0) < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-                        {(player.netFiat || 0) > 0 ? '+' : ''}{formatFiat(player.netFiat, globalCurrency)}
+                      <td className="p-4 text-right font-mono tabular-nums text-zinc-400">{player.gamesPlayed || 0}</td>
+                      <td className="p-4 text-right font-mono tabular-nums text-zinc-300">{vpipPct}</td>
+                      <td className="p-4 text-right font-mono tabular-nums text-zinc-300">{pfrPct}</td>
+                      <td className="p-4 text-right font-mono tabular-nums text-zinc-300">{threeBetPct}</td>
+                      <td className="p-4 text-right font-mono tabular-nums text-zinc-400">{formatFiat(player.buyInFiat, globalCurrency)}</td>
+                      <td className="p-4 text-right font-mono tabular-nums text-zinc-400">{formatFiat(player.cashOutFiat, globalCurrency)}</td>
+                      <td className={`p-4 text-right font-mono tabular-nums font-bold ${
+                        isPositive ? 'text-emerald-400 drop-shadow-[0_0_6px_rgba(34,197,94,0.6)]' :
+                        isNegative ? 'text-rose-400 drop-shadow-[0_0_6px_rgba(244,63,94,0.6)]' :
+                        'text-zinc-400'
+                      }`}>
+                        {isPositive ? '+' : ''}{formatFiat(player.netFiat, globalCurrency)}
                       </td>
                     </tr>
                   );

@@ -1,43 +1,59 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
-import { 
-  Landmark, 
-  RotateCcw, 
-  Search, 
-  CheckCircle2, 
-  ChevronDown, 
-  ChevronUp, 
-  ArrowRight, 
-  Users, 
-  ShieldCheck, 
-  Coins, 
-  ArrowLeft,
-  Filter
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import {
+  Landmark,
+  CheckCircle2,
+  Users,
+  ArrowRight,
+  RotateCcw,
+  Search,
+  ExternalLink,
+  Coins,
+  ChevronDown,
+  ChevronUp,
+  ArrowLeft
 } from 'lucide-react';
-import { COUNTRIES } from '../utils/countries';
+import { useIdentityGraph } from '../hooks/useIdentityGraph';
 import { sessionApi } from '../utils/sessionApi';
 import { buildCountrySettlement } from '../utils/settlementLedger';
-import { useIdentityGraph } from '../hooks/useIdentityGraph';
-import { makeNameResolver } from '../utils/adminIdentity';
+
+const COUNTRIES = [
+  { code: 'CA', name: 'Canada', currency: 'CAD', flag: '🇨🇦' },
+  { code: 'US', name: 'United States', currency: 'USD', flag: '🇺🇸' }
+];
 
 const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
 
-const fmtDate = (d) =>
-  d
-    ? new Date(`${String(d).slice(0, 10)}T00:00:00`).toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric'
-      })
-    : '—';
+const fmtDate = (d) => {
+  if (!d) return '—';
+  try {
+    return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch {
+    return String(d);
+  }
+};
 
-function ago(iso) {
+const ago = (iso) => {
   if (!iso) return '';
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+};
+
+function makeNameResolver(players = []) {
+  const map = new Map();
+  for (const p of players) {
+    map.set(p.id, p.display_name);
+  }
+  return (key) => {
+    if (!key) return null;
+    return map.get(key) || null;
+  };
 }
 
 export default function SettlementPage({ embedded = false }) {
@@ -45,17 +61,15 @@ export default function SettlementPage({ embedded = false }) {
   const navigate = useNavigate();
 
   const [selectedCountry, setSelectedCountry] = useState(() => {
-    if (countryParam) {
-      const match = COUNTRIES.find((c) => c.code.toLowerCase() === countryParam.toLowerCase());
-      return match ? match.code : 'ALL';
-    }
-    return 'ALL';
+    if (!countryParam) return 'ALL';
+    const found = COUNTRIES.find((c) => c.code.toLowerCase() === countryParam.toLowerCase());
+    return found ? found.code : 'ALL';
   });
 
   useEffect(() => {
     if (countryParam) {
-      const match = COUNTRIES.find((c) => c.code.toLowerCase() === countryParam.toLowerCase());
-      if (match) setSelectedCountry(match.code);
+      const found = COUNTRIES.find((c) => c.code.toLowerCase() === countryParam.toLowerCase());
+      if (found) setSelectedCountry(found.code);
     }
   }, [countryParam]);
 
@@ -177,35 +191,37 @@ export default function SettlementPage({ embedded = false }) {
   };
 
   const content = (
-    <div className="space-y-8">
+    <div className="space-y-6 font-sans">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-4">
         <div>
           {!embedded && (
             <Link
               to="/"
-              className="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-300 transition-colors mb-1"
+              className="inline-flex items-center gap-1 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors mb-1.5"
             >
-              <ArrowLeft className="w-3.5 h-3.5" /> Back to Dashboard
+              <ArrowLeft className="w-3.5 h-3.5 text-cyan-400" /> Back to Dashboard
             </Link>
           )}
-          <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-            <Landmark className="w-6 h-6 text-emerald-400" />
-            Cross-Session Settlement Hub
-          </h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Aggregate outstanding balances across all historical sessions with one-click bulk settlement.
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(34,197,94,0.8)]" />
+            <h1 className="text-xl font-bold text-white uppercase tracking-tight flex items-center gap-2">
+              Cross-Session Settlement Hub
+            </h1>
+          </div>
+          <p className="text-xs text-zinc-400 mt-0.5 font-mono">
+            Aggregate outstanding balances across all historical sessions with one-click bulk settlement
           </p>
         </div>
 
         {/* Region Switcher Tabs */}
-        <div className="flex bg-slate-900 border border-slate-800 rounded-xl p-1 shrink-0 self-start sm:self-auto">
+        <div className="flex bg-black/80 border border-white/10 p-0.5 shrink-0 self-start sm:self-auto font-mono">
           <button
             onClick={() => handleCountryTabChange('ALL')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
               selectedCountry === 'ALL'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/30 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
+                : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
             <span>🌐 All Regions</span>
@@ -214,10 +230,10 @@ export default function SettlementPage({ embedded = false }) {
             <button
               key={c.code}
               onClick={() => handleCountryTabChange(c.code)}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                 selectedCountry === c.code
-                  ? 'bg-emerald-600 text-white shadow-md'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                  : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
               <span>{c.flag}</span>
@@ -228,20 +244,20 @@ export default function SettlementPage({ embedded = false }) {
       </div>
 
       {state === 'loading' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400">
-          <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-          <p className="text-sm">Calculating cross-session balances…</p>
+        <div className="hud-corner-reticle bg-hud-card border border-white/10 p-12 text-center text-zinc-400 backdrop-blur-xl">
+          <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-3 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+          <p className="text-xs font-mono uppercase tracking-wider text-zinc-400">Computing settlement matrix telemetry…</p>
         </div>
       )}
 
       {state === 'error' && (
-        <div className="bg-rose-950/30 border border-rose-900/50 rounded-2xl p-6 text-center text-rose-400">
-          <p className="text-sm">Could not load settlement data.</p>
+        <div className="hud-corner-reticle hud-corner-rose bg-hud-card border border-rose-500/30 p-6 text-center text-rose-400 backdrop-blur-xl">
+          <p className="text-xs font-mono uppercase tracking-wider">Telemetry feed interrupted.</p>
           <button
             onClick={loadAll}
-            className="mt-3 px-4 py-1.5 bg-rose-900/50 hover:bg-rose-800/50 text-white text-xs font-semibold rounded-lg transition-colors"
+            className="mt-3 px-4 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-mono font-bold uppercase tracking-wider shadow-[0_0_10px_rgba(244,63,94,0.4)]"
           >
-            Retry
+            Retry Connection
           </button>
         </div>
       )}
@@ -250,65 +266,65 @@ export default function SettlementPage({ embedded = false }) {
         <>
           {/* Key Metrics Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-1">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+            <div className="hud-corner-reticle hud-corner-emerald bg-hud-card/90 border border-white/10 p-4 space-y-1 backdrop-blur-xl">
+              <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-widest block">
                 Total Receivables
               </span>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-emerald-400">
+                <span className="text-2xl font-bold font-mono tabular-nums text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.7)]">
                   {selectedCountry === 'ALL'
                     ? `$${globalMetrics.totalCollect.toFixed(2)} CAD`
                     : money(currentCountryData?.collectLocal || 0, currentCountryData?.currency)}
                 </span>
               </div>
-              <span className="text-[11px] text-slate-500 block">Owed to bank by players</span>
+              <span className="text-[11px] text-zinc-500 font-mono block">Owed to bank by players</span>
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-1">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+            <div className="hud-corner-reticle hud-corner-rose bg-hud-card/90 border border-white/10 p-4 space-y-1 backdrop-blur-xl">
+              <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-widest block">
                 Total Payables
               </span>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-rose-400">
+                <span className="text-2xl font-bold font-mono tabular-nums text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.7)]">
                   {selectedCountry === 'ALL'
                     ? `$${globalMetrics.totalPay.toFixed(2)} CAD`
                     : money(currentCountryData?.payLocal || 0, currentCountryData?.currency)}
                 </span>
               </div>
-              <span className="text-[11px] text-slate-500 block">Bank owes winning players</span>
+              <span className="text-[11px] text-zinc-500 font-mono block">Bank owes winning players</span>
             </div>
 
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-1">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+            <div className="hud-corner-reticle hud-corner-cyan bg-hud-card/90 border border-white/10 p-4 space-y-1 backdrop-blur-xl">
+              <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-widest block">
                 Outstanding Players
               </span>
               <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold text-slate-100">
+                <span className="text-2xl font-bold font-mono tabular-nums text-white">
                   {selectedCountry === 'ALL'
                     ? globalMetrics.totalOutstandingPlayers
                     : currentCountryData?.outstandingPlayerCount || 0}
                 </span>
-                <span className="text-xs text-slate-500">pending settlement</span>
+                <span className="text-xs font-mono text-zinc-500">pending</span>
               </div>
-              <span className="text-[11px] text-slate-500 block">Across all recorded games</span>
+              <span className="text-[11px] text-zinc-500 font-mono block">Across all recorded games</span>
             </div>
           </div>
 
           {/* Search / Filter Bar */}
           <div className="relative">
-            <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Filter players by name or handle..."
+              placeholder="Filter players by master identity or session alias..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 outline-none focus:border-emerald-500 transition-colors"
+              className="w-full bg-black/80 border border-white/15 pl-10 pr-4 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.3)] transition-all font-sans"
             />
           </div>
 
           {/* Render All Regions or Single Region */}
           {selectedCountry === 'ALL' ? (
-            <div className="space-y-8">
+            <div className="space-y-6">
               {perCountry.map((countryData) => (
                 <CountrySection
                   key={countryData.countryCode}
@@ -341,19 +357,19 @@ export default function SettlementPage({ embedded = false }) {
       {/* Global Undo Toast */}
       {undoState && (
         <div className="fixed inset-x-0 bottom-6 flex justify-center px-4 z-50 pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-4 bg-slate-900 border border-emerald-500/40 rounded-xl px-5 py-3.5 shadow-2xl text-sm animate-in slide-in-from-bottom-5">
-            <span className="text-slate-100 font-medium">{undoState.label}</span>
+          <div className="pointer-events-auto flex items-center gap-4 bg-black/90 border border-emerald-500/40 px-5 py-3 shadow-2xl text-xs font-mono backdrop-blur-2xl">
+            <span className="text-zinc-200 font-medium">{undoState.label}</span>
             <button
               onClick={() => undoMarkIds(undoState.ids)}
               disabled={busy}
-              className="flex items-center gap-1.5 font-bold text-emerald-400 hover:text-emerald-300 disabled:opacity-40 transition-colors bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20"
+              className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 disabled:opacity-40 transition-colors bg-emerald-500/10 px-2.5 py-1 border border-emerald-500/30"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               Undo
             </button>
             <button
               onClick={() => setUndoState(null)}
-              className="text-slate-400 hover:text-slate-200 text-xs"
+              className="text-zinc-500 hover:text-zinc-300 text-xs"
               aria-label="Dismiss"
             >
               ✕
@@ -369,7 +385,7 @@ export default function SettlementPage({ embedded = false }) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
+    <div className="min-h-screen bg-black text-zinc-200 font-sans selection:bg-emerald-500/30">
       <div className="max-w-5xl mx-auto px-4 py-8">{content}</div>
     </div>
   );
@@ -473,19 +489,19 @@ function CountrySection({
     .slice(0, 10);
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-6">
+    <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 space-y-6 backdrop-blur-xl">
       {/* Country Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800 pb-4 gap-2">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-white/10 pb-4 gap-2">
         <div className="flex items-center gap-2.5">
           <span className="text-2xl">{flag}</span>
           <div>
-            <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
+            <h2 className="text-base font-bold text-white uppercase tracking-wider flex items-center gap-2 font-sans">
               {countryName} Ledger
-              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
+              <span className="text-xs font-mono font-bold px-2 py-0.5 bg-black border border-white/15 text-zinc-300">
                 {currency}
               </span>
             </h2>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-zinc-400 font-mono mt-0.5">
               {bankName ? (
                 <span className="text-emerald-400/90 font-medium">Standing Bank: {bankName}</span>
               ) : (
@@ -495,21 +511,21 @@ function CountrySection({
           </div>
         </div>
 
-        <div className="text-xs text-slate-400 sm:text-right">
+        <div className="text-xs font-mono text-zinc-400 sm:text-right">
           {activePlayers.length === 0 && openBankLines.length === 0 ? (
-            <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold">
-              <CheckCircle2 className="w-3.5 h-3.5" /> All settled up
+            <span className="inline-flex items-center gap-1 text-emerald-400 font-bold uppercase tracking-wider">
+              <CheckCircle2 className="w-3.5 h-3.5 drop-shadow-[0_0_6px_rgba(34,197,94,0.8)]" /> All Cleared
             </span>
           ) : (
-            <span>
+            <span className="font-bold">
               {data.collectLocal > 0.005 && (
-                <span className="text-emerald-400 font-semibold">
+                <span className="text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]">
                   Collect {money(data.collectLocal, currency)}
                 </span>
               )}
               {data.collectLocal > 0.005 && data.payLocal > 0.005 && ' · '}
               {data.payLocal > 0.005 && (
-                <span className="text-rose-400 font-semibold">
+                <span className="text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]">
                   Pay {money(data.payLocal, currency)}
                 </span>
               )}
@@ -521,11 +537,11 @@ function CountrySection({
       {/* Active Outstanding Players */}
       {activePlayers.length > 0 ? (
         <div className="space-y-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-            <Users className="w-3.5 h-3.5 text-emerald-400" />
+          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+            <Users className="w-3.5 h-3.5 text-cyan-400" />
             Outstanding Players ({activePlayers.length})
           </h3>
-          <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl divide-y divide-slate-800/60 overflow-hidden">
+          <div className="bg-black/60 border border-white/10 divide-y divide-white/5 overflow-hidden">
             {activePlayers.map((p) => (
               <PlayerCard
                 key={p.key}
@@ -541,7 +557,7 @@ function CountrySection({
           </div>
         </div>
       ) : (
-        <div className="bg-slate-950/30 border border-slate-800/50 rounded-xl p-5 text-center text-xs text-slate-500">
+        <div className="bg-black/40 border border-white/10 p-5 text-center text-xs font-mono text-zinc-500 uppercase tracking-wider">
           No players with outstanding balances in {countryName}.
         </div>
       )}
@@ -549,15 +565,15 @@ function CountrySection({
       {/* Inter-Bank Transfers */}
       {openBankLines.length > 0 && (
         <div className="space-y-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
             <Landmark className="w-3.5 h-3.5 text-amber-400" />
             Between Regional Banks
           </h3>
-          <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl divide-y divide-slate-800/60 overflow-hidden">
+          <div className="bg-black/60 border border-white/10 divide-y divide-white/5 overflow-hidden">
             {openBankLines.map((b) => (
               <div
                 key={`${b.sessionId}:${b.legId}`}
-                className="flex items-center justify-between px-4 py-3 text-xs gap-3 hover:bg-slate-900/30 transition-colors"
+                className="flex items-center justify-between px-4 py-3 text-xs gap-3 hover:bg-white/[0.02] transition-colors font-mono"
               >
                 <label className="flex items-center gap-3 min-w-0 cursor-pointer select-none">
                   <input
@@ -565,14 +581,14 @@ function CountrySection({
                     checked={false}
                     disabled={busy}
                     onChange={() => settleBankLine(b)}
-                    className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer"
+                    className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
                   />
-                  <span className="text-slate-200 font-semibold truncate">
-                    {b.from} <ArrowRight className="inline w-3 h-3 text-slate-500 mx-1" /> {b.to}
-                    <span className="text-slate-500 font-normal ml-2">· {fmtDate(b.date)}</span>
+                  <span className="text-zinc-200 font-semibold truncate">
+                    {b.from} <ArrowRight className="inline w-3 h-3 text-zinc-500 mx-1" /> {b.to}
+                    <span className="text-zinc-500 font-normal ml-2">· {fmtDate(b.date)}</span>
                   </span>
                 </label>
-                <span className="font-bold text-slate-200 shrink-0">
+                <span className="font-bold text-amber-400 tabular-nums shrink-0">
                   {money(b.amountCad, 'CAD')}
                 </span>
               </div>
@@ -584,11 +600,11 @@ function CountrySection({
       {/* Cleared Players Collapsible */}
       {clearedPlayers.length > 0 && (
         <details className="group space-y-2">
-          <summary className="text-xs font-semibold text-slate-500 hover:text-slate-400 cursor-pointer flex items-center gap-1.5 select-none">
+          <summary className="text-xs font-mono font-semibold text-zinc-500 hover:text-zinc-400 cursor-pointer flex items-center gap-1.5 select-none uppercase tracking-wider">
             <span className="group-open:rotate-90 transition-transform">▸</span>
             Fully Settled Players ({clearedPlayers.length})
           </summary>
-          <div className="bg-slate-950/40 border border-slate-800/60 rounded-xl divide-y divide-slate-800/40 overflow-hidden">
+          <div className="bg-black/40 border border-white/10 divide-y divide-white/5 overflow-hidden">
             {clearedPlayers.map((p) => (
               <PlayerCard
                 key={p.key}
@@ -609,36 +625,36 @@ function CountrySection({
       {/* Recently Settled Audit Log */}
       {recentlySettled.length > 0 && (
         <div className="space-y-3 pt-2">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-            <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+            <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
             Recently Settled Activity
           </h3>
-          <div className="bg-slate-950/40 border border-slate-800/60 rounded-xl divide-y divide-slate-800/40 overflow-hidden">
+          <div className="bg-black/40 border border-white/10 divide-y divide-white/5 overflow-hidden">
             {recentlySettled.map((m) => (
-              <div key={m.id} className="flex items-center justify-between px-4 py-2.5 text-xs gap-3">
-                <span className="text-slate-400 truncate">
-                  <strong className="text-slate-200">{resolve(m.party_key) || m.party_name}</strong>
+              <div key={m.id} className="flex items-center justify-between px-4 py-2.5 text-xs gap-3 font-mono">
+                <span className="text-zinc-400 truncate">
+                  <strong className="text-zinc-200">{resolve(m.party_key) || m.party_name}</strong>
                   {m.counterparty_name && (
                     <>
                       {' '}
-                      <span className="text-slate-600">
+                      <span className="text-zinc-600">
                         {m.direction === 'from_bank' ? '←' : '→'}
                       </span>{' '}
-                      <strong className="text-slate-300">{resolve(m.counterparty_key) || m.counterparty_name}</strong>
+                      <strong className="text-zinc-300">{resolve(m.counterparty_key) || m.counterparty_name}</strong>
                     </>
                   )}
-                  <span className="text-slate-500 ml-2">· {ago(m.settled_at)}</span>
+                  <span className="text-zinc-500 ml-2">· {ago(m.settled_at)}</span>
                 </span>
                 <div className="flex items-center gap-3 shrink-0">
                   {m.amount_local != null && (
-                    <span className="text-slate-300 font-semibold tabular-nums">
+                    <span className="text-zinc-300 font-bold tabular-nums">
                       {money(m.amount_local, m.currency || currency)}
                     </span>
                   )}
                   <button
                     onClick={() => onUndoIds([m.id])}
                     disabled={busy}
-                    className="text-[11px] font-bold text-emerald-400 hover:text-emerald-300 disabled:opacity-40 transition-colors bg-slate-900 px-2 py-0.5 rounded border border-slate-800"
+                    className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 disabled:opacity-40 transition-colors bg-black px-2 py-0.5 border border-white/15"
                   >
                     Undo
                   </button>
@@ -657,31 +673,31 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
   const owes = player.direction === 'owes_bank';
 
   return (
-    <div className="p-3.5 hover:bg-slate-900/40 transition-colors">
+    <div className="p-3.5 hover:bg-white/[0.02] transition-colors">
       <div className="flex items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-3 min-w-0 flex-1">
           {!cleared ? (
             <button
               onClick={onSettleAll}
               disabled={busy}
-              className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition-all shrink-0 shadow-sm"
+              className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider bg-emerald-600 hover:bg-emerald-500 text-white transition-all shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.3)]"
               title={`Settle all ${player.outstandingCount} outstanding sessions for ${player.name}`}
             >
               Settle All
             </button>
           ) : (
-            <span className="w-5 h-5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+            <span className="w-5 h-5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0 font-mono text-xs">
               ✓
             </span>
           )}
 
           <button onClick={() => setOpen((o) => !o)} className="text-left min-w-0 flex-1">
-            <span className={`font-bold text-sm truncate block ${cleared ? 'text-slate-400' : 'text-slate-100'}`}>
+            <span className={`font-bold text-sm truncate block font-sans ${cleared ? 'text-zinc-500' : 'text-zinc-100'}`}>
               {player.name}
             </span>
-            <span className="text-[11px] text-slate-500">
+            <span className="text-[11px] font-mono text-zinc-500">
               {cleared
-                ? `${player.lines.length} session${player.lines.length === 1 ? '' : 's'} · all settled`
+                ? `${player.lines.length} session${player.lines.length === 1 ? '' : 's'} · cleared`
                 : `${player.outstandingCount} session${player.outstandingCount === 1 ? '' : 's'} outstanding`}
             </span>
           </button>
@@ -689,16 +705,20 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
 
         <div className="flex items-center gap-3 shrink-0">
           <span
-            className={`font-bold text-sm tabular-nums ${
-              cleared ? 'text-slate-500' : owes ? 'text-rose-400' : 'text-emerald-400'
+            className={`font-mono font-bold text-xs tabular-nums ${
+              cleared 
+                ? 'text-zinc-500' 
+                : owes 
+                ? 'text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]' 
+                : 'text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]'
             }`}
           >
-            {cleared ? 'Settled' : `${owes ? 'owes ' : 'receives '}${money(player.outstandingLocal, currency)}`}
+            {cleared ? 'SETTLED' : `${owes ? 'owes ' : 'receives '}${money(player.outstandingLocal, currency)}`}
           </span>
 
           <button
             onClick={() => setOpen((o) => !o)}
-            className="p-1 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            className="p-1 text-zinc-400 hover:text-zinc-200 transition-colors"
             title="Expand session breakdown"
           >
             {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -707,13 +727,13 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
       </div>
 
       {open && (
-        <div className="mt-3 pt-3 border-t border-slate-800/60 space-y-1.5 pl-2">
+        <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5 pl-2 font-mono">
           {player.lines.map((line) => {
             const lineOwes = line.direction === 'to_bank';
             return (
               <label
                 key={`${line.sessionId}:${line.legId}`}
-                className="flex items-center justify-between py-1.5 px-2 rounded-lg text-xs hover:bg-slate-900/60 cursor-pointer transition-colors"
+                className="flex items-center justify-between py-1.5 px-2 text-xs hover:bg-white/[0.03] cursor-pointer transition-colors"
               >
                 <div className="flex items-center gap-2.5 min-w-0">
                   <input
@@ -721,16 +741,16 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
                     checked={line.settled}
                     disabled={busy}
                     onChange={() => onToggleLine(line)}
-                    className="w-3.5 h-3.5 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 bg-slate-900 cursor-pointer"
+                    className="w-3.5 h-3.5 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
                   />
-                  <span className={`truncate ${line.settled ? 'text-slate-500 line-through' : 'text-slate-300'}`}>
+                  <span className={`truncate text-xs ${line.settled ? 'text-zinc-600 line-through' : 'text-zinc-300'}`}>
                     {fmtDate(line.date)} · {lineOwes ? 'owes bank' : 'bank owes'}
                   </span>
                 </div>
                 <span
-                  className={`font-semibold tabular-nums shrink-0 ${
+                  className={`font-mono font-bold tabular-nums text-xs shrink-0 ${
                     line.settled
-                      ? 'text-slate-600 line-through'
+                      ? 'text-zinc-700 line-through'
                       : lineOwes
                       ? 'text-rose-400'
                       : 'text-emerald-400'

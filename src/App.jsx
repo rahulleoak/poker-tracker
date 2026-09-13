@@ -1,393 +1,292 @@
-import { useState, useMemo, useEffect, Component, useCallback } from "react";
-import { BrowserRouter, Routes, Route, useNavigate, useLocation, useParams } from 'react-router-dom';
-import { LayoutDashboard, Globe, History, Users, Landmark } from 'lucide-react';
-import { supabase } from './utils/supabase';
-import { parsePokerNowCSV } from './utils/csvParser';
-import { TOP_CURRENCIES } from './utils/formatters';
-import { mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries, extractPokerNowUrl, findMatchingSession, mergeSessionEntries } from './utils/sessionMapper';
-import { loadGamesFromStorage, saveGamesToStorage, mergeRemoteAndLocalGames } from './utils/storage';
-import { fetchExchangeRates } from './utils/fx';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Routes, Route, useNavigate, useLocation, useParams } from 'react-router-dom';
+import { 
+  Users, 
+  History, 
+  LayoutDashboard, 
+  Landmark, 
+  Globe, 
+  AlertTriangle
+} from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import GamesList from './components/GamesList';
 import GameEditor from './components/GameEditor';
-import PlayerProfile from './components/PlayerProfile';
 import PlayerManager from './components/PlayerManager';
-import AdminPage from './components/AdminPage';
-import HomePage from './components/HomePage';
-import SessionPage from './components/SessionPage';
+import PlayerProfile from './components/PlayerProfile';
 import ConfirmationModal from './components/ConfirmationModal';
 import SettlementPage from './components/SettlementPage';
-
-class ErrorBoundary extends Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error, errorInfo) {
-    console.error("ErrorBoundary caught an error:", error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-200 p-6">
-          <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl max-w-md w-full shadow-2xl text-center space-y-4">
-            <h2 className="text-xl font-bold text-rose-400">Something Went Wrong</h2>
-            <p className="text-sm text-slate-400">
-              An unexpected error occurred while rendering. Click below to recover.
-            </p>
-            <button
-              onClick={() => {
-                this.setState({ hasError: false, error: null });
-                window.location.reload();
-              }}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg text-sm transition-colors"
-            >
-              Reload Application
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
+import HomePage from './components/HomePage';
+import AdminPage from './components/AdminPage';
+import SessionPage from './components/SessionPage';
+import { supabase } from './utils/supabase';
+import { parsePokerNowCSV } from './utils/csvParser';
+import { extractPokerNowUrl, findMatchingSession, mergeSessionEntries, mapDatabaseSessionsToGames, createDefaultGame, createGameFromCSVEntries } from './utils/sessionMapper';
+import { TOP_CURRENCIES, formatFiat } from './utils/formatters';
+import { loadGamesFromStorage, saveGamesToStorage, mergeRemoteAndLocalGames } from './utils/storage';
 
 export default function App() {
-  return (
-    <BrowserRouter>
-      <ErrorBoundary>
-        <AppContent />
-      </ErrorBoundary>
-    </BrowserRouter>
-  );
-}
-
-function AppContent() {
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  const [games, setGames] = useState([]);
-  const [globalIncrement, setGlobalIncrement] = useState(100);
+  const [games, setGames] = useState(() => loadGamesFromStorage());
+  const [globalIncrement, setGlobalIncrement] = useState(50);
+  const [exchangeRates, setExchangeRates] = useState({ USD: 1, CAD: 1.35 });
   const [globalCurrency, setGlobalCurrency] = useState('USD');
-  const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
   const [players, setPlayers] = useState([]);
   const [playerLinks, setPlayerLinks] = useState([]);
   const [pendingMergeData, setPendingMergeData] = useState(null);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState(null);
 
-  // Active navigation section
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Active tab detection
   const isDashboard = location.pathname === '/' || location.pathname === '/dashboard';
   const isSessions = location.pathname.startsWith('/sessions');
   const isSettlements = location.pathname.startsWith('/settlement');
   const isPlayers = location.pathname.startsWith('/players');
 
-  // --- IDENTITY & PLAYERS FETCH ---
+  // 1. Fetch Exchange Rates
+  useEffect(() => {
+    fetch('https://open.er-api.com/v6/latest/USD')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.rates) {
+          setExchangeRates(data.rates);
+        }
+      })
+      .catch(err => console.warn('Could not fetch exchange rates:', err));
+  }, []);
+
+  // 2. Fetch Players & Links from DB
   const fetchPlayersAndLinks = useCallback(async () => {
     if (!supabase) return;
     try {
       const [playersRes, linksRes] = await Promise.all([
-        supabase.from('players').select('*').order('display_name'),
+        supabase.from('players').select('*'),
         supabase.from('player_links').select('*')
       ]);
 
-      if (playersRes.error) console.error("Error fetching players:", playersRes.error);
-      else setPlayers(playersRes.data || []);
-
-      if (linksRes.error) console.error("Error fetching player links:", linksRes.error);
-      else setPlayerLinks(linksRes.data || []);
+      if (playersRes.data) setPlayers(playersRes.data);
+      if (linksRes.data) setPlayerLinks(linksRes.data);
     } catch (err) {
-      console.error("Failed to fetch identity data:", err);
+      console.warn('Error fetching players/links from DB:', err);
     }
   }, []);
 
-  const getPlayerProfile = useCallback((sessionName, externalId) => {
-    const trimmedName = (sessionName || '').trim();
-    const normName = trimmedName.toLowerCase();
-    const normExtId = (externalId || '').trim().toLowerCase();
+  useEffect(() => {
+    fetchPlayersAndLinks();
+  }, [fetchPlayersAndLinks]);
 
-    // 1. Check external ID / PokerNow ID match
-    if (normExtId) {
-      const link = playerLinks.find(l => {
-        const ext = (l.external_id || l.external_player_id || '').trim().toLowerCase();
-        return ext === normExtId;
-      });
-      if (link) {
-        const matched = players.find(p => p.id === link.player_id);
-        if (matched) return matched;
+  // 3. Fetch Sessions from DB & Merge with Local Storage
+  useEffect(() => {
+    async function loadSessionsFromDB() {
+      if (!supabase) return;
+      try {
+        const { data: dbSessions, error } = await supabase
+          .from('sessions')
+          .select(`
+            id,
+            date,
+            currency,
+            chip_value,
+            poker_now_url,
+            is_active,
+            ledger (
+              player_name,
+              player_external_id,
+              external_player_id,
+              player_poker_now_id,
+              buy_in,
+              cash_out,
+              currency,
+              is_bank,
+              hands_played,
+              vpip_hands,
+              pfr_hands,
+              three_bet_opps,
+              three_bet_hands
+            )
+          `)
+          .order('date', { ascending: false });
+
+        if (error) {
+          console.warn("Failed to fetch sessions from DB:", error);
+          return;
+        }
+
+        if (dbSessions && dbSessions.length > 0) {
+          const mappedDbGames = mapDatabaseSessionsToGames(dbSessions);
+          const currentLocalGames = loadGamesFromStorage();
+          const merged = mergeRemoteAndLocalGames(currentLocalGames, mappedDbGames);
+          setGames(merged);
+          saveGamesToStorage(merged);
+        }
+      } catch (err) {
+        console.warn("DB session loading error:", err);
       }
     }
 
-    // 2. Check seat-name / alias link match
-    if (normName) {
-      const link = playerLinks.find(l => {
-        const ext = (l.external_id || l.external_player_id || l.session_name || '').trim().toLowerCase();
-        return ext === normName;
-      });
+    loadSessionsFromDB();
+  }, []);
+
+  // 4. Persistence to Local Storage on Change
+  useEffect(() => {
+    saveGamesToStorage(games);
+  }, [games]);
+
+  // Helper to resolve player name via identity links
+  const getPlayerDisplayName = useCallback((rawName, extId) => {
+    if (extId) {
+      const link = playerLinks.find(l => l.external_player_id === extId);
       if (link) {
-        const matched = players.find(p => p.id === link.player_id);
-        if (matched) return matched;
+        const master = players.find(p => p.id === link.player_id);
+        if (master) return master.display_name;
       }
-
-      // 3. Direct display_name match with registered player profile
-      const exactMatch = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
-      if (exactMatch) return exactMatch;
     }
+    if (rawName) {
+      const match = players.find(p => p.display_name.toLowerCase() === rawName.toLowerCase());
+      if (match) return match.display_name;
+    }
+    return rawName || 'Unknown Player';
+  }, [players, playerLinks]);
 
+  const getPlayerProfile = useCallback((rawName, extId) => {
+    if (extId) {
+      const link = playerLinks.find(l => l.external_player_id === extId);
+      if (link) {
+        return players.find(p => p.id === link.player_id) || null;
+      }
+    }
+    if (rawName) {
+      return players.find(p => p.display_name.toLowerCase() === rawName.toLowerCase()) || null;
+    }
     return null;
   }, [players, playerLinks]);
 
-  const getPlayerDisplayName = useCallback((sessionName, externalId, requireProfile = false) => {
-    const profile = getPlayerProfile(sessionName, externalId);
-    if (profile && profile.display_name) {
-      return profile.display_name;
-    }
-    return requireProfile ? null : ((sessionName || '').trim() || 'Unknown Player');
-  }, [getPlayerProfile]);
-
-  // --- INITIAL DATA LOAD & SYNC ---
-  useEffect(() => {
-    fetchExchangeRates().then(rates => {
-      if (rates) setExchangeRates(rates);
-    });
-
-    fetchPlayersAndLinks();
-
-    async function loadData() {
-      let remoteGames = [];
-      if (supabase) {
-        try {
-          const { data: sessionRows, error: sessionError } = await supabase
-            .from('sessions')
-            .select(`
-              id,
-              date,
-              currency,
-              chip_value,
-              poker_now_url,
-              is_active,
-              ledger (
-                id,
-                player_name,
-                buy_in,
-                cash_out,
-                currency,
-                is_bank,
-                hands_played,
-                vpip_hands,
-                pfr_hands,
-                three_bet_opps,
-                three_bet_hands,
-                external_player_id,
-                player_external_id,
-                player_poker_now_id
-              )
-            `)
-            .order('date', { ascending: false });
-
-          if (sessionError) {
-            console.error("Supabase load error:", sessionError);
-          } else if (sessionRows) {
-            remoteGames = mapDatabaseSessionsToGames(sessionRows);
-          }
-        } catch (err) {
-          console.error("Failed to fetch from Supabase:", err);
-        }
-      }
-
-      const localGames = loadGamesFromStorage();
-      const merged = mergeRemoteAndLocalGames(remoteGames, localGames);
-      setGames(merged);
-      saveGamesToStorage(merged);
-    }
-
-    loadData();
-  }, [fetchPlayersAndLinks]);
-
-  useEffect(() => {
-    if (games.length > 0) {
-      saveGamesToStorage(games);
-    }
-  }, [games]);
-
-  // --- AGGREGATE DASHBOARD STATS (STRICTLY PROFILE-BASED) ---
+  // Aggregate Stats across games
   const playerStats = useMemo(() => {
     const stats = {};
-    const safeGames = Array.isArray(games) ? games : [];
+    const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
+    const targetFx = fxRate(globalCurrency);
 
-    safeGames.forEach(game => {
-      if (!game) return;
-      const gameCurrency = game.currency || 'USD';
-      const chipValue = Number(game.chipValue) || 1;
-      const rateToGlobal = (exchangeRates && exchangeRates[globalCurrency] && exchangeRates[gameCurrency]) 
-        ? (exchangeRates[globalCurrency] / exchangeRates[gameCurrency]) 
-        : 1;
+    games.filter(g => g.isActive !== false).forEach(game => {
+      const gChipVal = Number(game.chipValue) || 1;
+      const gCurr = game.currency || 'USD';
+      const gFx = fxRate(gCurr);
 
-      const entries = Array.isArray(game.entries) ? game.entries : [];
-      const profilesInGame = new Set();
-
-      entries.forEach(entry => {
-        if (!entry || !entry.name || entry.name.trim() === '') return;
-
-        // Leaderboard strictly uses master player profiles
-        const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId, true);
-        if (!mappedName) return; // Ignore unregistered/unmapped session names
-
-        if (!stats[mappedName]) {
-          stats[mappedName] = {
-            name: mappedName,
-            buyIn: 0,
-            buyOut: 0,
-            stack: 0,
-            net: 0,
-            netFiat: 0,
-            buyInFiat: 0,
-            cashOutFiat: 0,
-            sessions: 0,
+      (game.entries || []).forEach(entry => {
+        const extId = entry.externalId || entry.pokerNowId || null;
+        const displayName = getPlayerDisplayName(entry.name, extId);
+        
+        if (!stats[displayName]) {
+          stats[displayName] = {
+            name: displayName,
             gamesPlayed: 0,
-            handsPlayed: 0,
-            vpipHands: 0,
-            pfrHands: 0,
-            threeBetOpps: 0,
-            threeBetHands: 0
+            totalBuyInChips: 0,
+            totalBuyOutChips: 0,
+            totalStackChips: 0,
+            netChips: 0,
+            netFiat: 0,
+            totalBuyInFiat: 0,
+            totalHands: 0,
+            totalVpipHands: 0,
+            totalPfrHands: 0,
+            totalThreeBetOpps: 0,
+            totalThreeBetHands: 0,
+            sessions: []
           };
         }
 
-        const bIn = Number(entry.buyIn) || 0;
-        const bOut = Number(entry.buyOut) || 0;
-        const stk = Number(entry.stack) || 0;
-        const cOut = bOut + stk;
-        const netChips = cOut - bIn;
+        const buyIn = Number(entry.buyIn) || 0;
+        const buyOut = Number(entry.buyOut) || 0;
+        const stack = Number(entry.stack) || 0;
+        const cashOut = buyOut + stack;
+        const netChips = cashOut - buyIn;
 
-        const buyInFiat = bIn * chipValue * rateToGlobal;
-        const cashOutFiat = cOut * chipValue * rateToGlobal;
-        const netFiat = netChips * chipValue * rateToGlobal;
+        const entryCurr = entry.currency || gCurr;
+        const entryFx = fxRate(entryCurr);
 
-        stats[mappedName].buyIn += bIn;
-        stats[mappedName].buyOut += bOut;
-        stats[mappedName].stack += stk;
-        stats[mappedName].net += netChips;
-        stats[mappedName].buyInFiat += buyInFiat;
-        stats[mappedName].cashOutFiat += cashOutFiat;
-        stats[mappedName].netFiat += netFiat;
+        // Convert to selected global currency
+        const buyInFiat = ((buyIn * gChipVal) / entryFx) * targetFx;
+        const netFiat = ((netChips * gChipVal) / entryFx) * targetFx;
 
-        if (!profilesInGame.has(mappedName)) {
-          profilesInGame.add(mappedName);
-          stats[mappedName].sessions += 1;
-          stats[mappedName].gamesPlayed += 1;
-        }
+        stats[displayName].gamesPlayed += 1;
+        stats[displayName].totalBuyInChips += buyIn;
+        stats[displayName].totalBuyOutChips += buyOut;
+        stats[displayName].totalStackChips += stack;
+        stats[displayName].netChips += netChips;
+        stats[displayName].netFiat += netFiat;
+        stats[displayName].totalBuyInFiat += buyInFiat;
 
-        stats[mappedName].handsPlayed += Number(entry.handsPlayed) || 0;
-        stats[mappedName].vpipHands += Number(entry.vpipHands) || 0;
-        stats[mappedName].pfrHands += Number(entry.pfrHands) || 0;
-        stats[mappedName].threeBetOpps += Number(entry.threeBetOpps) || 0;
-        stats[mappedName].threeBetHands += Number(entry.threeBetHands) || 0;
+        stats[displayName].totalHands += Number(entry.handsPlayed) || 0;
+        stats[displayName].totalVpipHands += Number(entry.vpipHands) || 0;
+        stats[displayName].totalPfrHands += Number(entry.pfrHands) || 0;
+        stats[displayName].totalThreeBetOpps += Number(entry.threeBetOpps) || 0;
+        stats[displayName].totalThreeBetHands += Number(entry.threeBetHands) || 0;
+
+        stats[displayName].sessions.push({
+          gameId: game.id,
+          date: game.date,
+          netChips,
+          netFiat,
+          vpip: entry.handsPlayed ? ((entry.vpipHands || 0) / entry.handsPlayed) * 100 : null,
+          pfr: entry.handsPlayed ? ((entry.pfrHands || 0) / entry.handsPlayed) * 100 : null,
+          threeBet: entry.threeBetOpps ? ((entry.threeBetHands || 0) / entry.threeBetOpps) * 100 : null
+        });
       });
     });
-    return Object.values(stats).sort((a, b) => (b.netFiat || 0) - (a.netFiat || 0));
-  }, [games, exchangeRates, globalCurrency, getPlayerDisplayName]);
 
+    return stats;
+  }, [games, globalCurrency, exchangeRates, getPlayerDisplayName]);
+
+  // Overall metrics
   const totalMoneyInPlayFiat = useMemo(() => {
-    const safeGames = Array.isArray(games) ? games : [];
-    return safeGames.reduce((sum, game) => {
-      if (!game) return sum;
-      const gameCurrency = game.currency || 'USD';
-      const chipValue = Number(game.chipValue) || 1;
-      const rateToGlobal = (exchangeRates && exchangeRates[globalCurrency] && exchangeRates[gameCurrency]) 
-        ? (exchangeRates[globalCurrency] / exchangeRates[gameCurrency]) 
-        : 1;
-      const entries = Array.isArray(game.entries) ? game.entries : [];
-      const gameBuyInFiat = entries.reduce((s, e) => s + (Number(e?.buyIn) || 0), 0) * chipValue * rateToGlobal;
+    const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
+    const targetFx = fxRate(globalCurrency);
+
+    return games.filter(g => g.isActive !== false).reduce((sum, game) => {
+      const gChipVal = Number(game.chipValue) || 1;
+      const gCurr = game.currency || 'USD';
+      const gFx = fxRate(gCurr);
+
+      const gameBuyInFiat = (game.entries || []).reduce((gSum, e) => {
+        const eCurr = e.currency || gCurr;
+        const eFx = fxRate(eCurr);
+        const buyIn = Number(e.buyIn) || 0;
+        return gSum + (((buyIn * gChipVal) / eFx) * targetFx);
+      }, 0);
+
       return sum + gameBuyInFiat;
     }, 0);
-  }, [games, exchangeRates, globalCurrency]);
+  }, [games, globalCurrency, exchangeRates]);
 
-  // --- HANDLERS ---
-  const handleCreateGame = async () => {
-    const newGame = createDefaultGame(globalCurrency);
-
-    setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
-    navigate(`/sessions/${newGame.id}`);
-
-    if (supabase) {
-      try {
-        const sessionPayload = {
-          date: newGame.date,
-          currency: globalCurrency,
-          chip_value: 1,
-          is_active: true
-        };
-
-        const { data: sessionData, error: sessionError } = await supabase
-          .from('sessions')
-          .insert([sessionPayload])
-          .select()
-          .single();
-
-        if (sessionError) {
-          console.error("Error creating session in Supabase:", sessionError);
-        } else if (sessionData && sessionData.id) {
-          const oldId = newGame.id;
-
-          const initialEntries = newGame.entries.map(e => ({
-            session_id: sessionData.id,
-            player_name: e.name,
-            buy_in: e.buyIn,
-            cash_out: e.buyOut + e.stack,
-            currency: globalCurrency,
-            is_bank: false,
-            external_player_id: e.externalId || e.pokerNowId || null,
-            player_external_id: e.externalId || e.pokerNowId || null,
-            player_poker_now_id: e.pokerNowId || e.externalId || null
-          }));
-
-          await supabase.from('ledger').insert(initialEntries);
-
-          setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
-          navigate(`/sessions/${sessionData.id}`, { replace: true });
-        }
-      } catch (err) {
-        console.error("Failed to sync created session to DB:", err);
-      }
-    }
-  };
-
+  // CRUD Session Handlers
   const executeCreateNewGame = async (newGame) => {
-    setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
+    setGames(prevGames => [newGame, ...prevGames]);
     navigate(`/sessions/${newGame.id}`);
 
     if (supabase) {
       try {
-        const sessionPayload = {
+        const { error: sessionError } = await supabase.from('sessions').insert([{
+          id: newGame.id,
           date: newGame.date,
-          currency: newGame.currency || globalCurrency,
-          chip_value: newGame.chipValue || 1,
+          currency: newGame.currency,
+          chip_value: newGame.chipValue,
           poker_now_url: newGame.pokerNowUrl || null,
-          is_active: true
-        };
-
-        const { data: sessionData, error: sessionError } = await supabase
-          .from('sessions')
-          .insert([sessionPayload])
-          .select()
-          .single();
+          is_active: newGame.isActive
+        }]);
 
         if (sessionError) {
-          console.error("Error creating session in Supabase from CSV:", sessionError);
-        } else if (sessionData && sessionData.id) {
-          const oldId = newGame.id;
+          console.warn("Failed to create session row in DB:", sessionError);
+          return;
+        }
 
-          const entriesToInsert = (newGame.entries || []).map(e => ({
-            session_id: sessionData.id,
-            player_name: e.name,
-            buy_in: e.buyIn,
-            cash_out: e.buyOut + e.stack,
-            currency: e.currency || newGame.currency || globalCurrency,
+        const ledgerRows = (newGame.entries || [])
+          .filter(e => e && ((e.name || '').trim() !== '' || e.buyIn > 0 || e.buyOut > 0 || e.stack > 0))
+          .map(e => ({
+            session_id: newGame.id,
+            player_name: (e.name || '').trim() || 'Unknown Player',
+            buy_in: Number(e.buyIn) || 0,
+            cash_out: (Number(e.buyOut) || 0) + (Number(e.stack) || 0),
+            currency: e.currency || newGame.currency || 'USD',
             is_bank: Boolean(e.isBank),
             hands_played: Number(e.handsPlayed) || 0,
             vpip_hands: Number(e.vpipHands) || 0,
@@ -399,10 +298,11 @@ function AppContent() {
             player_poker_now_id: e.pokerNowId || e.externalId || null
           }));
 
-          const { error: ledgerError } = await supabase.from('ledger').insert(entriesToInsert);
+        if (ledgerRows.length > 0) {
+          const { error: ledgerError } = await supabase.from('ledger').insert(ledgerRows);
           if (ledgerError) {
-            console.warn("Error inserting ledger with stats, retrying legacy:", ledgerError);
-            const legacyEntries = entriesToInsert.map(e => ({
+            console.warn("Ledger insert with stats failed, attempting legacy schema insert:", ledgerError);
+            const legacyRows = ledgerRows.map(e => ({
               session_id: e.session_id,
               player_name: e.player_name,
               buy_in: e.buy_in,
@@ -413,28 +313,30 @@ function AppContent() {
               player_external_id: e.player_external_id,
               player_poker_now_id: e.player_poker_now_id
             }));
-            await supabase.from('ledger').insert(legacyEntries);
+            await supabase.from('ledger').insert(legacyRows);
           }
-
-          setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
-          navigate(`/sessions/${sessionData.id}`, { replace: true });
         }
       } catch (err) {
-        console.error("Failed to sync new CSV session to DB:", err);
+        console.error("Error creating session in DB:", err);
       }
     }
   };
 
-  const executeMergeGame = async (incomingGame, targetSession) => {
-    const mergedEntries = mergeSessionEntries(targetSession.entries || [], incomingGame.entries || []);
+  const handleCreateGame = async () => {
+    const newGame = createDefaultGame(globalCurrency);
+    await executeCreateNewGame(newGame);
+  };
+
+  const executeMergeGame = async (newGame, existingGame) => {
+    const mergedEntries = mergeSessionEntries(existingGame.entries || [], newGame.entries || []);
     const updatedGame = {
-      ...targetSession,
-      pokerNowUrl: targetSession.pokerNowUrl || incomingGame.pokerNowUrl || null,
-      entries: mergedEntries
+      ...existingGame,
+      entries: mergedEntries,
+      pokerNowUrl: existingGame.pokerNowUrl || newGame.pokerNowUrl
     };
 
-    setGames(prevGames => prevGames.map(g => g.id === updatedGame.id ? updatedGame : g));
-    navigate(`/sessions/${updatedGame.id}`);
+    setGames(prevGames => prevGames.map(g => g.id === existingGame.id ? updatedGame : g));
+    navigate(`/sessions/${existingGame.id}`);
 
     if (supabase) {
       try {
@@ -482,21 +384,22 @@ function AppContent() {
           }
         }
       } catch (err) {
-        console.error("Failed to update merged session in DB:", err);
+        console.error("Error updating merged session in DB:", err);
       }
     }
   };
 
   const handleFileUpload = (event) => {
-    const file = event.target.files?.[0];
+    const file = event.target.files && event.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const text = e.target.result;
+        const text = e.target?.result;
+        if (typeof text !== 'string') return;
+
         const parsedEntries = parsePokerNowCSV(text);
-        
         const date = file.lastModified 
           ? new Date(file.lastModified).toISOString().split('T')[0] 
           : new Date().toISOString().split('T')[0];
@@ -611,68 +514,73 @@ function AppContent() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
-      {/* Top Navbar */}
-      <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
+    <div className="min-h-screen bg-black text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-emerald-300">
+      {/* Top HUD Glass Navbar */}
+      <nav className="bg-black/80 border-b border-white/10 backdrop-blur-xl sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
           <div 
             onClick={() => navigate('/dashboard')}
-            className="flex items-center gap-2 text-emerald-400 font-bold text-xl tracking-tight cursor-pointer hover:opacity-90 transition-opacity"
+            className="flex items-center gap-2.5 text-emerald-400 font-bold text-lg tracking-tight cursor-pointer hover:opacity-90 transition-opacity group"
           >
-            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400">
-              <Globe className="w-5 h-5" />
+            <div className="flex items-center justify-center w-8 h-8 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 group-hover:shadow-[0_0_12px_rgba(16,185,129,0.5)] transition-all">
+              <Globe className="w-4 h-4 text-emerald-400 drop-shadow-[0_0_6px_rgba(34,197,94,0.8)]" />
             </div>
-            <span>OffSuite</span>
+            <span className="font-bold tracking-tight text-white font-sans">Off<span className="text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]">Suite</span></span>
+            <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 bg-zinc-900 border border-white/10 text-[10px] font-mono text-zinc-400 uppercase tracking-widest">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live HUD
+            </span>
           </div>
           
           <div className="flex items-center gap-2 sm:gap-4">
-            <div className="flex items-center gap-1 sm:gap-2">
-              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider hidden md:inline">View Currency:</label>
+            {/* Currency Toggle */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-[11px] font-mono font-medium text-zinc-500 uppercase tracking-wider hidden md:inline">FX:</label>
               <select 
                 value={globalCurrency}
                 onChange={(e) => setGlobalCurrency(e.target.value)}
-                className="bg-slate-950 border border-slate-800 text-emerald-400 text-xs sm:text-sm font-bold rounded-lg px-1.5 sm:px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
+                className="bg-black/90 border border-white/20 text-emerald-400 font-mono text-xs sm:text-sm font-bold px-2 py-1 outline-none focus:border-emerald-400 focus:shadow-[0_0_8px_rgba(34,197,94,0.5)] transition-all cursor-pointer"
               >
-                {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>)}
               </select>
             </div>
 
-            <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
+            {/* Route Tabs */}
+            <div className="flex gap-1 bg-black/60 border border-white/10 p-1">
               <button 
                 onClick={() => navigate('/dashboard')}
-                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                  isDashboard ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-all flex items-center justify-center sm:justify-start gap-2 ${ 
+                  isDashboard ? 'bg-zinc-800 text-white font-bold border border-white/20 shadow-[0_0_8px_rgba(255,255,255,0.15)]' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
                 }`}
               >
                 <LayoutDashboard className="w-4 h-4" />
-                <span className="hidden sm:inline">Dashboard</span>
+                <span className="hidden sm:inline font-sans">Dashboard</span>
               </button>
               <button 
                 onClick={() => navigate('/sessions')}
-                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                  isSessions ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-all flex items-center justify-center sm:justify-start gap-2 ${
+                  isSessions ? 'bg-zinc-800 text-white font-bold border border-white/20 shadow-[0_0_8px_rgba(255,255,255,0.15)]' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
                 }`}
               >
                 <History className="w-4 h-4" />
-                <span className="hidden sm:inline">Sessions</span>
+                <span className="hidden sm:inline font-sans">Sessions</span>
               </button>
               <button 
                 onClick={() => navigate('/settlements')}
-                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                  isSettlements ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-all flex items-center justify-center sm:justify-start gap-2 ${
+                  isSettlements ? 'bg-zinc-800 text-white font-bold border border-white/20 shadow-[0_0_8px_rgba(255,255,255,0.15)]' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
                 }`}
               >
                 <Landmark className="w-4 h-4" />
-                <span className="hidden sm:inline">Settlements</span>
+                <span className="hidden sm:inline font-sans">Settlements</span>
               </button>
               <button 
                 onClick={() => navigate('/players')}
-                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                  isPlayers ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-all flex items-center justify-center sm:justify-start gap-2 ${
+                  isPlayers ? 'bg-zinc-800 text-white font-bold border border-white/20 shadow-[0_0_8px_rgba(255,255,255,0.15)]' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
                 }`}
               >
                 <Users className="w-4 h-4" />
-                <span className="hidden sm:inline">Players</span>
+                <span className="hidden sm:inline font-sans">Players</span>
               </button>
             </div>
           </div>
@@ -752,15 +660,16 @@ function AppContent() {
         </Routes>
       </main>
 
-      <footer className="border-t border-slate-800/60 mt-12 py-6 text-center text-xs text-slate-400">
+      {/* Footer HUD Readout */}
+      <footer className="border-t border-white/10 mt-12 py-6 text-center text-xs text-zinc-500 font-mono">
         <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="flex items-center gap-1.5 font-medium">
-            <span>OffSuite</span>
-            <span className="text-slate-600">•</span>
-            <span className="text-slate-500">Cross-border Poker Ledger & Settlements</span>
+          <p className="flex items-center gap-2 font-medium">
+            <span className="text-zinc-300 font-sans font-bold">OffSuite</span>
+            <span className="text-zinc-700 font-mono">::</span>
+            <span className="text-zinc-400 font-sans">Cross-border Poker Ledger & Settlements Engine</span>
           </p>
-          <p className="text-[11px] text-slate-500">
-            Live exchange rates powered by open FX feeds.
+          <p className="text-[11px] text-zinc-500 font-mono">
+            Live exchange rates synced via open FX telemetry feeds.
           </p>
         </div>
       </footer>
@@ -812,14 +721,14 @@ function SessionEditorRoute({ games, globalIncrement, setGlobalIncrement, exchan
 
   if (!game) {
     return (
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400 space-y-4 max-w-lg mx-auto shadow-2xl">
-        <p className="text-lg font-semibold text-slate-200">Session not found</p>
-        <p className="text-sm text-slate-500">The requested session could not be found or has been removed.</p>
+      <div className="hud-corner-reticle bg-hud-card border border-white/10 p-12 text-center text-zinc-400 space-y-4 max-w-lg mx-auto shadow-2xl backdrop-blur-xl">
+        <p className="text-lg font-bold text-white font-sans">Session Not Found</p>
+        <p className="text-xs text-zinc-500 font-mono">The specified session UUID does not exist or was deleted.</p>
         <button 
           onClick={onBack} 
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors"
+          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-mono uppercase text-xs font-bold transition-all shadow-[0_0_10px_rgba(16,185,129,0.4)]"
         >
-          Back to Sessions
+          Return to Sessions
         </button>
       </div>
     );
@@ -847,12 +756,12 @@ function PlayerProfileRoute({ games, exchangeRates, globalCurrency, getPlayerDis
 
   return (
     <PlayerProfile 
-      playerName={decodedName} 
-      games={games} 
+      playerName={decodedName}
+      games={games}
       exchangeRates={exchangeRates}
       globalCurrency={globalCurrency}
       getPlayerDisplayName={getPlayerDisplayName}
-      onBack={onBack} 
+      onBack={onBack}
     />
   );
 }

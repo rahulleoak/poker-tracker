@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Users, Plus, Trash2, Link, Unlink } from 'lucide-react';
+import { Users, Plus, Trash2, Link, Unlink, Globe } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { TOP_CURRENCIES } from '../utils/formatters';
 import ConfirmationModal from './ConfirmationModal';
 
-export default function PlayerManager({ players, playerLinks, onUpdate }) {
+export default function PlayerManager({ players = [], playerLinks = [], onUpdate }) {
   const [newPlayerName, setNewPlayerName] = useState('');
   const [selectedPlayerId, setSelectedPlayerId] = useState('');
   const [linkPlatform, setLinkPlatform] = useState('pokernow');
@@ -32,7 +32,6 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
         setNewPlayerName('');
         onUpdate();
       } else {
-        // Offline-only mock
         const newLocal = { id: `local-player-${Date.now()}`, display_name: displayName, preferred_currency: 'USD', created_at: new Date().toISOString() };
         const current = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
         localStorage.setItem('offsuite_players', JSON.stringify([...current, newLocal]));
@@ -69,7 +68,6 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
         setLinkExternalId('');
         onUpdate();
       } else {
-        // Offline-only mock
         const newLink = {
           id: `local-link-${Date.now()}`,
           player_id: selectedPlayerId,
@@ -148,7 +146,6 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
         if (dbErr) throw dbErr;
         onUpdate();
       } else {
-        // Offline-only mock
         const current = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
         const updated = current.map(p => p.id === playerId ? { ...p, preferred_currency: currency } : p);
         localStorage.setItem('offsuite_players', JSON.stringify(updated));
@@ -163,49 +160,53 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
   };
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-6 animate-in fade-in duration-300 font-sans">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
-            <Users className="w-6 h-6 text-emerald-400" />
-            Player Identities Manager
-          </h2>
-          <p className="text-sm text-slate-400">Map multiple PokerNow Player IDs, nicknames, or temporary seats to a unified master profile.</p>
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse drop-shadow-[0_0_6px_rgba(6,182,212,0.8)]" />
+            <h2 className="text-xl font-bold text-white uppercase tracking-tight font-sans">
+              Player Identity Management
+            </h2>
+          </div>
+          <p className="text-xs text-zinc-400 mt-0.5 font-mono">
+            Map multiple PokerNow IDs, nicknames, or temporary seats to a unified master profile
+          </p>
         </div>
       </div>
 
       {error && (
-        <div className="p-4 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-sm rounded-xl">
+        <div className="hud-corner-reticle hud-corner-rose bg-hud-card border border-rose-500/30 p-4 text-rose-400 text-xs font-mono backdrop-blur-xl">
           {error}
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
         {/* Creation & Linking Controls */}
         <div className="space-y-6 lg:col-span-1">
           {/* Create Player */}
-          <div className="bg-slate-900 border border-slate-800/80 p-6 rounded-2xl shadow-xl space-y-4">
-            <h3 className="font-bold text-slate-200 text-lg flex items-center gap-2">
-              <Plus className="w-5 h-5 text-emerald-400" />
+          <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-xl space-y-4 backdrop-blur-xl">
+            <h3 className="font-bold text-white text-xs uppercase tracking-wider font-mono flex items-center gap-2">
+              <Plus className="w-4 h-4 text-emerald-400" />
               Create Master Profile
             </h3>
             <form onSubmit={handleAddPlayer} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Master Display Name</label>
+                <label className="block text-[11px] font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Master Display Name</label>
                 <input
                   type="text"
                   placeholder="e.g. Rahul, John Doe"
                   value={newPlayerName}
                   onChange={(e) => setNewPlayerName(e.target.value)}
                   disabled={loading}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 rounded-xl px-4 py-2.5 outline-none focus:border-emerald-500 transition-all text-sm"
+                  className="w-full bg-black border border-white/20 text-zinc-100 placeholder-zinc-600 px-3 py-2 outline-none focus:border-cyan-400 transition-all text-xs font-sans"
                 />
               </div>
               <button
                 type="submit"
                 disabled={loading || !newPlayerName.trim()}
-                className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 text-white font-bold rounded-xl text-sm transition-all shadow-md shadow-emerald-900/10"
+                className="w-full py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-mono text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_10px_rgba(16,185,129,0.3)]"
               >
                 Create Profile
               </button>
@@ -213,53 +214,53 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
           </div>
 
           {/* Link Identity */}
-          <div className="bg-slate-900 border border-slate-800/80 p-6 rounded-2xl shadow-xl space-y-4">
-            <h3 className="font-bold text-slate-200 text-lg flex items-center gap-2">
-              <Link className="w-5 h-5 text-emerald-400" />
+          <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-xl space-y-4 backdrop-blur-xl">
+            <h3 className="font-bold text-white text-xs uppercase tracking-wider font-mono flex items-center gap-2">
+              <Link className="w-4 h-4 text-cyan-400" />
               Link Player ID / Alias
             </h3>
             <form onSubmit={handleLinkIdentity} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Select Profile</label>
+                <label className="block text-[11px] font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Select Profile</label>
                 <select
                   value={selectedPlayerId}
                   onChange={(e) => setSelectedPlayerId(e.target.value)}
                   disabled={loading}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-4 py-2.5 outline-none focus:border-emerald-500 transition-all text-sm font-medium"
+                  className="w-full bg-black border border-white/20 text-zinc-200 px-3 py-2 outline-none focus:border-cyan-400 transition-all text-xs font-mono cursor-pointer"
                 >
-                  <option value="">-- Choose Profile --</option>
+                  <option value="" className="bg-zinc-950 text-zinc-500">-- Choose Profile --</option>
                   {players.map(p => (
-                    <option key={p.id} value={p.id}>{p.display_name}</option>
+                    <option key={p.id} value={p.id} className="bg-zinc-950 text-white">{p.display_name}</option>
                   ))}
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Platform</label>
+                <label className="block text-[11px] font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">Platform</label>
                 <select
                   value={linkPlatform}
                   onChange={(e) => setLinkPlatform(e.target.value)}
                   disabled={loading}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl px-4 py-2.5 outline-none focus:border-emerald-500 transition-all text-sm font-medium"
+                  className="w-full bg-black border border-white/20 text-zinc-200 px-3 py-2 outline-none focus:border-cyan-400 transition-all text-xs font-mono cursor-pointer"
                 >
-                  <option value="pokernow">PokerNow ID (e.g. SPoLg3v...)</option>
-                  <option value="alias">Seat Name Alias (e.g. @RahulL)</option>
+                  <option value="pokernow" className="bg-zinc-950 text-white">PokerNow ID (e.g. SPoLg3v...)</option>
+                  <option value="alias" className="bg-zinc-950 text-white">Seat Name Alias (e.g. @RahulL)</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">External ID / Value</label>
+                <label className="block text-[11px] font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-1.5">External ID / Value</label>
                 <input
                   type="text"
                   placeholder="e.g. SPoLg3vOL- or @RahulL"
                   value={linkExternalId}
                   onChange={(e) => setLinkExternalId(e.target.value)}
                   disabled={loading}
-                  className="w-full bg-slate-950 border border-slate-800 text-slate-100 placeholder-slate-600 rounded-xl px-4 py-2.5 outline-none focus:border-emerald-500 transition-all text-sm font-medium"
+                  className="w-full bg-black border border-white/20 text-zinc-100 placeholder-zinc-600 px-3 py-2 outline-none focus:border-cyan-400 font-mono text-xs"
                 />
               </div>
               <button
                 type="submit"
                 disabled={loading || !selectedPlayerId || !linkExternalId.trim()}
-                className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:hover:bg-emerald-600 text-white font-bold rounded-xl text-sm transition-all shadow-md shadow-emerald-900/10"
+                className="w-full py-2 px-4 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-mono text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_10px_rgba(6,182,212,0.3)]"
               >
                 Link Identity
               </button>
@@ -269,38 +270,40 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
 
         {/* Master Profiles & Linked IDs List */}
         <div className="lg:col-span-2 space-y-4">
-          <div className="bg-slate-900 border border-slate-800/80 rounded-2xl shadow-xl overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-800 bg-slate-950/40">
-              <h3 className="font-bold text-slate-100">Master Player Profiles</h3>
+          <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 shadow-2xl overflow-hidden backdrop-blur-xl">
+            <div className="px-5 py-3.5 border-b border-white/10 bg-black/60 flex items-center justify-between">
+              <h3 className="font-bold text-white text-xs uppercase tracking-wider font-mono">Master Player Profiles ({players.length})</h3>
             </div>
             
-            <div className="divide-y divide-slate-800/60 max-h-[500px] overflow-y-auto">
+            <div className="divide-y divide-white/5 max-h-[550px] overflow-y-auto">
               {players.length === 0 ? (
-                <div className="p-8 text-center text-slate-500">
-                  No master profiles created yet. Create one on the left to get started!
+                <div className="p-8 text-center text-zinc-500 font-mono text-xs uppercase tracking-wider">
+                  No master profiles created yet. Create one on the left to get started.
                 </div>
               ) : (
                 players.map(player => {
                   const links = playerLinks.filter(l => l.player_id === player.id);
                   return (
-                    <div key={player.id} className="p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-800/10 transition-colors">
+                    <div key={player.id} className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-white/[0.02] transition-colors">
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-slate-100 text-base">{player.display_name}</h4>
-                          <span className="text-[10px] bg-slate-800 text-slate-400 font-semibold px-2 py-0.5 rounded-full">ID: {player.id.substring(0, 8)}...</span>
+                          <h4 className="font-bold text-white text-sm font-sans">{player.display_name}</h4>
+                          <span className="text-[10px] font-mono bg-black border border-white/15 text-zinc-400 px-2 py-0.5">
+                            ID: {player.id.substring(0, 8)}...
+                          </span>
                         </div>
                         
                         <div className="flex flex-wrap gap-2">
                           {links.length === 0 ? (
-                            <span className="text-xs text-slate-500 italic">No linked external IDs or aliases.</span>
+                            <span className="text-xs text-zinc-500 font-mono italic">No linked external IDs or aliases.</span>
                           ) : (
                             links.map(link => (
-                              <div key={link.id} className="flex items-center gap-1.5 bg-slate-950/80 border border-slate-800 px-2.5 py-1 rounded-xl">
-                                <span className="text-[10px] text-emerald-400 uppercase tracking-wider font-bold">{link.platform}:</span>
-                                <span className="text-xs font-semibold text-slate-300 font-mono">{link.external_id}</span>
+                              <div key={link.id} className="flex items-center gap-1.5 bg-black/80 border border-white/15 px-2 py-0.5">
+                                <span className="text-[9px] text-cyan-400 uppercase tracking-widest font-mono font-bold">{link.platform}:</span>
+                                <span className="text-xs font-semibold text-zinc-300 font-mono">{link.external_id}</span>
                                 <button
                                   onClick={() => setPendingUnlinkId(link.id)}
-                                  className="text-slate-500 hover:text-rose-400 p-0.5 ml-0.5 transition-colors"
+                                  className="text-zinc-500 hover:text-rose-400 p-0.5 ml-0.5 transition-colors"
                                   title="Unlink"
                                 >
                                   <Unlink className="w-3 h-3" />
@@ -313,23 +316,23 @@ export default function PlayerManager({ players, playerLinks, onUpdate }) {
                       
                       <div className="flex items-center gap-4 self-start md:self-center shrink-0">
                         <div className="flex flex-col items-start md:items-end">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">Pref. Currency</span>
+                          <span className="text-[10px] text-zinc-500 font-mono uppercase tracking-wider mb-1">Pref. Currency</span>
                           <select
                             value={player.preferred_currency || 'USD'}
                             onChange={(e) => handleUpdatePreferredCurrency(player.id, e.target.value)}
                             disabled={loading}
-                            className="bg-slate-950 border border-slate-800 text-slate-300 text-xs font-semibold rounded-xl px-2.5 py-1.5 outline-none focus:border-emerald-500 transition-all cursor-pointer"
+                            className="bg-black border border-white/20 text-zinc-200 text-xs font-mono font-bold px-2 py-1 outline-none focus:border-cyan-400 transition-all cursor-pointer"
                           >
-                            {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                            {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>)}
                           </select>
                         </div>
 
                         <button
                           onClick={() => setPendingDeletePlayerId(player.id)}
-                          className="p-2.5 border border-slate-800 hover:border-rose-500/20 rounded-xl text-slate-500 hover:text-rose-400 hover:bg-rose-500/5 transition-all mt-4 md:mt-0"
+                          className="p-2 border border-white/10 hover:border-rose-500/40 text-zinc-500 hover:text-rose-400 transition-all mt-4 md:mt-0"
                           title="Delete Profile"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
                     </div>

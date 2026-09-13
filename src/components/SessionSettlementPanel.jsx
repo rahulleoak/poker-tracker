@@ -1,9 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import { 
   Check, 
   Copy, 
-  ExternalLink, 
   Landmark, 
   Users, 
   ArrowRight, 
@@ -28,7 +26,7 @@ export default function SessionSettlementPanel({
   gameCurrency = 'USD',
   chipValue = 1,
   exchangeRates = { USD: 1, CAD: 1.35 },
-  nameOf = (k) => null,
+  nameOf = () => null,
   isBalanced = true,
   totalBuyIn = 0,
   onSettleChange
@@ -222,72 +220,72 @@ export default function SessionSettlementPanel({
 
   if (!isBalanced || totalBuyIn === 0) {
     return (
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 text-center space-y-3">
-        <AlertCircle className="w-8 h-8 text-amber-500/70 mx-auto" />
-        <h3 className="font-semibold text-slate-200">Ledger Not Balanced</h3>
-        <p className="text-xs text-slate-400 max-w-xs mx-auto">
-          Ensure total buy-ins match total buy-outs + ending stacks before computing settlements.
+      <div className="hud-corner-reticle bg-hud-card/80 border border-white/10 p-6 text-center space-y-3 backdrop-blur-xl">
+        <AlertCircle className="w-8 h-8 text-amber-400 drop-shadow-[0_0_6px_rgba(245,158,11,0.8)] mx-auto" />
+        <h3 className="font-bold text-white font-sans text-sm uppercase tracking-wider">Ledger Discrepancy</h3>
+        <p className="text-xs text-zinc-400 max-w-xs mx-auto font-sans">
+          Balance buy-ins with ending stacks to compute bank routes.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl flex flex-col">
+    <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl flex flex-col font-sans">
       {/* Header */}
-      <div className="p-4 border-b border-slate-800 bg-slate-950/60 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+      <div className="p-4 border-b border-white/10 bg-black/60 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.3)]">
             <Landmark className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-1.5">
+            <h3 className="text-xs font-bold text-white font-sans uppercase tracking-wider flex items-center gap-1.5">
               Settlement Checklist
-              <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span className="text-[9px] uppercase font-mono font-bold tracking-widest px-1.5 py-0.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
                 Live
               </span>
             </h3>
-            <p className="text-[11px] text-slate-500">Persistent check-offs & banker routes</p>
+            <p className="text-[11px] text-zinc-500 font-mono">Banker routes & ledger state</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5">
+          <div className="flex bg-black/80 border border-white/10 p-0.5">
             <button
               onClick={() => setMode('banker')}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+              className={`px-2.5 py-1 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                 mode === 'banker' 
-                  ? 'bg-emerald-600 text-white shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-[0_0_6px_rgba(16,185,129,0.3)]' 
+                  : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
               <Landmark className="w-3 h-3" /> Banker
             </button>
             <button
               onClick={() => setMode('peer')}
-              className={`px-2.5 py-1 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${
+              className={`px-2.5 py-1 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                 mode === 'peer' 
-                  ? 'bg-emerald-600 text-white shadow-sm' 
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/30 shadow-[0_0_6px_rgba(6,182,212,0.3)]' 
+                  : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Users className="w-3 h-3" /> Peer-to-Peer
+              <Users className="w-3 h-3" /> P2P
             </button>
           </div>
 
           <button
             onClick={handleCopySummary}
-            className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/80 transition-colors flex items-center gap-1.5"
+            className="px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider bg-black/60 hover:bg-zinc-900 text-zinc-200 border border-white/15 transition-all flex items-center gap-1.5 hover:border-cyan-400 hover:text-cyan-300"
             title="Copy formatted settlement text"
           >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
-            <span>{copied ? 'Copied!' : 'Copy'}</span>
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
+            <span>{copied ? 'Copied' : 'Copy'}</span>
           </button>
         </div>
       </div>
 
       {/* Content */}
-      <div className="p-4 space-y-5 flex-1 overflow-y-auto">
+      <div className="p-4 space-y-4 flex-1 overflow-y-auto max-h-[550px]">
         {mode === 'banker' && bankerSettlement && (
           <>
             {bankerSettlement.countries.map((c) => {
@@ -304,13 +302,13 @@ export default function SessionSettlementPanel({
               }).length;
 
               return (
-                <div key={c.code} className="bg-slate-950/50 border border-slate-800/80 rounded-xl p-3.5 space-y-3">
+                <div key={c.code} className="bg-black/60 border border-white/10 p-3.5 space-y-3">
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <span className="text-base">{c.flag}</span>
-                      <span className="text-xs font-bold text-slate-200 uppercase tracking-wide">{c.name}</span>
-                      <span className="text-xs text-slate-500 font-medium">
-                        {c.bankName ? `· Bank: ${c.bankName}` : '· No bank designated'}
+                      <span className="text-xs font-bold text-white uppercase tracking-wider font-sans">{c.name}</span>
+                      <span className="text-xs text-zinc-400 font-mono">
+                        {c.bankName ? `· Bank: ${c.bankName}` : '· No Bank'}
                       </span>
                     </div>
 
@@ -318,7 +316,7 @@ export default function SessionSettlementPanel({
                       <button
                         onClick={() => handleSettleAllInCountry(c.code)}
                         disabled={busy}
-                        className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+                        className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 transition-colors"
                       >
                         Settle All ({unsettledCount})
                       </button>
@@ -326,7 +324,7 @@ export default function SessionSettlementPanel({
                   </div>
 
                   {c.bankName ? (
-                    <div className="divide-y divide-slate-800/50">
+                    <div className="divide-y divide-white/5">
                       {nonBank.map((m) => {
                         const t = transfersByKey.get(m.key);
                         const settled = t ? Boolean(markFor(t.legId)) : false;
@@ -356,26 +354,26 @@ export default function SessionSettlementPanel({
                                       session_date: startDate || null
                                     }))
                                   }
-                                  className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-950 bg-slate-900 cursor-pointer"
+                                  className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
                                 />
                               )}
-                              <span className={`truncate font-medium ${settled ? 'text-slate-500 line-through' : 'text-slate-200'}`}>
+                              <span className={`truncate font-medium font-sans ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
                                 {m.name}
                               </span>
                             </label>
 
                             <div className="shrink-0 text-right">
                               {settled ? (
-                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                                  <Check className="w-3 h-3" /> Paid
+                                <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/30 uppercase">
+                                  <Check className="w-3 h-3" /> Settled
                                 </span>
                               ) : (
-                                <span className={m.netLocal >= 0 ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
+                                <span className={`font-mono tabular-nums text-xs font-bold ${m.netLocal >= 0 ? 'text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]' : 'text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]'}`}>
                                   {m.netLocal >= 0
                                     ? `receives ${money(m.netLocal, c.currency)}`
                                     : `pays ${money(m.netLocal, c.currency)}`}
                                   {converted && (
-                                    <span className="text-slate-500 text-[10px] ml-1 font-normal">
+                                    <span className="text-zinc-500 text-[10px] ml-1 font-normal font-mono">
                                       ({money(m.netCad, 'CAD')})
                                     </span>
                                   )}
@@ -387,21 +385,21 @@ export default function SessionSettlementPanel({
                       })}
 
                       {nonBank.length === 0 && (
-                        <div className="py-2 text-xs text-slate-500 italic">Everyone in {c.name} broke even.</div>
+                        <div className="py-2 text-xs text-zinc-500 font-mono italic">All players in {c.name} broke even.</div>
                       )}
 
-                      <div className="flex items-center justify-between pt-2 text-xs text-slate-400">
+                      <div className="flex items-center justify-between pt-2 text-xs text-zinc-400 font-mono">
                         <span className="flex items-center gap-1.5 font-medium">
-                          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400/80" />
+                          <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
                           {c.bankName} (Bank)
                         </span>
-                        <span className="font-semibold text-slate-300">
-                          Country Net: {c.netLocal >= 0 ? '+' : '−'}{money(c.netLocal, c.currency)}
+                        <span className="font-bold text-zinc-200 tabular-nums">
+                          Net: {c.netLocal >= 0 ? '+' : '−'}{money(c.netLocal, c.currency)}
                         </span>
                       </div>
                     </div>
                   ) : (
-                    <p className="text-xs text-slate-500 italic">Assign a banker for {c.name} to route regional debts.</p>
+                    <p className="text-xs text-zinc-500 font-mono italic">Assign a banker for {c.name} to route regional debts.</p>
                   )}
                 </div>
               );
@@ -409,12 +407,12 @@ export default function SessionSettlementPanel({
 
             {/* Inter-Bank Transfers */}
             {bankerSettlement.bankTransfers.length > 0 && (
-              <div className="bg-slate-950/50 border border-slate-800/80 rounded-xl p-3.5 space-y-2">
-                <div className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  Between Regional Banks
+              <div className="bg-black/60 border border-white/10 p-3.5 space-y-2">
+                <div className="text-xs font-bold font-mono text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400 drop-shadow-[0_0_4px_rgba(245,158,11,0.8)]" />
+                  Inter-Bank Clearing
                 </div>
-                <div className="divide-y divide-slate-800/50">
+                <div className="divide-y divide-white/5">
                   {bankerSettlement.bankTransfers.map((t) => {
                     const settled = Boolean(markFor(t.legId));
                     return (
@@ -444,25 +442,20 @@ export default function SessionSettlementPanel({
                                 session_date: startDate || null
                               }))
                             }
-                            className="w-4 h-4 rounded border-slate-700 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-slate-950 bg-slate-900 cursor-pointer"
+                            className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
                           />
-                          <span className={`truncate font-semibold ${settled ? 'text-slate-500 line-through' : 'text-slate-200'}`}>
-                            {t.from} <ArrowRight className="inline w-3 h-3 text-slate-500 mx-0.5" /> {t.to}
+                          <span className={`truncate font-mono font-semibold ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
+                            {t.from} <ArrowRight className="inline w-3 h-3 text-zinc-500 mx-0.5" /> {t.to}
                           </span>
                         </label>
-                        <div className="shrink-0 text-right">
+                        <div className="shrink-0">
                           {settled ? (
-                            <span className="text-[11px] font-semibold text-emerald-400/80 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                              Settled
+                            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/30 uppercase">
+                              <Check className="w-3 h-3" /> Cleared
                             </span>
                           ) : (
-                            <span className="font-bold text-slate-200">
+                            <span className="font-mono tabular-nums text-xs font-bold text-amber-400 drop-shadow-[0_0_4px_rgba(245,158,11,0.6)]">
                               {money(t.amount, 'CAD')}
-                              {bankerSettlement.cadToUsd !== 1 && (
-                                <span className="text-slate-500 text-[10px] ml-1 font-normal">
-                                  ({money(t.amount * bankerSettlement.cadToUsd, 'USD')})
-                                </span>
-                              )}
                             </span>
                           )}
                         </div>
@@ -475,48 +468,32 @@ export default function SessionSettlementPanel({
           </>
         )}
 
+        {/* Peer-to-Peer Mode */}
         {mode === 'peer' && peerSettlement && (
-          <div className="space-y-2.5">
-            {peerSettlement.settlements.length === 0 ? (
-              <p className="text-xs text-slate-500 italic py-4 text-center">Everyone broke even! No payments needed.</p>
-            ) : (
-              peerSettlement.settlements.map((tx, i) => (
-                <div key={i} className="flex items-center justify-between p-2.5 bg-slate-950/60 border border-slate-800 rounded-lg text-xs gap-3">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="font-semibold text-rose-400 truncate">{tx.from}</span>
-                    <ArrowRight className="w-3 h-3 text-slate-600 shrink-0" />
-                    <span className="font-semibold text-emerald-400 truncate">{tx.to}</span>
-                  </div>
-                  <span className="font-bold text-slate-200 shrink-0">{formatFiat(tx.amount, gameCurrency)}</span>
+          <div className="space-y-2">
+            {peerSettlement.transactions.map((tx, idx) => (
+              <div key={idx} className="p-2.5 bg-black/60 border border-white/10 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 font-sans font-medium text-zinc-200">
+                  <span>{tx.from}</span>
+                  <ArrowRight className="w-3 h-3 text-cyan-400" />
+                  <span>{tx.to}</span>
                 </div>
-              ))
-            )}
+                <span className="font-mono tabular-nums font-bold text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]">
+                  {formatFiat(tx.amount, gameCurrency)}
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* Footer link to Global Settlement Hub */}
-      <div className="p-3 border-t border-slate-800 bg-slate-950/40 flex items-center justify-between text-xs">
-        <span className="text-slate-500">
-          FX: 1 CAD = {bankerSettlement?.cadToUsd ? bankerSettlement.cadToUsd.toFixed(3) : '0.740'} USD
-        </span>
-        <Link
-          to="/settlement"
-          className="font-semibold text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1"
-        >
-          <span>Multi-Session Ledger</span>
-          <ExternalLink className="w-3 h-3" />
-        </Link>
-      </div>
-
       {/* Undo Toast */}
       {undoState && (
-        <div className="p-2.5 bg-slate-800 border-t border-slate-700 flex items-center justify-between text-xs text-slate-200">
-          <span className="truncate pr-2">{undoState.label}</span>
+        <div className="p-3 bg-zinc-900 border-t border-white/15 flex items-center justify-between text-xs font-mono">
+          <span className="text-zinc-300 truncate max-w-[200px]">{undoState.label}</span>
           <button
             onClick={() => handleUndo(undoState.ids)}
-            disabled={busy}
-            className="flex items-center gap-1 font-bold text-emerald-400 hover:text-emerald-300 shrink-0"
+            className="text-cyan-400 hover:text-cyan-300 font-bold uppercase tracking-wider flex items-center gap-1"
           >
             <RotateCcw className="w-3 h-3" /> Undo
           </button>
