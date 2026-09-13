@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Component, useCallback } from "react";
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { LayoutDashboard, Globe, History, Users } from 'lucide-react';
+import { LayoutDashboard, Globe, History, Users, Landmark } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { parsePokerNowCSV } from './utils/csvParser';
 import { TOP_CURRENCIES } from './utils/formatters';
@@ -58,146 +58,93 @@ class ErrorBoundary extends Component {
   }
 }
 
-export function AppContent() {
-  const [games, setGames] = useState(() => loadGamesFromStorage());
-  const [activeTab, setActiveTab] = useState('dashboard');
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<AppContent />} />
+        <Route path="/home" element={<HomePage />} />
+        <Route path="/admin" element={<AdminPage />} />
+        <Route path="/admin/session/:sessionId" element={<SessionPage />} />
+        <Route path="/settlement" element={<SettlementPage />} />
+        <Route path="/settlement/:country" element={<SettlementPage />} />
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+function AppContent() {
+  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'games' | 'settlements' | 'players'
+  const [games, setGames] = useState([]);
   const [editingGameId, setEditingGameId] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
-
-  // --- PLAYER IDENTITIES STATE & SYNCHRONIZATION ---
-  const [players, setPlayers] = useState(() => JSON.parse(localStorage.getItem('offsuite_players') || '[]'));
-  const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState(null);
+  const [globalIncrement, setGlobalIncrement] = useState(100);
+  const [globalCurrency, setGlobalCurrency] = useState('USD');
+  const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
+  const [players, setPlayers] = useState([]);
+  const [playerLinks, setPlayerLinks] = useState([]);
   const [pendingMergeData, setPendingMergeData] = useState(null);
-  const [playerLinks, setPlayerLinks] = useState(() => JSON.parse(localStorage.getItem('offsuite_player_links') || '[]'));
+  const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState(null);
 
+  // --- IDENTITY & PLAYERS FETCH ---
   const fetchPlayersAndLinks = useCallback(async () => {
-    if (supabase) {
-      try {
-        const { data: pData } = await supabase.from('players').select('*');
-        if (Array.isArray(pData)) {
-          setPlayers(pData);
-          localStorage.setItem('offsuite_players', JSON.stringify(pData));
-        }
-        const { data: lData } = await supabase.from('player_links').select('*');
-        if (Array.isArray(lData)) {
-          setPlayerLinks(lData);
-          localStorage.setItem('offsuite_player_links', JSON.stringify(lData));
-        }
-        return;
-      } catch (err) {
-        console.error("Failed to fetch players or links from Supabase:", err);
-      }
+    if (!supabase) return;
+    try {
+      const [playersRes, linksRes] = await Promise.all([
+        supabase.from('players').select('*').order('display_name'),
+        supabase.from('player_links').select('*')
+      ]);
+
+      if (playersRes.error) console.error("Error fetching players:", playersRes.error);
+      else setPlayers(playersRes.data || []);
+
+      if (linksRes.error) console.error("Error fetching player links:", linksRes.error);
+      else setPlayerLinks(linksRes.data || []);
+    } catch (err) {
+      console.error("Failed to fetch identity data:", err);
     }
-    const localP = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
-    const localL = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
-    setPlayers(localP);
-    setPlayerLinks(localL);
   }, []);
 
-  useEffect(() => {
-    /* eslint-disable-next-line */
-    fetchPlayersAndLinks();
-  }, [games.length, fetchPlayersAndLinks]);
+  const getPlayerProfile = useCallback((sessionName, externalId) => {
+    const trimmedName = (sessionName || '').trim();
 
-  const getPlayerDisplayName = useCallback((name, externalId) => {
-    if (!name) return null;
-    const normName = name.trim().toLowerCase();
-    const normExtId = (externalId || '').trim().toLowerCase();
-
-    // 1. Check external ID match
-    if (normExtId) {
-      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normExtId);
+    if (externalId) {
+      const link = playerLinks.find(l => l.external_player_id === externalId);
       if (link) {
-        const player = players.find(p => p.id === link.player_id);
-        if (player) return player.display_name;
+        const matched = players.find(p => p.id === link.player_id);
+        if (matched) return matched;
       }
     }
 
-    // 2. Check name as external ID match (aliases)
-    if (normName) {
-      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normName);
-      if (link) {
-        const player = players.find(p => p.id === link.player_id);
-        if (player) return player.display_name;
-      }
+    if (trimmedName) {
+      const exactMatch = players.find(p => p.display_name.toLowerCase() === trimmedName.toLowerCase());
+      if (exactMatch) return exactMatch;
     }
-
-    // 3. Check direct display name match (auto-link matching names)
-    const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
-    if (directPlayer) return directPlayer.display_name;
 
     return null;
   }, [players, playerLinks]);
 
-  const getPlayerProfile = useCallback((name, externalId) => {
-    if (!name) return null;
-    const normName = name.trim().toLowerCase();
-    const normExtId = (externalId || '').trim().toLowerCase();
-
-    // 1. Check external ID match
-    if (normExtId) {
-      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normExtId);
-      if (link) {
-        const player = players.find(p => p.id === link.player_id);
-        if (player) return player;
-      }
+  const getPlayerDisplayName = useCallback((sessionName, externalId) => {
+    const profile = getPlayerProfile(sessionName, externalId);
+    if (profile && profile.display_name) {
+      return profile.display_name;
     }
+    return (sessionName || '').trim() || 'Unknown Player';
+  }, [getPlayerProfile]);
 
-    // 2. Check name as external ID match (aliases)
-    if (normName) {
-      const link = playerLinks.find(l => (l.external_id || '').trim().toLowerCase() === normName);
-      if (link) {
-        const player = players.find(p => p.id === link.player_id);
-        if (player) return player;
-      }
-    }
-
-    // 3. Check direct display name match (auto-link matching names)
-    const directPlayer = players.find(p => (p.display_name || '').trim().toLowerCase() === normName);
-    if (directPlayer) return directPlayer;
-
-    return null;
-  }, [players, playerLinks]);
-  
-  // FX Rates & Global Config
-  const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
-  const [globalCurrency, setGlobalCurrency] = useState('USD');
-  const [globalIncrement, setGlobalIncrement] = useState(100);
-
-  // --- FETCH DATA & FX RATES ---
+  // --- INITIAL DATA LOAD & SYNC ---
   useEffect(() => {
-    // 1. Fetch live exchange rates with offline fallback
     fetchExchangeRates().then(rates => {
       if (rates) setExchangeRates(rates);
     });
 
-    // 2. Fetch games from DB when component mounts
-    const fetchGames = async () => {
-      if (!supabase) {
-        return;
-      }
+    fetchPlayersAndLinks();
 
-      try {
-        let query = supabase
-          .from('sessions')
-          .select(`
-            id,
-            date,
-            currency,
-            chip_value,
-            poker_now_url,
-            is_active,
-            ledger ( * )
-          `)
-          .order('date', { ascending: false });
-
-        // 1. Try querying with all columns via ledger(*)
-        let { data, error } = await query;
-
-        // 2. If selecting ledger(*) fails, fallback to basic columns
-        if (error) {
-          console.warn("Primary fetch error, attempting fallback query:", error);
-          let fallbackQuery = supabase
+    async function loadData() {
+      let remoteGames = [];
+      if (supabase) {
+        try {
+          const { data: sessionRows, error: sessionError } = await supabase
             .from('sessions')
             .select(`
               id,
@@ -206,109 +153,51 @@ export function AppContent() {
               chip_value,
               poker_now_url,
               is_active,
-              ledger ( player_name, buy_in, cash_out, currency, is_bank )
+              ledger (
+                id,
+                player_name,
+                buy_in,
+                cash_out,
+                currency,
+                is_bank,
+                hands_played,
+                vpip_hands,
+                pfr_hands,
+                three_bet_opps,
+                three_bet_hands,
+                external_player_id,
+                player_external_id,
+                player_poker_now_id
+              )
             `)
             .order('date', { ascending: false });
 
-          const fallback = await fallbackQuery;
-
-          if (fallback.error) {
-            console.error("Fallback fetch also failed:", fallback.error);
-            return;
+          if (sessionError) {
+            console.error("Supabase load error:", sessionError);
+          } else if (sessionRows) {
+            remoteGames = mapDatabaseSessionsToGames(sessionRows);
           }
-          data = fallback.data;
+        } catch (err) {
+          console.error("Failed to fetch from Supabase:", err);
         }
-
-        if (Array.isArray(data)) {
-          const remoteGames = mapDatabaseSessionsToGames(data);
-          
-          // Local-to-Cloud Sync on Mount:
-          // Push any local localStorage games that aren't yet in remote up to Supabase.
-          const localGames = loadGamesFromStorage();
-          const remoteIds = new Set(remoteGames.map(g => g.id));
-          const remoteFingerprints = new Set(
-            remoteGames
-              .filter(g => g && g.date && g.pokerNowUrl)
-              .map(g => `${g.date}_${g.pokerNowUrl}`)
-          );
-
-          const unSyncedLocalGames = localGames.filter(g => {
-            if (!g || !g.id) return false;
-            if (remoteIds.has(g.id)) return false;
-            const fingerprint = (g.date && g.pokerNowUrl) ? `${g.date}_${g.pokerNowUrl}` : null;
-            if (fingerprint && remoteFingerprints.has(fingerprint)) return false;
-            return true;
-          });
-
-          if (unSyncedLocalGames.length > 0 && supabase) {
-            const syncedSessions = [];
-            for (const localGame of unSyncedLocalGames) {
-              try {
-                const sessionPayload = {
-                  date: localGame.date,
-                  currency: localGame.currency || globalCurrency,
-                  chip_value: localGame.chipValue || 1,
-                  is_active: Boolean(localGame.isActive),
-                  poker_now_url: localGame.pokerNowUrl || null
-                };
-
-                const { data: sessionData, error: sessionError } = await supabase
-                  .from('sessions')
-                  .insert([sessionPayload])
-                  .select()
-                  .single();
-
-                if (!sessionError && sessionData && sessionData.id) {
-                  const newRemoteId = sessionData.id;
-                  const entries = Array.isArray(localGame.entries) ? localGame.entries : [];
-                  const validEntries = entries.map(e => ({
-                    session_id: newRemoteId,
-                    player_name: (e.name || '').trim() || 'Unknown Player',
-                    buy_in: Number(e.buyIn) || 0,
-                    cash_out: (Number(e.buyOut) || 0) + (Number(e.stack) || 0),
-                    currency: e.currency || localGame.currency || globalCurrency,
-                    is_bank: Boolean(e.isBank),
-                    hands_played: Number(e.handsPlayed) || 0,
-                    vpip_hands: Number(e.vpipHands) || 0,
-                    pfr_hands: Number(e.pfrHands) || 0,
-                    three_bet_opps: Number(e.threeBetOpps) || 0,
-                    three_bet_hands: Number(e.threeBetHands) || 0,
-                    external_player_id: e.externalId || e.pokerNowId || null,
-                    player_external_id: e.externalId || e.pokerNowId || null,
-                    player_poker_now_id: e.pokerNowId || e.externalId || null
-                  }));
-
-                  if (validEntries.length > 0) {
-                    await supabase.from('ledger').insert(validEntries);
-                  }
-
-                  localGame.id = newRemoteId;
-                  syncedSessions.push({
-                    ...sessionData,
-                    ledger: validEntries
-                  });
-                }
-              } catch (syncErr) {
-                console.error("Failed to sync local game to cloud:", syncErr);
-              }
-            }
-            saveGamesToStorage(localGames);
-            if (syncedSessions.length > 0) {
-              data = [...data, ...syncedSessions];
-            }
-          }
-
-          const refreshedRemoteGames = mapDatabaseSessionsToGames(data);
-          setGames(prevGames => mergeRemoteAndLocalGames(refreshedRemoteGames, prevGames));
-        }
-      } catch (err) {
-        console.error("Unexpected error fetching games:", err);
       }
-    };
-    fetchGames();
-  }, [globalCurrency]);
 
-  // --- DERIVED STATS (ALL-TIME FIAT) ---
+      const localGames = loadGamesFromStorage();
+      const merged = mergeRemoteAndLocalGames(remoteGames, localGames);
+      setGames(merged);
+      saveGamesToStorage(merged);
+    }
+
+    loadData();
+  }, [fetchPlayersAndLinks]);
+
+  useEffect(() => {
+    if (games.length > 0) {
+      saveGamesToStorage(games);
+    }
+  }, [games]);
+
+  // --- AGGREGATE DASHBOARD STATS ---
   const playerStats = useMemo(() => {
     const stats = {};
     const safeGames = Array.isArray(games) ? games : [];
@@ -317,25 +206,27 @@ export function AppContent() {
       if (!game) return;
       const gameCurrency = game.currency || 'USD';
       const chipValue = Number(game.chipValue) || 1;
-
       const rateToGlobal = (exchangeRates && exchangeRates[globalCurrency] && exchangeRates[gameCurrency]) 
         ? (exchangeRates[globalCurrency] / exchangeRates[gameCurrency]) 
         : 1;
-      const chipToFiatMultiplier = chipValue * rateToGlobal;
 
       const entries = Array.isArray(game.entries) ? game.entries : [];
       entries.forEach(entry => {
-        if (!entry || !entry.name) return;
+        if (!entry || !entry.name || entry.name.trim() === '') return;
+
         const mappedName = getPlayerDisplayName(entry.name, entry.externalId || entry.pokerNowId);
-        if (!mappedName) return;
 
         if (!stats[mappedName]) {
-          stats[mappedName] = { 
-            name: mappedName, 
-            buyInFiat: 0, 
-            cashOutFiat: 0, 
-            gamesPlayed: 0, 
+          stats[mappedName] = {
+            name: mappedName,
+            buyIn: 0,
+            buyOut: 0,
+            stack: 0,
+            net: 0,
             netFiat: 0,
+            buyInFiat: 0,
+            cashOutFiat: 0,
+            sessions: 0,
             handsPlayed: 0,
             vpipHands: 0,
             pfrHands: 0,
@@ -343,15 +234,25 @@ export function AppContent() {
             threeBetHands: 0
           };
         }
-        const buyIn = Number(entry.buyIn) || 0;
-        const buyOut = Number(entry.buyOut) || 0;
-        const stack = Number(entry.stack) || 0;
-        const totalCashOutChips = buyOut + stack;
-        
-        stats[mappedName].buyInFiat += (buyIn * chipToFiatMultiplier);
-        stats[mappedName].cashOutFiat += (totalCashOutChips * chipToFiatMultiplier);
-        stats[mappedName].netFiat += ((totalCashOutChips - buyIn) * chipToFiatMultiplier);
-        stats[mappedName].gamesPlayed += 1;
+
+        const bIn = Number(entry.buyIn) || 0;
+        const bOut = Number(entry.buyOut) || 0;
+        const stk = Number(entry.stack) || 0;
+        const cOut = bOut + stk;
+        const netChips = cOut - bIn;
+
+        const buyInFiat = bIn * chipValue * rateToGlobal;
+        const cashOutFiat = cOut * chipValue * rateToGlobal;
+        const netFiat = netChips * chipValue * rateToGlobal;
+
+        stats[mappedName].buyIn += bIn;
+        stats[mappedName].buyOut += bOut;
+        stats[mappedName].stack += stk;
+        stats[mappedName].net += netChips;
+        stats[mappedName].buyInFiat += buyInFiat;
+        stats[mappedName].cashOutFiat += cashOutFiat;
+        stats[mappedName].netFiat += netFiat;
+        stats[mappedName].sessions += 1;
 
         stats[mappedName].handsPlayed += Number(entry.handsPlayed) || 0;
         stats[mappedName].vpipHands += Number(entry.vpipHands) || 0;
@@ -382,7 +283,6 @@ export function AppContent() {
   const handleCreateGame = async () => {
     const newGame = createDefaultGame(globalCurrency);
 
-    // Immediately update local state so editingGameId resolves to a valid game
     setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
     setEditingGameId(newGame.id);
     setSelectedPlayer(null);
@@ -421,7 +321,6 @@ export function AppContent() {
 
           await supabase.from('ledger').insert(initialEntries);
 
-          // Update game ID in local state if it changed from generated UUID
           setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
           setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
         }
@@ -440,10 +339,10 @@ export function AppContent() {
       try {
         const sessionPayload = {
           date: newGame.date,
-          currency: globalCurrency,
-          chip_value: 1,
-          is_active: false,
-          poker_now_url: newGame.pokerNowUrl
+          currency: newGame.currency || globalCurrency,
+          chip_value: newGame.chipValue || 1,
+          poker_now_url: newGame.pokerNowUrl || null,
+          is_active: true
         };
 
         const { data: sessionData, error: sessionError } = await supabase
@@ -451,33 +350,33 @@ export function AppContent() {
           .insert([sessionPayload])
           .select()
           .single();
-          
+
         if (sessionError) {
-          console.error("Error creating uploaded session in DB:", sessionError);
+          console.error("Error creating session in Supabase from CSV:", sessionError);
         } else if (sessionData && sessionData.id) {
           const oldId = newGame.id;
 
-          const dbEntriesWithStats = newGame.entries.map(entry => ({
+          const entriesToInsert = (newGame.entries || []).map(e => ({
             session_id: sessionData.id,
-            player_name: entry.name,
-            buy_in: entry.buyIn,
-            cash_out: entry.buyOut + entry.stack,
-            currency: globalCurrency,
-            is_bank: false,
-            hands_played: entry.handsPlayed,
-            vpip_hands: entry.vpipHands,
-            pfr_hands: entry.pfrHands,
-            three_bet_opps: entry.threeBetOpps,
-            three_bet_hands: entry.threeBetHands,
-            external_player_id: entry.externalId || entry.pokerNowId || null,
-            player_external_id: entry.externalId || entry.pokerNowId || null,
-            player_poker_now_id: entry.pokerNowId || entry.externalId || null
+            player_name: e.name,
+            buy_in: e.buyIn,
+            cash_out: e.buyOut + e.stack,
+            currency: e.currency || newGame.currency || globalCurrency,
+            is_bank: Boolean(e.isBank),
+            hands_played: Number(e.handsPlayed) || 0,
+            vpip_hands: Number(e.vpipHands) || 0,
+            pfr_hands: Number(e.pfrHands) || 0,
+            three_bet_opps: Number(e.threeBetOpps) || 0,
+            three_bet_hands: Number(e.threeBetHands) || 0,
+            external_player_id: e.externalId || e.pokerNowId || null,
+            player_external_id: e.externalId || e.pokerNowId || null,
+            player_poker_now_id: e.pokerNowId || e.externalId || null
           }));
 
-          const { error: ledgerError } = await supabase.from('ledger').insert(dbEntriesWithStats);
+          const { error: ledgerError } = await supabase.from('ledger').insert(entriesToInsert);
           if (ledgerError) {
-            console.warn("Ledger insert with stats failed, attempting legacy insert:", ledgerError);
-            const legacyEntries = dbEntriesWithStats.map(e => ({
+            console.warn("Error inserting ledger with stats, retrying legacy:", ledgerError);
+            const legacyEntries = entriesToInsert.map(e => ({
               session_id: e.session_id,
               player_name: e.player_name,
               buy_in: e.buy_in,
@@ -491,31 +390,80 @@ export function AppContent() {
             await supabase.from('ledger').insert(legacyEntries);
           }
 
-          setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id, pokerNowUrl: newGame.pokerNowUrl } : g));
+          setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
           setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
         }
-      } catch (dbErr) {
-        console.error("Failed to sync uploaded session to DB:", dbErr);
+      } catch (err) {
+        console.error("Failed to sync new CSV session to DB:", err);
       }
     }
   };
 
-  const executeMergeGame = async (newGame, matchingSession) => {
-    const mergedEntries = mergeSessionEntries(matchingSession.entries, newGame.entries);
-    const targetGame = {
-      ...matchingSession,
-      pokerNowUrl: matchingSession.pokerNowUrl || newGame.pokerNowUrl,
+  const executeMergeGame = async (incomingGame, targetSession) => {
+    const mergedEntries = mergeSessionEntries(targetSession.entries || [], incomingGame.entries || []);
+    const updatedGame = {
+      ...targetSession,
+      pokerNowUrl: targetSession.pokerNowUrl || incomingGame.pokerNowUrl || null,
       entries: mergedEntries
     };
 
-    setGames(prevGames => prevGames.map(g => g.id === targetGame.id ? targetGame : g));
-    setEditingGameId(targetGame.id);
+    setGames(prevGames => prevGames.map(g => g.id === updatedGame.id ? updatedGame : g));
+    setEditingGameId(updatedGame.id);
     setSelectedPlayer(null);
-    await handleUpdateGame(targetGame);
+
+    if (supabase) {
+      try {
+        await supabase.from('sessions')
+          .update({ poker_now_url: updatedGame.pokerNowUrl })
+          .eq('id', updatedGame.id);
+
+        await supabase.from('ledger').delete().eq('session_id', updatedGame.id);
+
+        const validEntries = mergedEntries
+          .filter(e => e && ((e.name || '').trim() !== '' || e.buyIn > 0 || e.buyOut > 0 || e.stack > 0))
+          .map(e => ({
+            session_id: updatedGame.id,
+            player_name: (e.name || '').trim() || 'Unknown Player',
+            buy_in: Number(e.buyIn) || 0,
+            cash_out: (Number(e.buyOut) || 0) + (Number(e.stack) || 0),
+            currency: e.currency || updatedGame.currency || 'USD',
+            is_bank: Boolean(e.isBank),
+            hands_played: Number(e.handsPlayed) || 0,
+            vpip_hands: Number(e.vpipHands) || 0,
+            pfr_hands: Number(e.pfrHands) || 0,
+            three_bet_opps: Number(e.threeBetOpps) || 0,
+            three_bet_hands: Number(e.threeBetHands) || 0,
+            external_player_id: e.externalId || e.pokerNowId || null,
+            player_external_id: e.externalId || e.pokerNowId || null,
+            player_poker_now_id: e.pokerNowId || e.externalId || null
+          }));
+
+        if (validEntries.length > 0) {
+          const { error: ledgerError } = await supabase.from('ledger').insert(validEntries);
+          if (ledgerError) {
+            console.warn("Error inserting ledger during merge, retrying legacy:", ledgerError);
+            const legacyEntries = validEntries.map(e => ({
+              session_id: e.session_id,
+              player_name: e.player_name,
+              buy_in: e.buy_in,
+              cash_out: e.cash_out,
+              currency: e.currency,
+              is_bank: e.is_bank,
+              external_player_id: e.external_player_id,
+              player_external_id: e.player_external_id,
+              player_poker_now_id: e.player_poker_now_id
+            }));
+            await supabase.from('ledger').insert(legacyEntries);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to update merged session in DB:", err);
+      }
+    }
   };
 
   const handleFileUpload = (event) => {
-    const file = event?.target?.files?.[0];
+    const file = event.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
@@ -684,6 +632,15 @@ export function AppContent() {
                   <span className="hidden sm:inline">Sessions</span>
                 </button>
                 <button 
+                  onClick={() => { setActiveTab('settlements'); setEditingGameId(null); setSelectedPlayer(null); }}
+                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
+                    activeTab === 'settlements' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  <Landmark className="w-4 h-4" />
+                  <span className="hidden sm:inline">Settlements</span>
+                </button>
+                <button 
                   onClick={() => { setActiveTab('players'); setEditingGameId(null); setSelectedPlayer(null); }}
                   className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
                     activeTab === 'players' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
@@ -720,6 +677,8 @@ export function AppContent() {
               getPlayerDisplayName={getPlayerDisplayName}
               onBack={() => setSelectedPlayer(null)} 
             />
+          ) : activeTab === 'settlements' ? (
+            <SettlementPage embedded={true} />
           ) : activeTab === 'dashboard' ? (
             <Dashboard 
               stats={playerStats} 
@@ -738,56 +697,57 @@ export function AppContent() {
           )}
         </main>
 
-        <ConfirmationModal 
-          isOpen={pendingDeleteSessionId !== null}
-          onClose={() => setPendingDeleteSessionId(null)}
-          onConfirm={() => {
-            if (pendingDeleteSessionId) {
-              handleDeleteGame(pendingDeleteSessionId);
+        <footer className="border-t border-slate-800/60 mt-12 py-6 text-center text-xs text-slate-400">
+          <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <p className="flex items-center gap-1.5 font-medium">
+              <span>OffSuite</span>
+              <span className="text-slate-600">•</span>
+              <span className="text-slate-500">Cross-border Poker Ledger & Settlements</span>
+            </p>
+            <p className="text-[11px] text-slate-500">
+              Live exchange rates powered by open FX feeds.
+            </p>
+          </div>
+        </footer>
+
+        {/* Merge Confirmation Modal */}
+        <ConfirmationModal
+          isOpen={Boolean(pendingMergeData)}
+          title="Merge Hands Log into Existing Session?"
+          message={`A session on ${pendingMergeData?.matchingSession?.date} already exists. Do you want to merge hand stats (VPIP/PFR/3-Bet) into this existing session, or create a new session?`}
+          confirmLabel="Merge Hand Stats"
+          cancelLabel="Create New Session"
+          onConfirm={async () => {
+            if (pendingMergeData) {
+              await executeMergeGame(pendingMergeData.newGame, pendingMergeData.matchingSession);
+              setPendingMergeData(null);
             }
           }}
-          title="Delete Poker Session"
-          message="Are you sure you want to delete this poker session? This action is permanent and cannot be undone."
-          confirmText="Delete"
-          isDestructive={true}
+          onCancel={async () => {
+            if (pendingMergeData) {
+              await executeCreateNewGame(pendingMergeData.newGame);
+              setPendingMergeData(null);
+            }
+          }}
         />
 
-        <ConfirmationModal 
-          isOpen={pendingMergeData !== null}
-          onClose={() => {
-            if (pendingMergeData) {
-              executeCreateNewGame(pendingMergeData.newGame);
+        {/* Delete Confirmation Modal */}
+        <ConfirmationModal
+          isOpen={Boolean(pendingDeleteSessionId)}
+          title="Delete Poker Session?"
+          message="Are you sure you want to delete this session? This action cannot be undone and will permanently remove all chip ledger entries for this game."
+          confirmLabel="Delete Session"
+          cancelLabel="Cancel"
+          variant="danger"
+          onConfirm={async () => {
+            if (pendingDeleteSessionId) {
+              await handleDeleteGame(pendingDeleteSessionId);
+              setPendingDeleteSessionId(null);
             }
-            setPendingMergeData(null);
           }}
-          onConfirm={() => {
-            if (pendingMergeData) {
-              executeMergeGame(pendingMergeData.newGame, pendingMergeData.matchingSession);
-            }
-            setPendingMergeData(null);
-          }}
-          title="Merge Sessions"
-          message={pendingMergeData ? ("A session for date " + pendingMergeData.matchingSession.date + (pendingMergeData.matchingSession.pokerNowUrl ? " (matching PokerNow URL)" : "") + " already exists. Would you like to merge the new ledger/hand data into this existing session rather than creating a duplicate?") : ""}
-          confirmText="Merge Ledger"
-          cancelText="Create Duplicate"
-          isDestructive={false}
+          onCancel={() => setPendingDeleteSessionId(null)}
         />
       </div>
     </ErrorBoundary>
-  );
-}
-
-export default function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<AppContent />} />
-        <Route path="/home" element={<HomePage />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/admin/session/:sessionId" element={<SessionPage />} />
-        <Route path="/settlement" element={<SettlementPage />} />
-        <Route path="/settlement/:country" element={<SettlementPage />} />
-      </Routes>
-    </BrowserRouter>
   );
 }
