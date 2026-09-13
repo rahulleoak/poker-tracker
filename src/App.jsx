@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, Component, useCallback } from "react";
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { LayoutDashboard, Globe, History, Users, Landmark } from 'lucide-react';
 import { supabase } from './utils/supabase';
 import { parsePokerNowCSV } from './utils/csvParser';
@@ -61,23 +61,18 @@ class ErrorBoundary extends Component {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<AppContent />} />
-        <Route path="/home" element={<HomePage />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/admin/session/:sessionId" element={<SessionPage />} />
-        <Route path="/settlement" element={<SettlementPage />} />
-        <Route path="/settlement/:country" element={<SettlementPage />} />
-      </Routes>
+      <ErrorBoundary>
+        <AppContent />
+      </ErrorBoundary>
     </BrowserRouter>
   );
 }
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard' | 'games' | 'settlements' | 'players'
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [games, setGames] = useState([]);
-  const [editingGameId, setEditingGameId] = useState(null);
-  const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [globalIncrement, setGlobalIncrement] = useState(100);
   const [globalCurrency, setGlobalCurrency] = useState('USD');
   const [exchangeRates, setExchangeRates] = useState({ USD: 1 });
@@ -85,6 +80,12 @@ function AppContent() {
   const [playerLinks, setPlayerLinks] = useState([]);
   const [pendingMergeData, setPendingMergeData] = useState(null);
   const [pendingDeleteSessionId, setPendingDeleteSessionId] = useState(null);
+
+  // Active navigation section
+  const isDashboard = location.pathname === '/' || location.pathname === '/dashboard';
+  const isSessions = location.pathname.startsWith('/sessions');
+  const isSettlements = location.pathname.startsWith('/settlement');
+  const isPlayers = location.pathname.startsWith('/players');
 
   // --- IDENTITY & PLAYERS FETCH ---
   const fetchPlayersAndLinks = useCallback(async () => {
@@ -311,8 +312,7 @@ function AppContent() {
     const newGame = createDefaultGame(globalCurrency);
 
     setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
-    setEditingGameId(newGame.id);
-    setSelectedPlayer(null);
+    navigate(`/sessions/${newGame.id}`);
 
     if (supabase) {
       try {
@@ -349,7 +349,7 @@ function AppContent() {
           await supabase.from('ledger').insert(initialEntries);
 
           setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
-          setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
+          navigate(`/sessions/${sessionData.id}`, { replace: true });
         }
       } catch (err) {
         console.error("Failed to sync created session to DB:", err);
@@ -359,8 +359,7 @@ function AppContent() {
 
   const executeCreateNewGame = async (newGame) => {
     setGames(prevGames => [newGame, ...prevGames.filter(g => g.id !== newGame.id)]);
-    setEditingGameId(newGame.id);
-    setSelectedPlayer(null);
+    navigate(`/sessions/${newGame.id}`);
 
     if (supabase) {
       try {
@@ -418,7 +417,7 @@ function AppContent() {
           }
 
           setGames(prevGames => prevGames.map(g => g.id === oldId ? { ...g, id: sessionData.id } : g));
-          setEditingGameId(prev => (prev === oldId ? sessionData.id : prev));
+          navigate(`/sessions/${sessionData.id}`, { replace: true });
         }
       } catch (err) {
         console.error("Failed to sync new CSV session to DB:", err);
@@ -435,8 +434,7 @@ function AppContent() {
     };
 
     setGames(prevGames => prevGames.map(g => g.id === updatedGame.id ? updatedGame : g));
-    setEditingGameId(updatedGame.id);
-    setSelectedPlayer(null);
+    navigate(`/sessions/${updatedGame.id}`);
 
     if (supabase) {
       try {
@@ -602,7 +600,7 @@ function AppContent() {
   const handleDeleteGame = async (id) => {
     if (!id) return;
     setGames(prevGames => prevGames.filter(g => g.id !== id));
-    if (editingGameId === id) setEditingGameId(null);
+    navigate('/sessions');
 
     if (!supabase) return;
     try {
@@ -612,79 +610,115 @@ function AppContent() {
     }
   };
 
-  const activeEditingGame = editingGameId ? games.find(g => g && g.id === editingGameId) : null;
-
   return (
-    <ErrorBoundary>
-      <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
-        {/* Navbar */}
-        <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
-          <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-emerald-400 font-bold text-xl tracking-tight">
-              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400">
-                <Globe className="w-5 h-5" />
-              </div>
-              <span>OffSuite</span>
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-emerald-500/30">
+      {/* Top Navbar */}
+      <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div 
+            onClick={() => navigate('/dashboard')}
+            className="flex items-center gap-2 text-emerald-400 font-bold text-xl tracking-tight cursor-pointer hover:opacity-90 transition-opacity"
+          >
+            <div className="flex items-center justify-center w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-400">
+              <Globe className="w-5 h-5" />
             </div>
-            
-            <div className="flex items-center gap-2 sm:gap-4">
-              <div className="flex items-center gap-1 sm:gap-2">
-                <label className="text-xs font-medium text-slate-500 uppercase tracking-wider hidden md:inline">Dashboard View:</label>
-                <select 
-                  value={globalCurrency}
-                  onChange={(e) => setGlobalCurrency(e.target.value)}
-                  className="bg-slate-950 border border-slate-800 text-emerald-400 text-xs sm:text-sm font-bold rounded-lg px-1.5 sm:px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
-                >
-                  {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
+            <span>OffSuite</span>
+          </div>
+          
+          <div className="flex items-center gap-2 sm:gap-4">
+            <div className="flex items-center gap-1 sm:gap-2">
+              <label className="text-xs font-medium text-slate-500 uppercase tracking-wider hidden md:inline">View Currency:</label>
+              <select 
+                value={globalCurrency}
+                onChange={(e) => setGlobalCurrency(e.target.value)}
+                className="bg-slate-950 border border-slate-800 text-emerald-400 text-xs sm:text-sm font-bold rounded-lg px-1.5 sm:px-2 py-1 outline-none focus:border-emerald-500 transition-colors"
+              >
+                {TOP_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
 
-              <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
-                <button 
-                  onClick={() => { setActiveTab('dashboard'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                    activeTab === 'dashboard' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                >
-                  <LayoutDashboard className="w-4 h-4" />
-                  <span className="hidden sm:inline">Dashboard</span>
-                </button>
-                <button 
-                  onClick={() => { setActiveTab('games'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                    (activeTab === 'games' || editingGameId) ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                >
-                  <History className="w-4 h-4" />
-                  <span className="hidden sm:inline">Sessions</span>
-                </button>
-                <button 
-                  onClick={() => { setActiveTab('settlements'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                    activeTab === 'settlements' && !editingGameId && !selectedPlayer ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                >
-                  <Landmark className="w-4 h-4" />
-                  <span className="hidden sm:inline">Settlements</span>
-                </button>
-                <button 
-                  onClick={() => { setActiveTab('players'); setEditingGameId(null); setSelectedPlayer(null); }}
-                  className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
-                    activeTab === 'players' ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                >
-                  <Users className="w-4 h-4" />
-                  <span className="hidden sm:inline">Players</span>
-                </button>
-              </div>
+            <div className="flex gap-1 bg-slate-800/50 p-1 rounded-lg">
+              <button 
+                onClick={() => navigate('/dashboard')}
+                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
+                  isDashboard ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span className="hidden sm:inline">Dashboard</span>
+              </button>
+              <button 
+                onClick={() => navigate('/sessions')}
+                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
+                  isSessions ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <History className="w-4 h-4" />
+                <span className="hidden sm:inline">Sessions</span>
+              </button>
+              <button 
+                onClick={() => navigate('/settlements')}
+                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
+                  isSettlements ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <Landmark className="w-4 h-4" />
+                <span className="hidden sm:inline">Settlements</span>
+              </button>
+              <button 
+                onClick={() => navigate('/players')}
+                className={`px-3 sm:px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-md text-sm font-medium transition-colors flex items-center justify-center sm:justify-start gap-2 ${
+                  isPlayers ? 'bg-slate-700 text-white shadow' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                <span className="hidden sm:inline">Players</span>
+              </button>
             </div>
           </div>
-        </nav>
+        </div>
+      </nav>
 
-        <main className="max-w-6xl mx-auto px-4 py-8">
-          {editingGameId ? (
-            <GameEditor 
-              game={activeEditingGame} 
+      {/* Main Routed Page Content */}
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <Routes>
+          <Route path="/" element={
+            <Dashboard 
+              stats={playerStats} 
+              totalSessions={games.length} 
+              totalMoney={totalMoneyInPlayFiat} 
+              globalCurrency={globalCurrency} 
+              onPlayerClick={(name) => navigate(`/players/${encodeURIComponent(name)}`)} 
+              games={games}
+              exchangeRates={exchangeRates}
+              getPlayerDisplayName={getPlayerDisplayName}
+            />
+          } />
+          <Route path="/dashboard" element={
+            <Dashboard 
+              stats={playerStats} 
+              totalSessions={games.length} 
+              totalMoney={totalMoneyInPlayFiat} 
+              globalCurrency={globalCurrency} 
+              onPlayerClick={(name) => navigate(`/players/${encodeURIComponent(name)}`)} 
+              games={games}
+              exchangeRates={exchangeRates}
+              getPlayerDisplayName={getPlayerDisplayName}
+            />
+          } />
+          <Route path="/sessions" element={
+            <GamesList 
+              games={games} 
+              onCreate={handleCreateGame} 
+              onFileUpload={handleFileUpload} 
+              onEdit={(id) => navigate(`/sessions/${id}`)} 
+              exchangeRates={exchangeRates} 
+              globalCurrency={globalCurrency} 
+            />
+          } />
+          <Route path="/sessions/:sessionId" element={
+            <SessionEditorRoute
+              games={games}
               globalIncrement={globalIncrement}
               setGlobalIncrement={setGlobalIncrement}
               exchangeRates={exchangeRates}
@@ -692,89 +726,133 @@ function AppContent() {
               playerLinks={playerLinks}
               onUpdatePlayers={fetchPlayersAndLinks}
               onSave={handleUpdateGame}
-              onBack={() => setEditingGameId(null)}
-              onDelete={() => setPendingDeleteSessionId(editingGameId)}
+              onBack={() => navigate('/sessions')}
+              onDelete={(id) => setPendingDeleteSessionId(id)}
             />
-          ) : selectedPlayer ? (
-            <PlayerProfile 
-              playerName={selectedPlayer} 
-              games={games} 
+          } />
+          <Route path="/settlements" element={<SettlementPage embedded={true} />} />
+          <Route path="/settlements/:country" element={<SettlementPage embedded={true} />} />
+          <Route path="/settlement" element={<SettlementPage embedded={true} />} />
+          <Route path="/settlement/:country" element={<SettlementPage embedded={true} />} />
+          <Route path="/players" element={
+            <PlayerManager players={players} playerLinks={playerLinks} onUpdate={fetchPlayersAndLinks} />
+          } />
+          <Route path="/players/:playerName" element={
+            <PlayerProfileRoute
+              games={games}
               exchangeRates={exchangeRates}
               globalCurrency={globalCurrency}
               getPlayerDisplayName={getPlayerDisplayName}
-              onBack={() => setSelectedPlayer(null)} 
+              onBack={() => navigate(-1)}
             />
-          ) : activeTab === 'settlements' ? (
-            <SettlementPage embedded={true} />
-          ) : activeTab === 'dashboard' ? (
-            <Dashboard 
-              stats={playerStats} 
-              totalSessions={games.length} 
-              totalMoney={totalMoneyInPlayFiat} 
-              globalCurrency={globalCurrency} 
-              onPlayerClick={setSelectedPlayer} 
-              games={games}
-              exchangeRates={exchangeRates}
-              getPlayerDisplayName={getPlayerDisplayName}
-            />
-          ) : activeTab === 'players' ? (
-            <PlayerManager players={players} playerLinks={playerLinks} onUpdate={fetchPlayersAndLinks} />
-          ) : (
-            <GamesList games={games} onCreate={handleCreateGame} onFileUpload={handleFileUpload} onEdit={setEditingGameId} exchangeRates={exchangeRates} globalCurrency={globalCurrency} />
-          )}
-        </main>
+          } />
+          <Route path="/home" element={<HomePage />} />
+          <Route path="/admin" element={<AdminPage />} />
+          <Route path="/admin/session/:sessionId" element={<SessionPage />} />
+        </Routes>
+      </main>
 
-        <footer className="border-t border-slate-800/60 mt-12 py-6 text-center text-xs text-slate-400">
-          <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-            <p className="flex items-center gap-1.5 font-medium">
-              <span>OffSuite</span>
-              <span className="text-slate-600">•</span>
-              <span className="text-slate-500">Cross-border Poker Ledger & Settlements</span>
-            </p>
-            <p className="text-[11px] text-slate-500">
-              Live exchange rates powered by open FX feeds.
-            </p>
-          </div>
-        </footer>
+      <footer className="border-t border-slate-800/60 mt-12 py-6 text-center text-xs text-slate-400">
+        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <p className="flex items-center gap-1.5 font-medium">
+            <span>OffSuite</span>
+            <span className="text-slate-600">•</span>
+            <span className="text-slate-500">Cross-border Poker Ledger & Settlements</span>
+          </p>
+          <p className="text-[11px] text-slate-500">
+            Live exchange rates powered by open FX feeds.
+          </p>
+        </div>
+      </footer>
 
-        {/* Merge Confirmation Modal */}
-        <ConfirmationModal
-          isOpen={Boolean(pendingMergeData)}
-          title="Merge Hands Log into Existing Session?"
-          message={`A session on ${pendingMergeData?.matchingSession?.date} already exists. Do you want to merge hand stats (VPIP/PFR/3-Bet) into this existing session, or create a new session?`}
-          confirmLabel="Merge Hand Stats"
-          cancelLabel="Create New Session"
-          onConfirm={async () => {
-            if (pendingMergeData) {
-              await executeMergeGame(pendingMergeData.newGame, pendingMergeData.matchingSession);
-              setPendingMergeData(null);
-            }
-          }}
-          onCancel={async () => {
-            if (pendingMergeData) {
-              await executeCreateNewGame(pendingMergeData.newGame);
-              setPendingMergeData(null);
-            }
-          }}
-        />
+      {/* Merge Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={Boolean(pendingMergeData)}
+        title="Merge Hands Log into Existing Session?"
+        message={`A session on ${pendingMergeData?.matchingSession?.date} already exists. Do you want to merge hand stats (VPIP/PFR/3-Bet) into this existing session, or create a new session?`}
+        confirmLabel="Merge Hand Stats"
+        cancelLabel="Create New Session"
+        onConfirm={async () => {
+          if (pendingMergeData) {
+            await executeMergeGame(pendingMergeData.newGame, pendingMergeData.matchingSession);
+            setPendingMergeData(null);
+          }
+        }}
+        onCancel={async () => {
+          if (pendingMergeData) {
+            await executeCreateNewGame(pendingMergeData.newGame);
+            setPendingMergeData(null);
+          }
+        }}
+      />
 
-        {/* Delete Confirmation Modal */}
-        <ConfirmationModal
-          isOpen={Boolean(pendingDeleteSessionId)}
-          title="Delete Poker Session?"
-          message="Are you sure you want to delete this session? This action cannot be undone and will permanently remove all chip ledger entries for this game."
-          confirmLabel="Delete Session"
-          cancelLabel="Cancel"
-          variant="danger"
-          onConfirm={async () => {
-            if (pendingDeleteSessionId) {
-              await handleDeleteGame(pendingDeleteSessionId);
-              setPendingDeleteSessionId(null);
-            }
-          }}
-          onCancel={() => setPendingDeleteSessionId(null)}
-        />
+      {/* Delete Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={Boolean(pendingDeleteSessionId)}
+        title="Delete Poker Session?"
+        message="Are you sure you want to delete this session? This action cannot be undone and will permanently remove all chip ledger entries for this game."
+        confirmLabel="Delete Session"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={async () => {
+          if (pendingDeleteSessionId) {
+            await handleDeleteGame(pendingDeleteSessionId);
+            setPendingDeleteSessionId(null);
+          }
+        }}
+        onCancel={() => setPendingDeleteSessionId(null)}
+      />
+    </div>
+  );
+}
+
+function SessionEditorRoute({ games, globalIncrement, setGlobalIncrement, exchangeRates, players, playerLinks, onUpdatePlayers, onSave, onBack, onDelete }) {
+  const { sessionId } = useParams();
+  const game = games.find(g => g && g.id === sessionId);
+
+  if (!game) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center text-slate-400 space-y-4 max-w-lg mx-auto shadow-2xl">
+        <p className="text-lg font-semibold text-slate-200">Session not found</p>
+        <p className="text-sm text-slate-500">The requested session could not be found or has been removed.</p>
+        <button 
+          onClick={onBack} 
+          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors"
+        >
+          Back to Sessions
+        </button>
       </div>
-    </ErrorBoundary>
+    );
+  }
+
+  return (
+    <GameEditor 
+      game={game} 
+      globalIncrement={globalIncrement}
+      setGlobalIncrement={setGlobalIncrement}
+      exchangeRates={exchangeRates}
+      players={players}
+      playerLinks={playerLinks}
+      onUpdatePlayers={onUpdatePlayers}
+      onSave={onSave}
+      onBack={onBack}
+      onDelete={() => onDelete(sessionId)}
+    />
+  );
+}
+
+function PlayerProfileRoute({ games, exchangeRates, globalCurrency, getPlayerDisplayName, onBack }) {
+  const { playerName } = useParams();
+  const decodedName = playerName ? decodeURIComponent(playerName) : '';
+
+  return (
+    <PlayerProfile 
+      playerName={decodedName} 
+      games={games} 
+      exchangeRates={exchangeRates}
+      globalCurrency={globalCurrency}
+      getPlayerDisplayName={getPlayerDisplayName}
+      onBack={onBack} 
+    />
   );
 }
