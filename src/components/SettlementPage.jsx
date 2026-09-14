@@ -11,7 +11,8 @@ import {
   Coins,
   ChevronDown,
   ChevronUp,
-  ArrowLeft
+  ArrowLeft,
+  Check
 } from 'lucide-react';
 import { useIdentityGraph } from '../hooks/useIdentityGraph';
 import { sessionApi } from '../utils/sessionApi';
@@ -39,498 +40,407 @@ const ago = (iso) => {
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
   return `${days}d ago`;
 };
 
-function makeNameResolver(players = []) {
-  const map = new Map();
-  for (const p of players) {
-    map.set(p.id, p.display_name);
-  }
-  return (key) => {
-    if (!key) return null;
-    return map.get(key) || null;
-  };
-}
-
 export default function SettlementPage({ embedded = false }) {
-  const { country: countryParam } = useParams();
+  const { country: routeCountry } = useParams();
   const navigate = useNavigate();
 
-  const [selectedCountry, setSelectedCountry] = useState(() => {
-    if (!countryParam) return 'ALL';
-    const found = COUNTRIES.find((c) => c.code.toLowerCase() === countryParam.toLowerCase());
-    return found ? found.code : 'ALL';
+  const [activeCountry, setActiveCountry] = useState(() => {
+    const code = (routeCountry || 'CA').toUpperCase();
+    return COUNTRIES.some((c) => c.code === code) ? code : 'CA';
   });
 
-  useEffect(() => {
-    if (countryParam) {
-      const found = COUNTRIES.find((c) => c.code.toLowerCase() === countryParam.toLowerCase());
-      if (found) setSelectedCountry(found.code);
-    }
-  }, [countryParam]);
-
-  const { players } = useIdentityGraph();
-  const nameOf = useMemo(() => makeNameResolver(players), [players]);
-
-  const [legs, setLegs] = useState([]);
+  const [sessions, setSessions] = useState([]);
   const [marks, setMarks] = useState([]);
-  const [state, setState] = useState('loading'); // loading | ready | error
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [undoState, setUndoState] = useState(null); // { ids: [], label }
-  const [searchQuery, setSearchQuery] = useState('');
+  const [search, setSearch] = useState('');
+  const [undoToast, setUndoToast] = useState(null);
 
-  const loadMarks = useCallback(() => {
-    return sessionApi.listMarks().then((m) => setMarks(Array.isArray(m) ? m : []));
-  }, []);
-
-  const loadAll = useCallback(() => {
-    setState('loading');
-    sessionApi
-      .ensureLegs()
-      .catch((err) => console.warn('ensureLegs failed:', err))
-      .then(() => Promise.all([sessionApi.listLegs(), sessionApi.listMarks()]))
-      .then(([l, m]) => {
-        setLegs(Array.isArray(l) ? l : []);
-        setMarks(Array.isArray(m) ? m : []);
-        setState('ready');
-      })
-      .catch((err) => {
-        console.error('Failed to load settlement data:', err);
-        setState('error');
-      });
-  }, []);
+  const { graph, resolve } = useIdentityGraph();
 
   useEffect(() => {
-    loadAll();
-  }, [loadAll]);
-
-  useEffect(() => {
-    if (!undoState) return undefined;
-    const t = setTimeout(() => setUndoState(null), 9000);
-    return () => clearTimeout(t);
-  }, [undoState]);
-
-  const settleRows = useCallback(
-    async (rows, label) => {
-      if (!rows.length || busy) return;
-      setBusy(true);
-      try {
-        const inserted = await sessionApi.addMarks(rows);
-        await loadMarks();
-        const ids = (inserted || []).map((r) => r.id).filter(Boolean);
-        if (ids.length) setUndoState({ ids, label });
-      } catch (err) {
-        console.error('Failed to settle:', err);
-        window.alert(err.message || 'Failed to record settlement.');
-      } finally {
-        setBusy(false);
+    if (routeCountry) {
+      const code = routeCountry.toUpperCase();
+      if (COUNTRIES.some((c) => c.code === code) && code !== activeCountry) {
+        setActiveCountry(code);
       }
-    },
-    [busy, loadMarks]
-  );
+    }
+  }, [routeCountry, activeCountry]);
 
-  const undoMarkIds = useCallback(
-    async (ids) => {
-      if (!ids?.length || busy) return;
-      setBusy(true);
-      try {
-        await sessionApi.undoMarks(ids);
-        await loadMarks();
-        setUndoState((u) => (u && u.ids.every((id) => ids.includes(id)) ? null : u));
-      } catch (err) {
-        console.error('Failed to undo:', err);
-        window.alert(err.message || 'Failed to undo.');
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, loadMarks]
-  );
-
-  const perCountry = useMemo(
-    () =>
-      COUNTRIES.map((c) =>
-        buildCountrySettlement({ legs, marks, countryCode: c.code, nameOf })
-      ),
-    [legs, marks, nameOf]
-  );
-
-  const currentCountryData = useMemo(() => {
-    if (selectedCountry === 'ALL') return null;
-    return perCountry.find((c) => c.countryCode === selectedCountry) || null;
-  }, [selectedCountry, perCountry]);
-
-  // Global aggregate metrics across all regions
-  const globalMetrics = useMemo(() => {
-    let totalCollect = 0;
-    let totalPay = 0;
-    let totalOutstandingPlayers = 0;
-
-    perCountry.forEach((c) => {
-      totalCollect += c.collectLocal || 0;
-      totalPay += c.payLocal || 0;
-      totalOutstandingPlayers += c.outstandingPlayerCount || 0;
-    });
-
-    return { totalCollect, totalPay, totalOutstandingPlayers };
-  }, [perCountry]);
-
-  const handleCountryTabChange = (code) => {
-    setSelectedCountry(code);
+  const handleCountrySelect = (code) => {
+    setActiveCountry(code);
     if (!embedded) {
-      if (code === 'ALL') {
-        navigate('/settlement');
-      } else {
-        navigate(`/settlement/${code.toLowerCase()}`);
-      }
+      navigate(`/settlements/${code.toLowerCase()}`);
     }
   };
 
-  const content = (
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [sessRes, marksRes] = await Promise.all([
+        sessionApi.list(),
+        sessionApi.listMarks()
+      ]);
+      setSessions(sessRes || []);
+      setMarks(marksRes || []);
+    } catch (err) {
+      console.error('Failed to load settlement data:', err);
+      setError(err.message || 'Failed to load ledger data');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const currentCountryConfig = useMemo(
+    () => COUNTRIES.find((c) => c.code === activeCountry) || COUNTRIES[0],
+    [activeCountry]
+  );
+
+  const countryData = useMemo(() => {
+    if (!sessions || sessions.length === 0) return null;
+    return buildCountrySettlement(activeCountry, sessions, marks, resolve);
+  }, [activeCountry, sessions, marks, resolve]);
+
+  const markIdsMap = useMemo(() => {
+    const map = new Map();
+    marks.forEach((m) => {
+      if (m && m.session_id && m.leg_id) {
+        map.set(`${m.session_id}:${m.leg_id}`, m.id);
+      }
+    });
+    return map;
+  }, [marks]);
+
+  const showUndo = (ids, label) => {
+    setUndoToast({ ids, label });
+    setTimeout(() => {
+      setUndoToast((cur) => (cur && cur.ids === ids ? null : cur));
+    }, 8000);
+  };
+
+  const handleUndo = async (ids) => {
+    if (!ids || ids.length === 0 || busy) return;
+    setBusy(true);
+    try {
+      await sessionApi.unmarkBulk(ids);
+      setMarks((prev) => prev.filter((m) => !ids.includes(m.id)));
+      setUndoToast(null);
+    } catch (err) {
+      console.error('Undo failed:', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSettlePlayer = async (player) => {
+    if (busy || !player || !player.lines) return;
+    const openLines = player.lines.filter((l) => !l.settled);
+    if (openLines.length === 0) return;
+
+    setBusy(true);
+    const payloads = openLines.map((line) => ({
+      session_id: line.sessionId,
+      leg_id: line.legId,
+      scope: 'player',
+      country: activeCountry,
+      party_key: player.key,
+      party_name: player.name,
+      counterparty_key: line.bankKey || null,
+      counterparty_name: line.bankName || null,
+      direction: line.direction,
+      amount_cad: line.amountCad,
+      amount_local: line.amountLocal,
+      currency: line.currency || currentCountryConfig.currency,
+      session_date: line.date || null
+    }));
+
+    try {
+      const inserted = await sessionApi.markBulk(payloads);
+      if (inserted && inserted.length > 0) {
+        setMarks((prev) => [...prev, ...inserted]);
+        showUndo(
+          inserted.map((m) => m.id),
+          `Settled ${inserted.length} line${inserted.length === 1 ? '' : 's'} for ${player.name}`
+        );
+      }
+    } catch (err) {
+      console.error('Failed to settle player:', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleToggleLine = async (isSettled, sessionId, legId, buildPayload) => {
+    if (busy) return;
+    const key = `${sessionId}:${legId}`;
+    const markId = markIdsMap.get(key);
+
+    setBusy(true);
+    try {
+      if (isSettled && markId) {
+        await sessionApi.unmark(markId);
+        setMarks((prev) => prev.filter((m) => m.id !== markId));
+      } else {
+        const payload = buildPayload();
+        const inserted = await sessionApi.mark(payload);
+        if (inserted) {
+          setMarks((prev) => [...prev, inserted]);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to toggle line settlement:', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSettleBankLine = async (b) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const payload = {
+        session_id: b.sessionId,
+        leg_id: b.legId,
+        scope: 'bank',
+        country: activeCountry,
+        party_key: b.fromKey,
+        party_name: b.from,
+        counterparty_key: b.toKey,
+        counterparty_name: b.to,
+        direction: 'bank',
+        amount_cad: b.amountCad,
+        amount_local: b.amountCad,
+        currency: 'CAD',
+        session_date: b.date || null
+      };
+      const inserted = await sessionApi.mark(payload);
+      if (inserted) {
+        setMarks((prev) => [...prev, inserted]);
+        showUndo([inserted.id], `Settled bank transfer: ${b.from} → ${b.to}`);
+      }
+    } catch (err) {
+      console.error('Failed to settle bank line:', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
     <div className="space-y-6 font-sans">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-4">
-        <div>
-          {!embedded && (
-            <Link
-              to="/"
-              className="inline-flex items-center gap-1 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors mb-1.5"
-            >
-              <ArrowLeft className="w-3.5 h-3.5 text-cyan-400" /> Back to Dashboard
-            </Link>
-          )}
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse drop-shadow-[0_0_6px_rgba(34,197,94,0.8)]" />
-            <h1 className="text-xl font-bold text-white uppercase tracking-tight flex items-center gap-2">
-              Cross-Session Settlement Hub
+      {/* Top Header Card */}
+      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 shadow-xl backdrop-blur-xl">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold tracking-wider text-emerald-400 uppercase bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5">
+                Financial Clearing
+              </span>
+              <span className="text-xs text-zinc-500 font-mono">
+                {sessions.length} sessions tracked
+              </span>
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight mt-1">
+              Cross-Border Settlement Desk
             </h1>
+            <p className="text-xs text-zinc-400 mt-1 font-mono">
+              Net balance rollup by regional banker & player clearing state.
+            </p>
           </div>
-          <p className="text-xs text-zinc-400 mt-0.5 font-mono">
-            Aggregate outstanding balances across all historical sessions with one-click bulk settlement
-          </p>
+
+          {/* Country Selector Tabs */}
+          <div className="flex gap-2 bg-black/60 border border-white/10 p-1 self-start md:self-auto">
+            {COUNTRIES.map((c) => {
+              const active = c.code === activeCountry;
+              return (
+                <button
+                  key={c.code}
+                  onClick={() => handleCountrySelect(c.code)}
+                  className={`px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
+                    active
+                      ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
+                  }`}
+                >
+                  <span className="text-base">{c.flag}</span>
+                  <span>{c.name}</span>
+                  <span className="text-[10px] text-zinc-500">({c.currency})</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Region Switcher Tabs */}
-        <div className="flex bg-black/80 border border-white/10 p-0.5 shrink-0 self-start sm:self-auto font-mono">
-          <button
-            onClick={() => handleCountryTabChange('ALL')}
-            className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
-              selectedCountry === 'ALL'
-                ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/30 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <span>🌐 All Regions</span>
-          </button>
-          {COUNTRIES.map((c) => (
-            <button
-              key={c.code}
-              onClick={() => handleCountryTabChange(c.code)}
-              className={`px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
-                selectedCountry === c.code
-                  ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
-                  : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <span>{c.flag}</span>
-              <span>{c.name}</span>
-            </button>
-          ))}
+        {/* Search Input */}
+        <div className="mt-6 relative">
+          <Search className="w-4 h-4 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="Search by player name or alias..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full bg-black/80 border border-white/15 pl-9 pr-4 py-2 text-xs text-zinc-200 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all font-mono"
+          />
         </div>
       </div>
 
-      {state === 'loading' && (
-        <div className="hud-corner-reticle bg-hud-card border border-white/10 p-12 text-center text-zinc-400 backdrop-blur-xl">
-          <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-3 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
-          <p className="text-xs font-mono uppercase tracking-wider text-zinc-400">Computing settlement matrix telemetry…</p>
+      {/* Main Content Area */}
+      {loading ? (
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-12 text-center text-zinc-500 font-mono text-xs uppercase tracking-wider">
+          Aggregating ledger settlement state...
         </div>
-      )}
+      ) : error ? (
+        <div className="hud-corner-reticle bg-hud-card/90 border border-rose-900/50 p-8 text-center text-rose-400 font-mono text-xs">
+          {error}
+        </div>
+      ) : countryData ? (
+        <CountrySettlementView
+          data={countryData}
+          currency={currentCountryConfig.currency}
+          countryName={currentCountryConfig.name}
+          countryCode={activeCountry}
+          search={search}
+          busy={busy}
+          resolve={resolve}
+          onSettlePlayer={handleSettlePlayer}
+          onToggleLine={handleToggleLine}
+          onSettleBankLine={handleSettleBankLine}
+          onUndoIds={handleUndo}
+        />
+      ) : null}
 
-      {state === 'error' && (
-        <div className="hud-corner-reticle hud-corner-rose bg-hud-card border border-rose-500/30 p-6 text-center text-rose-400 backdrop-blur-xl">
-          <p className="text-xs font-mono uppercase tracking-wider">Telemetry feed interrupted.</p>
+      {/* Undo Toast */}
+      {undoToast && (
+        <div className="fixed bottom-6 right-6 z-50 bg-zinc-900 border border-emerald-500/40 shadow-2xl p-4 flex items-center gap-4 text-xs font-mono animate-in fade-in slide-in-from-bottom duration-200 max-w-md">
+          <span className="text-emerald-400 flex items-center gap-2 font-medium">
+            <CheckCircle2 className="w-4 h-4" />
+            {undoToast.label}
+          </span>
           <button
-            onClick={loadAll}
-            className="mt-3 px-4 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-mono font-bold uppercase tracking-wider shadow-[0_0_10px_rgba(244,63,94,0.4)]"
+            onClick={() => handleUndo(undoToast.ids)}
+            disabled={busy}
+            className="px-3 py-1 bg-black border border-white/20 text-zinc-200 hover:text-white hover:border-emerald-400 uppercase tracking-wider font-bold transition-all ml-auto shrink-0 flex items-center gap-1"
           >
-            Retry Connection
+            <RotateCcw className="w-3 h-3 text-cyan-400" /> Undo
           </button>
         </div>
       )}
-
-      {state === 'ready' && (
-        <>
-          {/* Key Metrics Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="hud-corner-reticle hud-corner-emerald bg-hud-card/90 border border-white/10 p-4 space-y-1 backdrop-blur-xl">
-              <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-widest block">
-                Total Receivables
-              </span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold font-mono tabular-nums text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.7)]">
-                  {selectedCountry === 'ALL'
-                    ? `$${globalMetrics.totalCollect.toFixed(2)} CAD`
-                    : money(currentCountryData?.collectLocal || 0, currentCountryData?.currency)}
-                </span>
-              </div>
-              <span className="text-[11px] text-zinc-500 font-mono block">Owed to bank by players</span>
-            </div>
-
-            <div className="hud-corner-reticle hud-corner-rose bg-hud-card/90 border border-white/10 p-4 space-y-1 backdrop-blur-xl">
-              <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-widest block">
-                Total Payables
-              </span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold font-mono tabular-nums text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.7)]">
-                  {selectedCountry === 'ALL'
-                    ? `$${globalMetrics.totalPay.toFixed(2)} CAD`
-                    : money(currentCountryData?.payLocal || 0, currentCountryData?.currency)}
-                </span>
-              </div>
-              <span className="text-[11px] text-zinc-500 font-mono block">Bank owes winning players</span>
-            </div>
-
-            <div className="hud-corner-reticle hud-corner-cyan bg-hud-card/90 border border-white/10 p-4 space-y-1 backdrop-blur-xl">
-              <span className="text-[10px] font-mono font-bold text-zinc-400 uppercase tracking-widest block">
-                Outstanding Players
-              </span>
-              <div className="flex items-baseline gap-2">
-                <span className="text-2xl font-bold font-mono tabular-nums text-white">
-                  {selectedCountry === 'ALL'
-                    ? globalMetrics.totalOutstandingPlayers
-                    : currentCountryData?.outstandingPlayerCount || 0}
-                </span>
-                <span className="text-xs font-mono text-zinc-500">pending</span>
-              </div>
-              <span className="text-[11px] text-zinc-500 font-mono block">Across all recorded games</span>
-            </div>
-          </div>
-
-          {/* Search / Filter Bar */}
-          <div className="relative">
-            <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Filter players by master identity or session alias..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-black/80 border border-white/15 pl-10 pr-4 py-2.5 text-xs text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.3)] transition-all font-sans"
-            />
-          </div>
-
-          {/* Render All Regions or Single Region */}
-          {selectedCountry === 'ALL' ? (
-            <div className="space-y-6">
-              {perCountry.map((countryData) => (
-                <CountrySection
-                  key={countryData.countryCode}
-                  data={countryData}
-                  marks={marks}
-                  searchQuery={searchQuery}
-                  nameOf={nameOf}
-                  busy={busy}
-                  onSettleRows={settleRows}
-                  onUndoIds={undoMarkIds}
-                />
-              ))}
-            </div>
-          ) : (
-            currentCountryData && (
-              <CountrySection
-                data={currentCountryData}
-                marks={marks}
-                searchQuery={searchQuery}
-                nameOf={nameOf}
-                busy={busy}
-                onSettleRows={settleRows}
-                onUndoIds={undoMarkIds}
-              />
-            )
-          )}
-        </>
-      )}
-
-      {/* Global Undo Toast */}
-      {undoState && (
-        <div className="fixed inset-x-0 bottom-6 flex justify-center px-4 z-50 pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-4 bg-black/90 border border-emerald-500/40 px-5 py-3 shadow-2xl text-xs font-mono backdrop-blur-2xl">
-            <span className="text-zinc-200 font-medium">{undoState.label}</span>
-            <button
-              onClick={() => undoMarkIds(undoState.ids)}
-              disabled={busy}
-              className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 disabled:opacity-40 transition-colors bg-emerald-500/10 px-2.5 py-1 border border-emerald-500/30"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Undo
-            </button>
-            <button
-              onClick={() => setUndoState(null)}
-              className="text-zinc-500 hover:text-zinc-300 text-xs"
-              aria-label="Dismiss"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  if (embedded) {
-    return content;
-  }
-
-  return (
-    <div className="min-h-screen bg-black text-zinc-200 font-sans selection:bg-emerald-500/30">
-      <div className="max-w-5xl mx-auto px-4 py-8">{content}</div>
     </div>
   );
 }
 
-function CountrySection({
+function CountrySettlementView({
   data,
-  marks,
-  searchQuery = '',
-  nameOf,
+  currency,
+  countryName,
+  countryCode,
+  search,
   busy,
-  onSettleRows,
+  resolve,
+  onSettlePlayer,
+  onToggleLine,
+  onSettleBankLine,
   onUndoIds
 }) {
-  const resolve = typeof nameOf === 'function' ? nameOf : () => null;
-  const { countryCode, countryName, flag, currency, bankName, players, bankLines } = data;
+  const q = search.trim().toLowerCase();
 
-  const markIdFor = useCallback(
-    (sessionId, legId) => {
-      const m = marks.find((x) => x.session_id === sessionId && x.leg_id === legId && !x.undone_at);
-      return m ? m.id : null;
-    },
-    [marks]
-  );
+  const activePlayers = useMemo(() => {
+    return (data?.players || [])
+      .filter((p) => p.outstandingCount > 0)
+      .filter((p) => !q || p.name.toLowerCase().includes(q));
+  }, [data, q]);
 
-  const rowFromLine = (player, line) => ({
+  const clearedPlayers = useMemo(() => {
+    return (data?.players || [])
+      .filter((p) => p.outstandingCount === 0 && p.lines.length > 0)
+      .filter((p) => !q || p.name.toLowerCase().includes(q));
+  }, [data, q]);
+
+  const openBankLines = useMemo(() => {
+    return (data?.bankTransfers || []).filter((b) => !b.settled);
+  }, [data]);
+
+  const recentlySettled = useMemo(() => {
+    return (data?.recentMarks || []).slice(0, 10);
+  }, [data]);
+
+  const settlePlayer = (player) => onSettlePlayer(player);
+  const settleLine = (player, line) => ({
     session_id: line.sessionId,
     leg_id: line.legId,
     scope: 'player',
     country: countryCode,
-    party_key: player.playerId || player.partyKey,
+    party_key: player.key,
     party_name: player.name,
-    counterparty_key: line.bankPartyKey || null,
-    counterparty_name: line.bankName || bankName || null,
+    counterparty_key: line.bankKey || null,
+    counterparty_name: line.bankName || null,
     direction: line.direction,
     amount_cad: line.amountCad,
     amount_local: line.amountLocal,
-    currency: line.currency,
-    session_date: line.date
+    currency: line.currency || currency,
+    session_date: line.date || null
   });
-
-  const settlePlayer = (player) => {
-    const rows = player.lines.filter((l) => !l.settled).map((l) => rowFromLine(player, l));
-    onSettleRows(
-      rows,
-      `Settled ${player.name} · ${rows.length} session${rows.length === 1 ? '' : 's'} (${money(
-        Math.abs(player.outstandingLocal),
-        currency
-      )})`
-    );
-  };
-
-  const settleLine = (player, line) => {
-    onSettleRows([rowFromLine(player, line)], `Settled ${player.name} · ${fmtDate(line.date)}`);
-  };
-
-  const settleBankLine = (line) => {
-    onSettleRows(
-      [
-        {
-          session_id: line.sessionId,
-          leg_id: line.legId,
-          scope: 'bank',
-          country: countryCode,
-          party_key: line.fromPartyKey || `${line.from}>${line.to}`,
-          party_name: line.from,
-          counterparty_key: line.toPartyKey || null,
-          counterparty_name: line.to,
-          direction: 'bank',
-          amount_cad: line.amountCad,
-          amount_local: line.amountLocal ?? line.amountCad,
-          currency: 'CAD',
-          session_date: line.date
-        }
-      ],
-      `Settled ${line.from} → ${line.to} (${money(line.amountCad, 'CAD')})`
-    );
-  };
-
-  const toggleLine = (settled, sessionId, legId, onSettle) => {
-    if (settled) {
-      const id = markIdFor(sessionId, legId);
-      if (id) onUndoIds([id]);
-    } else {
-      onSettle();
-    }
-  };
-
-  const filteredPlayers = useMemo(() => {
-    if (!searchQuery.trim()) return players;
-    const q = searchQuery.toLowerCase();
-    return players.filter((p) => (p.name || '').toLowerCase().includes(q));
-  }, [players, searchQuery]);
-
-  const activePlayers = filteredPlayers.filter((p) => p.outstandingCount > 0);
-  const clearedPlayers = filteredPlayers.filter((p) => p.outstandingCount === 0);
-  const openBankLines = bankLines.filter((b) => !b.settled);
-
-  const recentlySettled = marks
-    .filter((m) => m.country === countryCode && !m.undone_at)
-    .slice(0, 10);
+  const toggleLine = (settled, sId, lId, payloadFn) => onToggleLine(settled, sId, lId, payloadFn);
+  const settleBankLine = (b) => onSettleBankLine(b);
 
   return (
-    <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 space-y-6 backdrop-blur-xl">
-      {/* Country Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-white/10 pb-4 gap-2">
-        <div className="flex items-center gap-2.5">
-          <span className="text-2xl">{flag}</span>
-          <div>
-            <h2 className="text-base font-bold text-white uppercase tracking-wider flex items-center gap-2 font-sans">
-              {countryName} Ledger
-              <span className="text-xs font-mono font-bold px-2 py-0.5 bg-black border border-white/15 text-zinc-300">
-                {currency}
-              </span>
-            </h2>
-            <p className="text-xs text-zinc-400 font-mono mt-0.5">
-              {bankName ? (
-                <span className="text-emerald-400/90 font-medium">Standing Bank: {bankName}</span>
-              ) : (
-                'No standing banker assigned'
-              )}
-            </p>
-          </div>
+    <div className="space-y-6">
+      {/* Country Net Balance Overview Bar */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4">
+          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">
+            Net Banker Position ({countryName})
+          </span>
+          <span
+            className={`text-xl font-bold font-mono tabular-nums mt-1 block ${
+              data.netOutstandingLocal > 0
+                ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.6)]'
+                : data.netOutstandingLocal < 0
+                ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]'
+                : 'text-zinc-400'
+            }`}
+          >
+            {data.netOutstandingLocal >= 0 ? '+' : '−'}
+            {money(data.netOutstandingLocal, currency)}
+          </span>
+          <span className="text-[10px] text-zinc-500 font-mono">
+            {data.netOutstandingLocal >= 0 ? 'Bank is owed by players' : 'Bank owes players'}
+          </span>
         </div>
 
-        <div className="text-xs font-mono text-zinc-400 sm:text-right">
-          {activePlayers.length === 0 && openBankLines.length === 0 ? (
-            <span className="inline-flex items-center gap-1 text-emerald-400 font-bold uppercase tracking-wider">
-              <CheckCircle2 className="w-3.5 h-3.5 drop-shadow-[0_0_6px_rgba(34,197,94,0.8)]" /> All Cleared
-            </span>
-          ) : (
-            <span className="font-bold">
-              {data.collectLocal > 0.005 && (
-                <span className="text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]">
-                  Collect {money(data.collectLocal, currency)}
-                </span>
-              )}
-              {data.collectLocal > 0.005 && data.payLocal > 0.005 && ' · '}
-              {data.payLocal > 0.005 && (
-                <span className="text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]">
-                  Pay {money(data.payLocal, currency)}
-                </span>
-              )}
-            </span>
-          )}
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4">
+          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">
+            Unsettled Player Debts
+          </span>
+          <span className="text-xl font-bold font-mono tabular-nums text-rose-400 mt-1 block">
+            {money(data.payLocal, currency)}
+          </span>
+          <span className="text-[10px] text-zinc-500 font-mono">
+            {data.payCount} pending payments to bank
+          </span>
+        </div>
+
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4">
+          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">
+            Unsettled Player Payouts
+          </span>
+          <span className="text-xl font-bold font-mono tabular-nums text-emerald-400 mt-1 block">
+            {money(data.collectLocal, currency)}
+          </span>
+          <span className="text-[10px] text-zinc-500 font-mono">
+            {data.collectCount} pending collections from bank
+          </span>
         </div>
       </div>
 
@@ -575,19 +485,21 @@ function CountrySection({
                 key={`${b.sessionId}:${b.legId}`}
                 className="flex items-center justify-between px-4 py-3 text-xs gap-3 hover:bg-white/[0.02] transition-colors font-mono"
               >
-                <label className="flex items-center gap-3 min-w-0 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={false}
+                <div className="flex items-center gap-3 min-w-0">
+                  <button
+                    type="button"
                     disabled={busy}
-                    onChange={() => settleBankLine(b)}
-                    className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
-                  />
+                    onClick={() => settleBankLine(b)}
+                    className="w-4 h-4 rounded-none border border-white/25 bg-black/80 hover:border-emerald-400 flex items-center justify-center cursor-pointer transition-all shrink-0"
+                    title="Mark bank transfer settled"
+                  >
+                    <Check className="w-3 h-3 text-transparent hover:text-emerald-400" />
+                  </button>
                   <span className="text-zinc-200 font-semibold truncate">
                     {b.from} <ArrowRight className="inline w-3 h-3 text-zinc-500 mx-1" /> {b.to}
                     <span className="text-zinc-500 font-normal ml-2">· {fmtDate(b.date)}</span>
                   </span>
-                </label>
+                </div>
                 <span className="font-bold text-amber-400 tabular-nums shrink-0">
                   {money(b.amountCad, 'CAD')}
                 </span>
@@ -731,18 +643,24 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
           {player.lines.map((line) => {
             const lineOwes = line.direction === 'to_bank';
             return (
-              <label
+              <div
                 key={`${line.sessionId}:${line.legId}`}
-                className="flex items-center justify-between py-1.5 px-2 text-xs hover:bg-white/[0.03] cursor-pointer transition-colors"
+                className="flex items-center justify-between py-1.5 px-2 text-xs hover:bg-white/[0.03] transition-colors"
               >
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <input
-                    type="checkbox"
-                    checked={line.settled}
+                  <button
+                    type="button"
                     disabled={busy}
-                    onChange={() => onToggleLine(line)}
-                    className="w-3.5 h-3.5 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
-                  />
+                    onClick={() => onToggleLine(line)}
+                    className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
+                      line.settled
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+                        : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
+                    }`}
+                    title={line.settled ? "Settled (Click to mark unsettled)" : "Click to mark settled"}
+                  >
+                    <Check className={`w-3 h-3 stroke-[3] transition-transform ${line.settled ? 'scale-100' : 'scale-0'}`} />
+                  </button>
                   <span className={`truncate text-xs ${line.settled ? 'text-zinc-600 line-through' : 'text-zinc-300'}`}>
                     {fmtDate(line.date)} · {lineOwes ? 'owes bank' : 'bank owes'}
                   </span>
@@ -758,7 +676,7 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
                 >
                   {money(line.amountLocal, line.currency || currency)}
                 </span>
-              </label>
+              </div>
             );
           })}
         </div>
