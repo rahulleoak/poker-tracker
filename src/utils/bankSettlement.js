@@ -60,11 +60,14 @@ export function computeBankSettlement({ entries = [], countryByKey = {}, bankByC
     .map((e) => {
       const key = keyOfEntry(e);
       const netChips = (Number(e.buyOut) || 0) + (Number(e.stack) || 0) - (Number(e.buyIn) || 0);
+      const inferredCountry = (e.currency === 'USD' || e.currency === 'US') ? 'US' : (e.currency === 'CAD' || e.currency === 'CA') ? 'CA' : DEFAULT_COUNTRY;
+      const c = countryByKey[key] || countryByKey[e.pokerNowId] || countryByKey[e.externalId] || countryByKey[e.name] || inferredCountry;
       return {
         key,
         name: (e.name || '').trim(),
         netCad: netChips / rate,
-        country: countryByKey[key] || DEFAULT_COUNTRY
+        country: c,
+        isBank: Boolean(e.isBank)
       };
     });
 
@@ -82,8 +85,16 @@ export function computeBankSettlement({ entries = [], countryByKey = {}, bankByC
     const meta = country(code);
     const fx = currencyRate(code); // CAD -> local currency
     let bankKey = bankByCountry[code] || null;
-    const bankUnit = bankKey ? members.find((m) => m.key === bankKey) : null;
-    if (!bankUnit) bankKey = null;
+    let normBankKey = bankKey ? String(bankKey).trim().toLowerCase() : null;
+    let bankUnit = normBankKey ? members.find((m) => m.key === normBankKey) : null;
+    if (!bankUnit) {
+      bankUnit = members.find((m) => m.isBank) || null;
+    }
+    if (bankUnit) {
+      bankKey = bankUnit.key;
+    } else {
+      bankKey = null;
+    }
 
     const countryNet = members.reduce((s, m) => s + m.netCad, 0);
 
