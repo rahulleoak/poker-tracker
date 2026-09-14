@@ -1,6 +1,6 @@
 # Project Agent Memory & Design Guide
 
-This file is the project's committed home for project-intrinsic agent knowledge: build, test, architecture, UI thematics, and sharp edges.
+This file is the project's committed home for project-intrinsic agent knowledge: build, test, architecture, UI thematics, state management, and sharp edges.
 
 ---
 
@@ -46,14 +46,35 @@ All UI components and new features must strictly follow the **Cybernetic Broadca
   3. Alias match (`entry.name` → `player_links.external_id` or `player_links.session_name`).
   4. Auto Self-Link (`entry.name` → case-insensitive `players.display_name`).
 
-### 2. Multi-Currency Regional Banking
+### 2. Local-First & Supabase Hybrid Syncing
+* The app operates **offline-first**. All core entities are cached in `localStorage`:
+  * `offsuite_games`: Cached list of sessions and ledger entries.
+  * `offsuite_players`: Cached master player profiles.
+  * `offsuite_player_links`: Cached alias/ID identity mappings.
+  * `offsuite_settlement_marks`: Persistent check-off state for settlement checklist items.
+* When Supabase credentials exist, mutations are synced directly with the DB, and auto-save is debounced (800ms) with visual status indicators (`Saving...` / `Saved` / `Error`).
+
+### 3. Multi-Currency Regional Banking & Settlement Engine
 * Each currency/region (e.g., US = USD, CA = CAD) can have a designated **Bank**.
-* Bank designation is exclusive per currency (only 1 player per currency can be the bank).
-* Bank settlement computes local player payouts against their regional bank, and inter-bank transfers across currencies using live FX rates.
+* **Bank designation is exclusive per currency** (only 1 player per currency can be the bank at a time).
+* **Settlement Invariants**:
+  * Total session balance must be zero-sum (`Total Buy-Ins == Total Buy-Outs + Total Stacks`).
+  * Non-bank players in a country settle their entire net balance with their regional bank in local fiat.
+  * Regional banks settle the cross-border aggregate imbalance between each other in USD using live FX rates (`1 / exchangeRates.CAD`).
+  * Check-off marks carry stable composite keys (`${sessionId}::${legId}`), ensuring persistent clearing status across reloads.
+
+### 4. CSV & Hand History Parser
+* Supports both **Ledger CSVs** (summary buy-in, buy-out, stacks) and **Full Hand History Logs** (hand-by-hand actions).
+* Hand log parser computes pre-flop stats:
+  * **VPIP %**: `(vpip_hands / hands_played) * 100` (excluding big blind checks without a raise).
+  * **PFR %**: `(pfr_hands / hands_played) * 100`.
+  * **3-Bet %**: `(three_bet_hands / three_bet_opps) * 100`.
+* `mergeSessionEntries`: Incrementally attaches hand stats to session player entries without overwriting manual chip edits.
 
 ---
 
 ## 🛠️ Verification & Testing Commands
 
-* **Build**: `npm run build` (Vite / Rolldown production build)
-* **Unit Tests**: `npm test -- --run` (Node built-in test runner across `tests/**/*.test.js`)
+* **Production Build**: `npm run build` (Vite / Rolldown production build)
+* **Unit Tests**: `npm test -- --run` (Node native test runner executing all `tests/**/*.test.js`)
+* **Code Conventions**: Keep domain math, parser, and settlement algorithms in pure ES modules under `src/utils/` so they can be unit-tested in Node without browser DOM dependencies.
