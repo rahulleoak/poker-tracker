@@ -7,17 +7,15 @@ import {
   ArrowRight,
   RotateCcw,
   Search,
-  ExternalLink,
-  Coins,
   ChevronDown,
   ChevronUp,
-  ArrowLeft,
   Check
 } from 'lucide-react';
-import { useIdentityGraph } from '../hooks/useIdentityGraph';
+import { useIdentityGraph, makeNameResolver } from '../hooks/useIdentityGraph';
 import { sessionApi } from '../utils/sessionApi';
 import { buildCountrySettlement, legsFromSession } from '../utils/settlementLedger';
 import { loadGamesFromStorage } from '../utils/storage';
+import { ErrorBoundary } from './ErrorBoundary';
 
 const COUNTRIES = [
   { code: 'CA', name: 'Canada', currency: 'CAD', flag: '🇨🇦' },
@@ -48,6 +46,14 @@ const ago = (iso) => {
 };
 
 export default function SettlementPage({ embedded = false }) {
+  return (
+    <ErrorBoundary>
+      <SettlementPageContent embedded={embedded} />
+    </ErrorBoundary>
+  );
+}
+
+function SettlementPageContent({ embedded = false }) {
   const { country: routeCountry } = useParams();
   const navigate = useNavigate();
 
@@ -64,7 +70,12 @@ export default function SettlementPage({ embedded = false }) {
   const [search, setSearch] = useState('');
   const [undoToast, setUndoToast] = useState(null);
 
-  const { graph, resolve } = useIdentityGraph();
+  const { players, resolve } = useIdentityGraph();
+
+  const nameOf = useMemo(() => {
+    if (typeof resolve === 'function') return resolve;
+    return makeNameResolver(players);
+  }, [resolve, players]);
 
   useEffect(() => {
     if (routeCountry) {
@@ -129,9 +140,9 @@ export default function SettlementPage({ embedded = false }) {
       legs,
       marks,
       countryCode: activeCountry,
-      nameOf: resolve
+      nameOf
     });
-  }, [activeCountry, legs, marks, resolve]);
+  }, [activeCountry, legs, marks, nameOf]);
 
   const trackedSessionCount = useMemo(() => {
     const sessionIds = new Set(legs.map((l) => l.session_id || l.sessionId).filter(Boolean));
@@ -218,10 +229,12 @@ export default function SettlementPage({ embedded = false }) {
         await sessionApi.undoMarks([markId]);
         setMarks((prev) => prev.filter((m) => m.id !== markId));
       } else {
-        const payload = buildPayload();
-        const inserted = await sessionApi.addMarks([payload]);
-        if (inserted && inserted.length > 0) {
-          setMarks((prev) => [...prev, ...inserted]);
+        const payload = typeof buildPayload === 'function' ? buildPayload() : buildPayload;
+        if (payload) {
+          const inserted = await sessionApi.addMarks([payload]);
+          if (inserted && inserted.length > 0) {
+            setMarks((prev) => [...prev, ...inserted]);
+          }
         }
       }
     } catch (err) {
@@ -337,7 +350,7 @@ export default function SettlementPage({ embedded = false }) {
           countryCode={activeCountry}
           search={search}
           busy={busy}
-          resolve={resolve}
+          resolve={nameOf}
           onSettlePlayer={handleSettlePlayer}
           onToggleLine={handleToggleLine}
           onSettleBankLine={handleSettleBankLine}
@@ -379,17 +392,18 @@ function CountrySettlementView({
   onUndoIds
 }) {
   const q = search.trim().toLowerCase();
+  const safeResolve = typeof resolve === 'function' ? resolve : () => null;
 
   const activePlayers = useMemo(() => {
     return (data?.players || [])
       .filter((p) => p.outstandingCount > 0)
-      .filter((p) => !q || p.name.toLowerCase().includes(q));
+      .filter((p) => !q || p.name?.toLowerCase().includes(q));
   }, [data, q]);
 
   const clearedPlayers = useMemo(() => {
     return (data?.players || [])
-      .filter((p) => p.outstandingCount === 0 && p.lines.length > 0)
-      .filter((p) => !q || p.name.toLowerCase().includes(q));
+      .filter((p) => p.outstandingCount === 0 && (p.lines?.length || 0) > 0)
+      .filter((p) => !q || p.name?.toLowerCase().includes(q));
   }, [data, q]);
 
   const openBankLines = useMemo(() => {
@@ -429,18 +443,18 @@ function CountrySettlementView({
           </span>
           <span
             className={`text-xl font-bold font-mono tabular-nums mt-1 block ${
-              data.netOutstandingLocal > 0
+              (data?.netOutstandingLocal || 0) > 0
                 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.6)]'
-                : data.netOutstandingLocal < 0
+                : (data?.netOutstandingLocal || 0) < 0
                 ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]'
                 : 'text-zinc-400'
             }`}
           >
-            {data.netOutstandingLocal >= 0 ? '+' : '−'}
-            {money(data.netOutstandingLocal, currency)}
+            {(data?.netOutstandingLocal || 0) >= 0 ? '+' : '−'}
+            {money(data?.netOutstandingLocal || 0, currency)}
           </span>
           <span className="text-[10px] text-zinc-500 font-mono">
-            {data.netOutstandingLocal >= 0 ? 'Bank is owed by players' : 'Bank owes players'}
+            {(data?.netOutstandingLocal || 0) >= 0 ? 'Bank is owed by players' : 'Bank owes players'}
           </span>
         </div>
 
@@ -449,10 +463,10 @@ function CountrySettlementView({
             Unsettled Player Debts
           </span>
           <span className="text-xl font-bold font-mono tabular-nums text-rose-400 mt-1 block">
-            {money(data.collectLocal, currency)}
+            {money(data?.collectLocal || 0, currency)}
           </span>
           <span className="text-[10px] text-zinc-500 font-mono">
-            {data.collectCount} pending payments to bank
+            {data?.collectCount || 0} pending payments to bank
           </span>
         </div>
 
@@ -461,10 +475,10 @@ function CountrySettlementView({
             Unsettled Player Payouts
           </span>
           <span className="text-xl font-bold font-mono tabular-nums text-emerald-400 mt-1 block">
-            {money(data.payLocal, currency)}
+            {money(data?.payLocal || 0, currency)}
           </span>
           <span className="text-[10px] text-zinc-500 font-mono">
-            {data.payCount} pending collections from bank
+            {data?.payCount || 0} pending collections from bank
           </span>
         </div>
       </div>
@@ -570,14 +584,14 @@ function CountrySettlementView({
             {recentlySettled.map((m) => (
               <div key={m.id} className="flex items-center justify-between px-4 py-2.5 text-xs gap-3 font-mono">
                 <span className="text-zinc-400 truncate">
-                  <strong className="text-zinc-200">{resolve(m.party_key) || m.party_name}</strong>
+                  <strong className="text-zinc-200">{safeResolve(m.party_key) || m.party_name}</strong>
                   {m.counterparty_name && (
                     <>
                       {' '}
                       <span className="text-zinc-600">
                         {m.direction === 'from_bank' ? '←' : '→'}
                       </span>{' '}
-                      <strong className="text-zinc-300">{resolve(m.counterparty_key) || m.counterparty_name}</strong>
+                      <strong className="text-zinc-300">{safeResolve(m.counterparty_key) || m.counterparty_name}</strong>
                     </>
                   )}
                   <span className="text-zinc-500 ml-2">· {ago(m.settled_at)}</span>
@@ -634,7 +648,7 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
             </span>
             <span className="text-[11px] font-mono text-zinc-500">
               {cleared
-                ? `${player.lines.length} session${player.lines.length === 1 ? '' : 's'} · cleared`
+                ? `${player.lines?.length || 0} session${(player.lines?.length || 0) === 1 ? '' : 's'} · cleared`
                 : `${player.outstandingCount} session${player.outstandingCount === 1 ? '' : 's'} outstanding`}
             </span>
           </button>
@@ -665,7 +679,7 @@ function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine
 
       {open && (
         <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5 pl-2 font-mono">
-          {player.lines.map((line) => {
+          {(player.lines || []).map((line) => {
             const lineOwes = line.direction === 'to_bank';
             return (
               <div
