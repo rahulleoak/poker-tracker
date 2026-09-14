@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useMemo } from 'react';
 import { supabase } from '../utils/supabase';
 
 // Admin-only shared fetch of the master identity graph (`players` +
@@ -21,8 +21,21 @@ async function load() {
   };
 }
 
+export function makeNameResolver(players = []) {
+  const map = new Map();
+  for (const p of players || []) {
+    if (p && p.id) {
+      map.set(p.id, p.display_name || p.name || null);
+    }
+  }
+  return (key) => {
+    if (!key) return null;
+    return map.get(key) || null;
+  };
+}
+
 /**
- * @returns {{ players: Array, playerLinks: Array, loading: boolean, error: Error|null, refresh: () => void }}
+ * @returns {{ players: Array, playerLinks: Array, loading: boolean, error: Error|null, refresh: () => void, resolve: (key: string) => string|null, nameOf: (key: string) => string|null }}
  */
 export function useIdentityGraph() {
   const [state, setState] = useState(() =>
@@ -58,7 +71,10 @@ export function useIdentityGraph() {
   }, [run]);
 
   const refresh = useCallback(() => run(true), [run]);
-  return { ...state, refresh };
+
+  const resolve = useMemo(() => makeNameResolver(state.players), [state.players]);
+
+  return { ...state, resolve, nameOf: resolve, refresh };
 }
 
 /** Drop the shared cache so the next `useIdentityGraph` mount refetches. */
