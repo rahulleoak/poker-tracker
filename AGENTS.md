@@ -1,12 +1,59 @@
-# Project agent memory
+# Project Agent Memory & Design Guide
 
-This file is the project's committed home for project-intrinsic agent knowledge: build, test, release, architecture, and sharp-edge notes that should travel with the code.
+This file is the project's committed home for project-intrinsic agent knowledge: build, test, architecture, UI thematics, and sharp edges.
 
-- Add durable project-specific notes here as they are discovered through real work.
+---
 
-## Maintaining this file
+## 🎨 Design System & Thematics: Cybernetic Poker HUD (Broadcast Dark Mode)
 
-Keep this file for knowledge useful to almost every future agent session in this project.
-Do not repeat what the codebase already shows; point to the authoritative file or command instead.
-Prefer rewriting or pruning existing entries over appending new ones.
-When updating this file, preserve this bar for all agents and keep entries concise.
+All UI components and new features must strictly follow the **Cybernetic Broadcast Poker HUD** aesthetic. Avoid generic enterprise SaaS or light-mode styling.
+
+### 1. Color Palette & Semantics
+* **Backgrounds & Surfaces**:
+  * Deep OLED blacks: `#000000`, `bg-black/90`, `bg-zinc-950`.
+  * Glass HUD Cards: `bg-hud-card` with `backdrop-blur-xl` and subtle borders (`border-white/10` or `border-white/15`).
+* **Neon Accent Colors**:
+  * **Emerald / Neon Green (`#10b981`, `emerald-400`, `emerald-500`)**:
+    * Positive profit/cash-out, active state, balanced ledgers (`Balanced ±0`), confirmed checkmarks, primary financial metrics.
+    * Glow dropshadows: `drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]` and `shadow-[0_0_10px_rgba(16,185,129,0.3)]`.
+  * **Cyan / Neon Blue (`#06b6d4`, `cyan-400`, `cyan-500`)**:
+    * Primary interactive controls, active navigation tabs, bank designations, live status badges, link icons, rapid stepper buttons (`±50`, `±100`).
+    * Glow focus rings: `focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)]`.
+  * **Rose / Crimson (`#f43f5e`, `rose-400`, `rose-500`)**:
+    * Losses, ledger imbalances (`Diff: +X`), destructive actions (delete session/player), validation errors.
+    * Imbalance glow: `drop-shadow-[0_0_8px_rgba(244,63,94,0.8)]`.
+  * **Zinc / Monochrome (`zinc-400`, `zinc-500`, `zinc-600`)**:
+    * Metadata, labels, subtle dividers, inactive tabs, unlinked indicators.
+
+### 2. Typography & Layout Rules
+* **Monospace Numbers (`font-mono`)**: All financial figures, chip stacks, net amounts, dates, FX rates, and stepper inputs must use tabular monospace fonts (`tabular-nums font-mono`).
+* **Micro-labels**: Uppercase, tracked-out font style (`text-[10px]` or `text-[11px] font-mono font-bold uppercase tracking-wider text-zinc-400`).
+* **Full-Width, Zero-Scroll Policy**: Tables and rosters must span 100% width (`w-full`) inside the main layout (`max-w-7xl`). Avoid split-screen squeeze layouts that force horizontal scrolling on 1080p monitors. Use dedicated tabbed views (e.g. *Session Roster & Stacks* vs. *Settlement Checklist*).
+* **Corner Reticles (`hud-corner-reticle`)**: Used on high-priority containers, modals, and stat callouts.
+* **Custom Cybernetic Controls**: Never use default raw browser `<input type="checkbox">`. Always use cybernetic HUD toggle buttons (`w-5 h-5` square button with neon border and Lucide `<Check />` icon).
+
+---
+
+## 🏛️ Architecture & Database Notes
+
+### 1. Identity Graph & Schema (`players` & `player_links`)
+* **`public.players`**: Master player profiles (`id UUID`, `display_name TEXT`, `country TEXT`, `preferred_currency TEXT`).
+* **`public.player_links`**: Alias and PokerNow ID mappings (`id UUID`, `player_id UUID`, `external_id TEXT`, `session_name TEXT`, `platform TEXT`).
+  * **Column Names**: Always use `player_id` (not `master_player_id`) and `external_id` / `session_name` (not `session_player_name`).
+* **Resolution Precedence**:
+  1. Direct ID match (`entry.playerId` → `players.id`).
+  2. External / PokerNow ID match (`entry.pokerNowId || entry.externalId` → `player_links.external_id`).
+  3. Alias match (`entry.name` → `player_links.external_id` or `player_links.session_name`).
+  4. Auto Self-Link (`entry.name` → case-insensitive `players.display_name`).
+
+### 2. Multi-Currency Regional Banking
+* Each currency/region (e.g., US = USD, CA = CAD) can have a designated **Bank**.
+* Bank designation is exclusive per currency (only 1 player per currency can be the bank).
+* Bank settlement computes local player payouts against their regional bank, and inter-bank transfers across currencies using live FX rates.
+
+---
+
+## 🛠️ Verification & Testing Commands
+
+* **Build**: `npm run build` (Vite / Rolldown production build)
+* **Unit Tests**: `npm test -- --run` (Node built-in test runner across `tests/**/*.test.js`)
