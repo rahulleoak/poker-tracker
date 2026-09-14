@@ -831,7 +831,23 @@ function GameEditorInner({
                                 </button>
                               ) : null}
 
-                              {!grp.hasMultipleSeats ? (
+                              {grp.isLinked ? (
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-sans font-bold text-white text-sm truncate">
+                                      {grp.displayName}
+                                    </span>
+                                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 border border-emerald-500/30 shrink-0">
+                                      {grp.hasMultipleSeats ? 'Consolidated Profile' : 'Linked Profile'}
+                                    </span>
+                                  </div>
+                                  {!grp.hasMultipleSeats && safeEntries[primaryIdx]?.name && safeEntries[primaryIdx]?.name.trim().toLowerCase() !== grp.displayName.trim().toLowerCase() && (
+                                    <span className="text-[10px] font-mono text-zinc-500 block truncate mt-0.5">
+                                      Seat: {safeEntries[primaryIdx]?.name}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
                                 <input 
                                   type="text" 
                                   value={safeEntries[primaryIdx]?.name || ''}
@@ -839,15 +855,6 @@ function GameEditorInner({
                                   placeholder="Player name..."
                                   className="bg-black border border-white/15 px-3 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-full transition-all font-sans font-semibold text-xs sm:text-sm"
                                 />
-                              ) : (
-                                <div className="min-w-0 flex-1 flex items-center gap-2">
-                                  <span className="font-sans font-bold text-white text-sm truncate">
-                                    {grp.displayName}
-                                  </span>
-                                  <span className="text-[10px] font-mono text-zinc-400 bg-white/5 px-1.5 py-0.5 border border-white/10 shrink-0">
-                                    Consolidated Profile
-                                  </span>
-                                </div>
                               )}
 
                               <button
