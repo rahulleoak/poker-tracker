@@ -7,11 +7,10 @@ import {
   YAxis, 
   Tooltip, 
   CartesianGrid, 
-  ReferenceLine,
-  Legend
+  ReferenceLine
 } from 'recharts';
 import { motion } from 'framer-motion';
-import { Calendar, Filter, Activity, TrendingUp, Layers } from 'lucide-react';
+import { Filter, Activity, TrendingUp, Crosshair, EyeOff, RotateCcw } from 'lucide-react';
 import { formatFiat } from '../utils/formatters';
 
 // Neon-infused broadcast color palette
@@ -45,6 +44,8 @@ export default function ProfitGraph({
   const [viewMode, setViewMode] = useState('CUMULATIVE'); // 'CUMULATIVE' | 'PER_SESSION'
   const [playerPreset, setPlayerPreset] = useState('TOP_5'); // 'TOP_5' | 'TOP_10' | 'ALL'
   const [hiddenPlayers, setHiddenPlayers] = useState(new Set());
+  const [focusMode, setFocusMode] = useState(false); // false = omit on click, true = solo view on click
+  const [focusedPlayer, setFocusedPlayer] = useState(null);
 
   // Filter games based on selected date range
   const filteredGames = useMemo(() => {
@@ -109,7 +110,7 @@ export default function ProfitGraph({
 
     const allProfiles = Array.from(profileSet);
 
-    // Rank profiles by absolute volume or net profit to pick Top 5 / Top 10
+    // Rank profiles by net profit to pick Top 5 / Top 10
     const sortedByRank = [...allProfiles].sort((a, b) => {
       return (playerTotalProfit[b] || 0) - (playerTotalProfit[a] || 0);
     });
@@ -165,7 +166,7 @@ export default function ProfitGraph({
         if (viewMode === 'CUMULATIVE') {
           point[profile] = Number(runningTotals[profile].toFixed(2));
         } else {
-          // Per-session mode: exact delta for this date, or 0 if didn't play
+          // Per-session mode: exact delta for this date, or null if didn't play
           point[profile] = sessionNet !== undefined ? Number(sessionNet.toFixed(2)) : null;
         }
       });
@@ -189,16 +190,42 @@ export default function ProfitGraph({
       baseList = rankedProfiles.slice(0, 10);
     }
 
-    return baseList.filter(p => !hiddenPlayers.has(p));
-  }, [rankedProfiles, playerPreset, hiddenPlayers]);
+    // In focus mode, if a player is selected, show only that player
+    if (focusMode && focusedPlayer) {
+      return baseList.includes(focusedPlayer) ? [focusedPlayer] : [focusedPlayer];
+    }
 
-  const togglePlayerVisibility = (profile) => {
-    setHiddenPlayers(prev => {
-      const next = new Set(prev);
-      if (next.has(profile)) next.delete(profile);
-      else next.add(profile);
-      return next;
+    return baseList.filter(p => !hiddenPlayers.has(p));
+  }, [rankedProfiles, playerPreset, hiddenPlayers, focusMode, focusedPlayer]);
+
+  const handlePlayerClick = (profile) => {
+    if (focusMode) {
+      // Solo view mode: toggle isolating this player
+      setFocusedPlayer(prev => (prev === profile ? null : profile));
+    } else {
+      // Omit mode: toggle hiding this player
+      setHiddenPlayers(prev => {
+        const next = new Set(prev);
+        if (next.has(profile)) next.delete(profile);
+        else next.add(profile);
+        return next;
+      });
+    }
+  };
+
+  const handleToggleFocusMode = () => {
+    setFocusMode(prev => {
+      const nextMode = !prev;
+      if (!nextMode) {
+        setFocusedPlayer(null);
+      }
+      return nextMode;
     });
+  };
+
+  const handleResetFilters = () => {
+    setHiddenPlayers(new Set());
+    setFocusedPlayer(null);
   };
 
   // Custom HUD Tooltip
@@ -250,6 +277,9 @@ export default function ProfitGraph({
       </div>
     );
   }
+
+  const visibleRanked = rankedProfiles.slice(0, playerPreset === 'TOP_5' ? 5 : playerPreset === 'TOP_10' ? 10 : 25);
+  const hasActiveOverrides = hiddenPlayers.size > 0 || focusedPlayer !== null;
 
   return (
     <motion.div 
@@ -322,7 +352,10 @@ export default function ProfitGraph({
             {['TOP_5', 'TOP_10', 'ALL'].map(preset => (
               <button
                 key={preset}
-                onClick={() => setPlayerPreset(preset)}
+                onClick={() => {
+                  setPlayerPreset(preset);
+                  setFocusedPlayer(null);
+                }}
                 className={`px-2 py-1 text-xs font-mono font-medium transition-all ${
                   playerPreset === preset
                     ? 'bg-zinc-800 text-white font-bold border border-white/20'
@@ -336,84 +369,151 @@ export default function ProfitGraph({
         </div>
       </div>
 
-      {/* Interactive Player Visibility Chips */}
-      <div className="flex flex-wrap items-center gap-1.5 pt-1">
-        <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mr-1 flex items-center gap-1">
-          <Filter className="w-3 h-3 text-zinc-400" /> Filter:
-        </span>
-        {rankedProfiles.slice(0, playerPreset === 'TOP_5' ? 5 : playerPreset === 'TOP_10' ? 10 : 25).map(profile => {
-          const isHidden = hiddenPlayers.has(profile);
-          const color = playerColorMap[profile];
-          return (
+      {/* Interactive Player Visibility Chips & Mode Switch */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+        {/* Player Chips */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider mr-1 flex items-center gap-1">
+            <Filter className="w-3 h-3 text-zinc-400" /> Filter:
+          </span>
+          {visibleRanked.map(profile => {
+            const isHidden = !focusMode && hiddenPlayers.has(profile);
+            const isSoloActive = focusMode && focusedPlayer === profile;
+            const isSoloDimmed = focusMode && focusedPlayer !== null && focusedPlayer !== profile;
+            const color = playerColorMap[profile];
+
+            return (
+              <button
+                key={profile}
+                onClick={() => handlePlayerClick(profile)}
+                className={`text-xs px-2.5 py-1 border transition-all flex items-center gap-1.5 font-sans ${
+                  isSoloActive
+                    ? 'bg-amber-500/20 border-amber-400 text-amber-300 font-bold shadow-[0_0_10px_rgba(245,158,11,0.4)]'
+                    : isSoloDimmed
+                    ? 'bg-black/30 border-white/5 text-zinc-600 opacity-40 hover:opacity-80'
+                    : isHidden
+                    ? 'bg-black/30 border-white/5 text-zinc-600 line-through opacity-50 hover:opacity-80'
+                    : 'bg-black/70 border-white/20 text-zinc-200 hover:border-white/40 shadow-sm'
+                }`}
+                title={focusMode ? `Click to isolate ${profile}` : `Click to hide/show ${profile}`}
+              >
+                <span 
+                  className="w-2 h-2 rounded-full" 
+                  style={{ 
+                    backgroundColor: (!isHidden && !isSoloDimmed) ? color : '#52525b',
+                    boxShadow: (!isHidden && !isSoloDimmed) ? `0 0 6px ${color}` : 'none'
+                  }} 
+                />
+                <span className="truncate max-w-[120px] font-medium">{profile}</span>
+              </button>
+            );
+          })}
+
+          {hasActiveOverrides && (
             <button
-              key={profile}
-              onClick={() => togglePlayerVisibility(profile)}
-              className={`text-xs px-2.5 py-1 border transition-all flex items-center gap-1.5 font-sans ${
-                !isHidden
-                  ? 'bg-black/70 border-white/20 text-zinc-200 hover:border-white/40 shadow-sm'
-                  : 'bg-black/30 border-white/5 text-zinc-600 line-through opacity-50 hover:opacity-80'
-              }`}
+              onClick={handleResetFilters}
+              className="text-[11px] font-mono text-zinc-400 hover:text-zinc-200 px-2 py-1 border border-dashed border-white/20 hover:border-white/40 flex items-center gap-1 transition-all ml-1 bg-black/40"
+              title="Reset all filters"
             >
-              <span 
-                className="w-2 h-2 rounded-full" 
-                style={{ 
-                  backgroundColor: !isHidden ? color : '#52525b',
-                  boxShadow: !isHidden ? `0 0 6px ${color}` : 'none'
-                }} 
-              />
-              <span className="truncate max-w-[120px] font-medium">{profile}</span>
+              <RotateCcw className="w-2.5 h-2.5" />
+              Reset
             </button>
-          );
-        })}
+          )}
+        </div>
+
+        {/* Thematic Solo / Omit Switch in Right Red Box Area */}
+        <div className="flex items-center shrink-0">
+          <div className="flex items-center bg-black/70 border border-white/10 p-0.5 rounded-none shadow-sm">
+            <button
+              onClick={() => {
+                if (focusMode) handleToggleFocusMode();
+              }}
+              className={`px-2.5 py-1 text-[11px] font-mono font-medium uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+                !focusMode
+                  ? 'bg-zinc-800 text-zinc-200 border border-white/20 shadow-sm'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+              title="Clicking a name chip hides/omits that player from the graph"
+            >
+              <EyeOff className="w-3 h-3 text-zinc-400" />
+              <span>Omit Mode</span>
+            </button>
+            <button
+              onClick={() => {
+                if (!focusMode) handleToggleFocusMode();
+              }}
+              className={`px-2.5 py-1 text-[11px] font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+                focusMode
+                  ? 'bg-amber-950/80 text-amber-400 border border-amber-500/40 shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                  : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+              title="Clicking a name chip isolates only that player's data"
+            >
+              <Crosshair className={`w-3 h-3 ${focusMode ? 'text-amber-400 animate-pulse' : 'text-zinc-500'}`} />
+              <span>Solo View</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Chart Canvas */}
       <div className="w-full h-[420px] pt-2">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={chartData} margin={{ top: 15, right: 25, left: 10, bottom: 25 }}>
-            <CartesianGrid strokeDasharray="2 2" stroke="rgba(255, 255, 255, 0.05)" vertical={false} />
+          <LineChart data={chartData} margin={{ top: 15, right: 10, left: 10, bottom: 20 }}>
+            <CartesianGrid 
+              strokeDasharray="2 4" 
+              stroke="#27272a" 
+              vertical={false} 
+              opacity={0.6}
+            />
+            
+            <ReferenceLine y={0} stroke="#52525b" strokeWidth={1} strokeDasharray="3 3" />
+
             <XAxis 
               dataKey="date" 
-              stroke="#52525b" 
+              stroke="#71717a" 
               fontSize={11} 
-              fontFamily="monospace"
               tickLine={false} 
-              axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }} 
-              dy={10}
+              axisLine={{ stroke: '#27272a' }} 
+              dy={12}
+              fontFamily="monospace"
             />
+            
             <YAxis 
-              stroke="#52525b" 
+              stroke="#71717a" 
               fontSize={11} 
-              fontFamily="monospace"
               tickLine={false} 
-              axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
+              axisLine={{ stroke: '#27272a' }}
               tickFormatter={(val) => formatFiat(val, globalCurrency)}
               width={75}
+              fontFamily="monospace"
+              dx={-6}
             />
-            {/* Zero Baseline */}
-            <ReferenceLine y={0} stroke="rgba(255, 255, 255, 0.25)" strokeDasharray="3 3" />
-            
+
             <Tooltip content={<CustomTooltip />} />
 
-            {activeProfiles.map(profile => (
-              <Line
-                key={profile}
-                type={viewMode === 'CUMULATIVE' ? 'monotone' : 'linear'}
-                dataKey={profile}
-                name={profile}
-                stroke={playerColorMap[profile]}
-                strokeWidth={2.2}
-                dot={{ r: 3, fill: playerColorMap[profile], stroke: '#000', strokeWidth: 1 }}
-                activeDot={{ 
-                  r: 6, 
-                  fill: playerColorMap[profile], 
-                  stroke: '#fff', 
-                  strokeWidth: 2,
-                  style: { filter: `drop-shadow(0 0 6px ${playerColorMap[profile]})` }
-                }}
-                connectNulls={viewMode === 'CUMULATIVE'}
-              />
-            ))}
+            {activeProfiles.map(profile => {
+              const color = playerColorMap[profile] || '#10b981';
+              return (
+                <Line
+                  key={profile}
+                  type="natural"
+                  dataKey={profile}
+                  name={profile}
+                  stroke={color}
+                  strokeWidth={focusMode && focusedPlayer === profile ? 3.5 : 2}
+                  dot={{ r: 3, fill: color, stroke: '#09090b', strokeWidth: 1.5 }}
+                  activeDot={{ 
+                    r: 6, 
+                    fill: color, 
+                    stroke: '#ffffff', 
+                    strokeWidth: 2,
+                    boxShadow: `0 0 10px ${color}`
+                  }}
+                  connectNulls
+                />
+              );
+            })}
           </LineChart>
         </ResponsiveContainer>
       </div>
