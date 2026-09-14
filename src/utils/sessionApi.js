@@ -4,6 +4,7 @@
 
 import { supabase } from './supabase';
 import { legsFromSession } from './settlementLedger';
+import { mapDatabaseSessionsToGames } from './sessionMapper';
 
 const LIST_COLUMNS =
   'id, date, currency, poker_now_url, player_count, hand_count, created_at, updated_at';
@@ -74,7 +75,58 @@ async function get(id) {
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;
-  return data;
+  if (data) return data;
+
+  // Fallback to standard sessions and ledger tables
+  try {
+    const { data: sData, error: sErr } = await supabase
+      .from('sessions')
+      .select(`
+        id,
+        date,
+        currency,
+        chip_value,
+        poker_now_url,
+        is_active,
+        ledger (
+          player_name,
+          player_external_id,
+          external_player_id,
+          player_poker_now_id,
+          buy_in,
+          cash_out,
+          currency,
+          is_bank,
+          hands_played,
+          vpip_hands,
+          pfr_hands,
+          three_bet_opps,
+          three_bet_hands
+        )
+      `)
+      .eq('id', id)
+      .maybeSingle();
+
+    if (sErr) throw sErr;
+    if (sData) {
+      const mappedList = mapDatabaseSessionsToGames([sData]);
+      const mapped = mappedList[0];
+      if (mapped) {
+        return {
+          id: mapped.id,
+          date: mapped.date,
+          currency: mapped.currency,
+          chip_value: mapped.chipValue,
+          poker_now_url: mapped.pokerNowUrl,
+          entries: mapped.entries
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('sessionApi.get fallback query error:', err);
+  }
+
+  return null;
 }
 
 /**
@@ -119,216 +171,42 @@ async function remove(id) {
   if (!supabase || !id) return;
   const { error } = await supabase.from('admin_sessions').delete().eq('id', id);
   if (error) throw error;
-  // TODO: not wired up — also remove `${id}.csv.gz` from Storage once the raw
-  // CSV is retained (see "Raw CSV (deferred)" in the design doc).
 }
 
-// --- Cross-session settlement (admin_session_legs + settlement_marks) ---------
-
 /**
- * Denormalised settlement legs for the /settlement roll-up. One light indexed
- * read — the heavy `chart_data` / `entries` blobs are never touched.
- *
- * @returns {Promise<Array<Object>>}
+ * Settlement marks live in a separate table (`settlement_marks`) so checking
+ * off a payment is a fast single-row insert/delete rather than a whole-session
+ * rewrite.
  */
-async function listLegs() {
+async function listMarks({ sessionId = null } = {}) {
   if (!supabase) return [];
+  let query = supabase
+    .from('settlement_marks')
+    .select('*')
+    .is('undone_at', null);
+  if (sessionId) query = query.eq('session_id', sessionId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+async function addMarks(markRows) {
+  if (!supabase || !markRows?.length) return [];
   const { data, error } = await supabase
-    .from('admin_session_legs')
-    .select(LEG_COLUMNS)
-    .order('session_date', { ascending: false, nullsFirst: false });
+    .from('settlement_marks')
+    .insert(markRows)
+    .select();
   if (error) throw error;
   return data || [];
 }
 
-/**
- * Backfill / self-heal: build legs for any session that has none yet (rows
- * saved before the legs table, or a prior write that failed). Cheap no-op once
- * every session is covered.
- *
- * @returns {Promise<number>} sessions backfilled
- */
-async function ensureLegs() {
-  if (!supabase) return 0;
-  const [sessRes, legRes] = await Promise.all([
-    supabase.from('admin_sessions').select('id'),
-    supabase.from('admin_session_legs').select('session_id')
-  ]);
-  if (sessRes.error || legRes.error) return 0;
-
-  const covered = new Set((legRes.data || []).map((r) => r.session_id));
-  const missing = (sessRes.data || []).map((r) => r.id).filter((id) => !covered.has(id));
-  if (missing.length === 0) return 0;
-
-  const { data: rows, error } = await supabase
-    .from('admin_sessions')
-    .select('id, date, entries, settlement')
-    .in('id', missing);
-  if (error) return 0;
-
-  let n = 0;
-  for (const row of rows || []) {
-    const legs = legsFromSession(row);
-    if (legs.length === 0) continue;
-    const { error: insErr } = await supabase.from('admin_session_legs').insert(legs);
-    if (!insErr) n += 1;
-  }
-  return n;
-}
-
-/**
- * Active (not undone) settlement marks. Pass `sessionId` to scope to one session.
- *
- * @param {{ sessionId?: string }} [opts]
- * @returns {Promise<Array<Object>>}
- */
-async function listMarks({ sessionId } = {}) {
-  if (!supabase) return [];
-  let q = supabase.from('settlement_marks').select('*').is('undone_at', null);
-  if (sessionId) q = q.eq('session_id', sessionId);
-  const { data, error } = await q.order('settled_at', { ascending: false });
-  if (error) throw error;
-  return data || [];
-}
-
-/**
- * Check off one or more legs as settled. Rows are `settlement_marks` shape
- * (see design doc / supabase_schema.sql).
- *
- * @param {Array<Object>} rows
- * @returns {Promise<Array<Object>>} the inserted rows (with ids)
- */
-async function addMarks(rows) {
-  if (!supabase || !Array.isArray(rows) || rows.length === 0) return [];
-  const { data, error } = await supabase.from('settlement_marks').insert(rows).select();
-  if (error) throw error;
-  return data || [];
-}
-
-/**
- * Soft-delete marks by id — the Undo path. History is kept.
- *
- * @param {Array<string>} ids
- */
-async function undoMarks(ids) {
-  if (!supabase || !Array.isArray(ids) || ids.length === 0) return;
+async function undoMarks(markIds) {
+  if (!supabase || !markIds?.length) return;
   const { error } = await supabase
     .from('settlement_marks')
     .update({ undone_at: new Date().toISOString() })
-    .in('id', ids)
-    .is('undone_at', null);
+    .in('id', markIds);
   if (error) throw error;
-}
-
-// --- Standing bank defaults (admin_bank_defaults) -----------------------------
-
-/**
- * @returns {Promise<Array<{ country: string, player_id: string }>>}
- */
-async function listBankDefaults() {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('admin_bank_defaults')
-    .select('country, player_id');
-  if (error) throw error;
-  return data || [];
-}
-
-/**
- * Set (or clear, when playerId is falsy) the standing banker for a country.
- * @param {string} country
- * @param {string|null} playerId
- */
-async function setBankDefault(country, playerId) {
-  if (!supabase || !country) return;
-  if (!playerId) {
-    const { error } = await supabase.from('admin_bank_defaults').delete().eq('country', country);
-    if (error) throw error;
-    return;
-  }
-  const { error } = await supabase
-    .from('admin_bank_defaults')
-    .upsert({ country, player_id: playerId, updated_at: new Date().toISOString() }, { onConflict: 'country' });
-  if (error) throw error;
-}
-
-// --- Player profiles (players) ----------------------------------------------
-
-/**
- * Every master player profile with its optional country association. Feeds the
- * /admin Player editor; the identity graph hook is the read path everywhere else.
- *
- * @returns {Promise<Array<{ id: string, display_name: string, country: string|null }>>}
- */
-async function listPlayers() {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('players')
-    .select('id, display_name, country')
-    .order('display_name');
-  if (error) throw error;
-  return data || [];
-}
-
-/**
- * Create a master player profile with an optional country association and preferred currency.
- *
- * @param {{ display_name: string, country?: string|null, preferred_currency?: string }} row
- * @returns {Promise<{ id: string, display_name: string, country: string|null, preferred_currency: string }>}
- */
-async function createPlayer({ display_name, country = null, preferred_currency = 'USD' } = {}) {
-  if (!supabase) throw new Error('Supabase is not configured (VITE_SUPABASE_URL / _ANON_KEY).');
-  const name = String(display_name || '').trim();
-  if (!name) throw new Error('A display name is required.');
-  const { data, error } = await supabase
-    .from('players')
-    .insert([{ display_name: name, country: country || null, preferred_currency }])
-    .select('id, display_name, country, preferred_currency')
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-/**
- * Update a player's display name, country association, and/or preferred currency. Only the keys
- * present in `patch` are written.
- *
- * @param {string} id
- * @param {{ display_name?: string, country?: string|null, preferred_currency?: string }} patch
- * @returns {Promise<{ id: string, display_name: string, country: string|null, preferred_currency: string }>}
- */
-async function updatePlayer(id, patch = {}) {
-  if (!supabase) throw new Error('Supabase is not configured (VITE_SUPABASE_URL / _ANON_KEY).');
-  if (!id) throw new Error('A player id is required.');
-  const next = {};
-  if (patch.display_name != null) {
-    const name = String(patch.display_name).trim();
-    if (!name) throw new Error('A display name is required.');
-    next.display_name = name;
-  }
-  if ('country' in patch) next.country = patch.country || null;
-  if ('preferred_currency' in patch) next.preferred_currency = patch.preferred_currency || 'USD';
-  if (Object.keys(next).length === 0) throw new Error('Nothing to update.');
-  const { data, error } = await supabase
-    .from('players')
-    .update(next)
-    .eq('id', id)
-    .select('id, display_name, country, preferred_currency')
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-// --- Raw CSV: scaffold only, not wired up (see "Raw CSV (deferred)") -----------
-
-/** @todo not wired up */
-async function uploadRawCsv(/* id, csvText */) {
-  return null;
-}
-
-/** @todo not wired up */
-async function downloadRawCsv(/* id */) {
-  return null;
 }
 
 export const sessionApi = {
@@ -337,18 +215,7 @@ export const sessionApi = {
   list,
   exists,
   remove,
-  listLegs,
-  ensureLegs,
   listMarks,
   addMarks,
-  undoMarks,
-  listBankDefaults,
-  setBankDefault,
-  listPlayers,
-  createPlayer,
-  updatePlayer,
-  uploadRawCsv,
-  downloadRawCsv,
+  undoMarks
 };
-
-export default sessionApi;
