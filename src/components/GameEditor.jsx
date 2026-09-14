@@ -235,44 +235,56 @@ function GameEditorInner({
     return map;
   }, [players]);
 
-  const linksBySessionKey = useMemo(() => {
-    const map = new Map();
-    (Array.isArray(playerLinks) ? playerLinks : []).forEach(l => {
-      if (l && l.session_player_name) {
-        map.set(norm(l.session_player_name), l);
-      }
-    });
-    return map;
-  }, [playerLinks]);
-
   const getLinkedPlayerInfo = (entry) => {
-    if (!entry) return { isLinked: false, masterPlayer: null };
+    if (!entry) return { isLinked: false, masterPlayer: null, linkRecord: null, matchedBy: null };
+    
+    // 0. Direct playerId on entry
     const directId = entry.playerId || entry.player_id;
     if (directId && masterPlayerMap.has(directId)) {
-      return { isLinked: true, masterPlayer: masterPlayerMap.get(directId), linkRecord: null };
+      return { isLinked: true, masterPlayer: masterPlayerMap.get(directId), linkRecord: null, matchedBy: 'direct' };
     }
 
-    const key = norm(entry.pokerNowId || entry.externalId || entry.name);
-    if (linksBySessionKey.has(key)) {
-      const link = linksBySessionKey.get(key);
-      const master = masterPlayerMap.get(link.master_player_id);
-      return { isLinked: true, masterPlayer: master, linkRecord: link };
+    const normExtId = norm(entry.pokerNowId || entry.externalId || entry.player_external_id || entry.external_player_id);
+    const normName = norm(entry.name);
+
+    // 1. Match via external_id in playerLinks
+    if (normExtId) {
+      const link = (playerLinks || []).find(l => {
+        const ext = norm(l.external_id || l.external_player_id);
+        return ext === normExtId;
+      });
+      if (link && masterPlayerMap.has(link.player_id)) {
+        return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'extId' };
+      }
     }
 
-    // Direct name match fallback
-    const directNameMatch = (Array.isArray(players) ? players : []).find(
-      p => p && (norm(p.name) === norm(entry.name) || norm(p.display_name) === norm(entry.name))
-    );
-    if (directNameMatch) {
-      return { isLinked: true, masterPlayer: directNameMatch, linkRecord: null };
+    // 2. Match via session alias in playerLinks
+    if (normName) {
+      const link = (playerLinks || []).find(l => {
+        const ext = norm(l.external_id || l.external_player_id || l.session_name);
+        return ext === normName;
+      });
+      if (link && masterPlayerMap.has(link.player_id)) {
+        return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'alias' };
+      }
+
+      // 3. Direct display_name match with registered master player profile (auto self-link)
+      const exactMatch = (Array.isArray(players) ? players : []).find(
+        p => p && (norm(p.display_name) === normName || norm(p.name) === normName)
+      );
+      if (exactMatch) {
+        return { isLinked: true, masterPlayer: exactMatch, linkRecord: null, matchedBy: 'name' };
+      }
     }
 
-    return { isLinked: false, masterPlayer: null };
+    return { isLinked: false, masterPlayer: null, linkRecord: null, matchedBy: null };
   };
 
   const handleOpenLinkPopover = (index) => {
     setPopoverIndex(index);
-    setSelectedMasterPlayerId('');
+    const entry = safeEntries[index];
+    const info = getLinkedPlayerInfo(entry);
+    setSelectedMasterPlayerId(info.masterPlayer?.id || '');
     setNewMasterPlayerName('');
     setIsCreatingNewPlayer(false);
     setPlayerActionError(null);
@@ -286,23 +298,71 @@ function GameEditorInner({
     setPlayerActionError(null);
 
     try {
-      const sessionKey = norm(entry.pokerNowId || entry.externalId || entry.name);
-      
-      const { data: newLink, error: linkErr } = await supabase
-        .from('player_links')
-        .upsert({
-          session_player_name: sessionKey,
-          master_player_id: masterId
-        }, { onConflict: 'session_player_name' })
-        .select()
-        .single();
+      const alias = (entry.name || '').trim();
+      const extId = (entry.pokerNowId || entry.externalId || entry.player_external_id || entry.external_player_id || '').trim();
+      const primaryKey = extId || alias;
 
-      if (linkErr) throw linkErr;
+      if (supabase) {
+        // Check if there is an existing link matching either external_id or session_name
+        const existingLink = (playerLinks || []).find(l => {
+          const lExt = norm(l.external_id || l.external_player_id);
+          const lAlias = norm(l.session_name);
+          return (extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias)));
+        });
+
+        if (existingLink) {
+          const { error: updErr } = await supabase
+            .from('player_links')
+            .update({ 
+              player_id: masterId,
+              external_id: primaryKey,
+              session_name: alias || null,
+              platform: extId ? 'pokernow' : 'alias'
+            })
+            .eq('id', existingLink.id);
+
+          if (updErr) throw updErr;
+        } else {
+          const { error: insErr } = await supabase
+            .from('player_links')
+            .insert([{
+              player_id: masterId,
+              external_id: primaryKey,
+              session_name: alias || null,
+              platform: extId ? 'pokernow' : 'alias'
+            }]);
+
+          if (insErr) throw insErr;
+        }
+      } else {
+        // Local storage fallback
+        const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+        const existingIdx = currentLinks.findIndex(l => {
+          const lExt = norm(l.external_id || l.external_player_id);
+          const lAlias = norm(l.session_name);
+          return (extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias)));
+        });
+
+        const newLinkObj = {
+          id: existingIdx >= 0 ? currentLinks[existingIdx].id : `local-link-${Date.now()}`,
+          player_id: masterId,
+          external_id: primaryKey,
+          session_name: alias || null,
+          platform: extId ? 'pokernow' : 'alias'
+        };
+
+        if (existingIdx >= 0) {
+          currentLinks[existingIdx] = newLinkObj;
+        } else {
+          currentLinks.push(newLinkObj);
+        }
+        localStorage.setItem('offsuite_player_links', JSON.stringify(currentLinks));
+      }
 
       handleEntryChange(index, 'playerId', masterId);
 
       if (onUpdatePlayers) {
-        onUpdatePlayers();
+        await onUpdatePlayers();
       }
 
       setPopoverIndex(null);
@@ -322,18 +382,34 @@ function GameEditorInner({
     setPlayerActionError(null);
 
     try {
-      const { data: newPlayer, error: createErr } = await supabase
-        .from('players')
-        .insert({
-          display_name: newMasterPlayerName.trim(),
-          name: newMasterPlayerName.trim()
-        })
-        .select()
-        .single();
+      const trimmedName = newMasterPlayerName.trim();
+      let createdPlayerId = null;
 
-      if (createErr) throw createErr;
+      if (supabase) {
+        const { data: newPlayer, error: createErr } = await supabase
+          .from('players')
+          .insert({
+            display_name: trimmedName,
+            preferred_currency: entry.currency || gameCurrency || 'USD'
+          })
+          .select()
+          .single();
 
-      await handleLinkToMaster(index, newPlayer.id);
+        if (createErr) throw createErr;
+        createdPlayerId = newPlayer.id;
+      } else {
+        const newPlayer = {
+          id: `local-player-${Date.now()}`,
+          display_name: trimmedName,
+          preferred_currency: entry.currency || gameCurrency || 'USD',
+          created_at: new Date().toISOString()
+        };
+        const currentPlayers = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
+        localStorage.setItem('offsuite_players', JSON.stringify([...currentPlayers, newPlayer]));
+        createdPlayerId = newPlayer.id;
+      }
+
+      await handleLinkToMaster(index, createdPlayerId);
     } catch (err) {
       console.error("Create & link player error:", err);
       setPlayerActionError(err.message || "Failed to create player.");
@@ -350,19 +426,32 @@ function GameEditorInner({
     setPlayerActionError(null);
 
     try {
-      const sessionKey = norm(entry.pokerNowId || entry.externalId || entry.name);
+      const alias = (entry.name || '').trim();
+      const extId = (entry.pokerNowId || entry.externalId || entry.player_external_id || entry.external_player_id || '').trim();
 
-      const { error: delErr } = await supabase
-        .from('player_links')
-        .delete()
-        .eq('session_player_name', sessionKey);
+      if (supabase) {
+        const existingLinks = (playerLinks || []).filter(l => {
+          const lExt = norm(l.external_id || l.external_player_id);
+          const lAlias = norm(l.session_name);
+          return (extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias)));
+        });
 
-      if (delErr) throw delErr;
+        for (const l of existingLinks) {
+          await supabase.from('player_links').delete().eq('id', l.id);
+        }
+      } else {
+        const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]').filter(l => {
+          const lExt = norm(l.external_id || l.external_player_id);
+          const lAlias = norm(l.session_name);
+          return !((extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias))));
+        });
+        localStorage.setItem('offsuite_player_links', JSON.stringify(currentLinks));
+      }
 
       handleEntryChange(index, 'playerId', null);
 
       if (onUpdatePlayers) {
-        onUpdatePlayers();
+        await onUpdatePlayers();
       }
 
       setPopoverIndex(null);
@@ -586,7 +675,7 @@ function GameEditorInner({
                 {safeEntries.map((entry, index) => {
                   const net = (Number(entry?.buyOut) || 0) + (Number(entry?.stack) || 0) - (Number(entry?.buyIn) || 0);
                   const linkInfo = getLinkedPlayerInfo(entry);
-                  const masterName = linkInfo.masterPlayer?.display_name;
+                  const masterName = linkInfo.masterPlayer?.display_name || linkInfo.masterPlayer?.name;
 
                   return (
                     <tr key={entry?.id || index} className="hover:bg-white/[0.03] transition-colors group">
@@ -607,7 +696,13 @@ function GameEditorInner({
                                 ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)] hover:bg-emerald-500/25'
                                 : 'bg-black/60 border-white/10 text-zinc-500 hover:text-zinc-300 hover:border-white/30'
                             }`}
-                            title={linkInfo.isLinked ? `Linked to Master Profile: ${masterName}` : "Link to Master Player Profile"}
+                            title={
+                              linkInfo.isLinked
+                                ? (linkInfo.matchedBy === 'name'
+                                    ? `Auto-matched by profile name: ${masterName}`
+                                    : `Linked to Master Profile: ${masterName}`)
+                                : "Link to Master Player Profile"
+                            }
                           >
                             <Link className="w-3.5 h-3.5" />
                           </button>
@@ -787,7 +882,9 @@ function GameEditorInner({
             exchangeRates={exchangeRates}
             nameOf={(pid) => {
               if (!pid) return null;
-              return masterPlayerMap.get(pid)?.display_name || null;
+              const direct = masterPlayerMap.get(pid);
+              if (direct) return direct.display_name || direct.name;
+              return null;
             }}
             isBalanced={isBalanced}
             totalBuyIn={totalBuyIn}
@@ -816,6 +913,17 @@ function GameEditorInner({
               <p className="text-xs text-zinc-400 font-mono">
                 Session Alias: <strong className="text-white">{safeEntries[popoverIndex]?.name || 'Unnamed'}</strong>
               </p>
+              {getLinkedPlayerInfo(safeEntries[popoverIndex]).isLinked && (
+                <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/30 text-xs font-mono text-emerald-400 flex items-center gap-2">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    Linked to profile: <strong>{getLinkedPlayerInfo(safeEntries[popoverIndex]).masterPlayer?.display_name}</strong>
+                    {getLinkedPlayerInfo(safeEntries[popoverIndex]).matchedBy === 'name' && (
+                      <span className="ml-1 text-[10px] text-emerald-300 uppercase tracking-widest">(Auto Name Match)</span>
+                    )}
+                  </span>
+                </div>
+              )}
             </div>
 
             {playerActionError && (
