@@ -26,6 +26,7 @@ import InfoTooltip from './InfoTooltip';
 import SessionSettlementPanel from './SessionSettlementPanel';
 
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+const norm = (v) => String(v || '').trim().toLowerCase();
 
 export default function GameEditor(props) {
   return <GameEditorInner key={props.game?.id} {...props} />;
@@ -44,17 +45,18 @@ function GameEditorInner({
   onDelete 
 }) {
   // --- RESET STATE WHEN GAME PROP CHANGES ---
-  const sanitizeEntries = (entries, currency) => {
+  const sanitizeEntries = (rawEntries, currency) => {
     const seenBanks = {};
-    return entries.map(entry => {
-      const entryCurrency = entry.currency || currency;
-      if (entry.isBank) {
+    const safeList = Array.isArray(rawEntries) ? rawEntries : [];
+    return safeList.map(entry => {
+      const entryCurrency = entry?.currency || currency;
+      if (entry?.isBank) {
         if (seenBanks[entryCurrency]) {
           return { ...entry, isBank: false };
         }
         seenBanks[entryCurrency] = true;
       }
-      return entry;
+      return entry || {};
     });
   };
 
@@ -65,7 +67,7 @@ function GameEditorInner({
   const [ratioChips, setRatioChips] = useState(game?.chipValue ? Math.round(1 / game.chipValue) : 100);
   const [ratioFiat, setRatioFiat] = useState(1);
   const [entries, setEntries] = useState(() => {
-    if (game?.entries && game.entries.length > 0) {
+    if (game?.entries && Array.isArray(game.entries) && game.entries.length > 0) {
       return sanitizeEntries(game.entries, game?.currency || 'USD');
     }
     return [
@@ -92,7 +94,7 @@ function GameEditorInner({
       setChipValue(game.chipValue || 1);
       setRatioChips(game.chipValue ? Math.round(1 / game.chipValue) : 100);
       setRatioFiat(1);
-      if (game.entries && game.entries.length > 0) {
+      if (game.entries && Array.isArray(game.entries) && game.entries.length > 0) {
         setEntries(sanitizeEntries(game.entries, game.currency || 'USD'));
       }
     }
@@ -142,17 +144,19 @@ function GameEditorInner({
   }, [date, gameCurrency, chipValue, entries, game]);
 
   // Calculations
+  const safeEntries = useMemo(() => Array.isArray(entries) ? entries : [], [entries]);
+
   const totalBuyIn = useMemo(() => {
-    return entries.reduce((sum, e) => sum + (Number(e.buyIn) || 0), 0);
-  }, [entries]);
+    return safeEntries.reduce((sum, e) => sum + (Number(e?.buyIn) || 0), 0);
+  }, [safeEntries]);
 
   const totalBuyOut = useMemo(() => {
-    return entries.reduce((sum, e) => sum + (Number(e.buyOut) || 0), 0);
-  }, [entries]);
+    return safeEntries.reduce((sum, e) => sum + (Number(e?.buyOut) || 0), 0);
+  }, [safeEntries]);
 
   const totalStack = useMemo(() => {
-    return entries.reduce((sum, e) => sum + (Number(e.stack) || 0), 0);
-  }, [entries]);
+    return safeEntries.reduce((sum, e) => sum + (Number(e?.stack) || 0), 0);
+  }, [safeEntries]);
 
   const totalCashOut = totalBuyOut + totalStack;
   const netDifference = totalCashOut - totalBuyIn;
@@ -161,21 +165,22 @@ function GameEditorInner({
   // Validation
   const validationErrors = useMemo(() => {
     const errors = [];
-    const names = entries.map(e => (e.name || '').trim().toLowerCase()).filter(Boolean);
+    const names = safeEntries.map(e => (e?.name || '').trim().toLowerCase()).filter(Boolean);
     const uniqueNames = new Set(names);
     if (names.length !== uniqueNames.size) {
       errors.push("Duplicate player names detected. Please ensure names are unique.");
     }
-    const hasNegative = entries.some(e => e.buyIn < 0 || e.buyOut < 0 || e.stack < 0);
+    const hasNegative = safeEntries.some(e => Number(e?.buyIn) < 0 || Number(e?.buyOut) < 0 || Number(e?.stack) < 0);
     if (hasNegative) {
       errors.push("Chip values cannot be negative.");
     }
     return errors;
-  }, [entries]);
+  }, [safeEntries]);
 
   const handleEntryChange = (index, field, value) => {
     setEntries(prev => {
-      const next = [...prev];
+      const next = [...(Array.isArray(prev) ? prev : [])];
+      if (!next[index]) return next;
       if (field === 'isBank') {
         const currentCurrency = next[index].currency || gameCurrency;
         if (value) {
@@ -206,7 +211,8 @@ function GameEditorInner({
 
   const adjustValue = (index, field, delta) => {
     setEntries(prev => {
-      const next = [...prev];
+      const next = [...(Array.isArray(prev) ? prev : [])];
+      if (!next[index]) return next;
       const current = Number(next[index][field]) || 0;
       next[index] = { ...next[index], [field]: Math.max(0, current + delta) };
       return next;
@@ -215,14 +221,14 @@ function GameEditorInner({
 
   const handleAddRow = () => {
     setEntries(prev => [
-      ...prev,
+      ...(Array.isArray(prev) ? prev : []),
       { id: generateId('entry'), name: '', buyIn: 0, buyOut: 0, stack: 0, currency: gameCurrency, isBank: false }
     ]);
   };
 
   const handleRemoveRow = (index) => {
-    if (entries.length <= 1) return;
-    setEntries(prev => prev.filter((_, i) => i !== index));
+    if (safeEntries.length <= 1) return;
+    setEntries(prev => (Array.isArray(prev) ? prev : []).filter((_, i) => i !== index));
   };
 
   const handleLogFileUpload = async (event) => {
@@ -235,7 +241,7 @@ function GameEditorInner({
       try {
         const text = e.target.result;
         const statsMap = parsePokerNowLogStats(text);
-        const mergedEntries = mergeSessionEntries(entries, statsMap);
+        const mergedEntries = mergeSessionEntries(safeEntries, statsMap);
         setEntries(mergedEntries);
       } catch (err) {
         console.error("Error parsing log file:", err);
@@ -247,21 +253,41 @@ function GameEditorInner({
     if (event.target) event.target.value = null;
   };
 
-  // Identity Helpers
+  // --- IDENTITY HELPERS ---
   const getLinkedPlayerInfo = (entry) => {
     const sessionName = (entry?.name || '').trim();
-    const extId = entry?.externalId || entry?.pokerNowId || null;
+    const normSessionName = norm(sessionName);
+    const extId = (entry?.externalId || entry?.pokerNowId || '').trim();
+    const normExtId = norm(extId);
 
-    if (extId) {
-      const link = playerLinks.find(l => l.external_player_id === extId);
+    const safePlayerLinks = Array.isArray(playerLinks) ? playerLinks : [];
+    const safePlayers = Array.isArray(players) ? players : [];
+
+    // 1. Check external ID / PokerNow ID match
+    if (normExtId) {
+      const link = safePlayerLinks.find(l => {
+        const linkExt = norm(l.external_id || l.external_player_id);
+        return linkExt === normExtId;
+      });
       if (link) {
-        const master = players.find(p => p.id === link.player_id);
-        return { isLinked: true, masterPlayer: master, type: 'externalId' };
+        const master = safePlayers.find(p => p.id === link.player_id);
+        if (master) return { isLinked: true, masterPlayer: master, type: 'externalId' };
       }
     }
 
-    if (sessionName) {
-      const exactMatch = players.find(p => p.display_name.toLowerCase() === sessionName.toLowerCase());
+    // 2. Check alias / session name match
+    if (normSessionName) {
+      const link = safePlayerLinks.find(l => {
+        const linkAlias = norm(l.external_id || l.external_player_id || l.session_name);
+        return linkAlias === normSessionName;
+      });
+      if (link) {
+        const master = safePlayers.find(p => p.id === link.player_id);
+        if (master) return { isLinked: true, masterPlayer: master, type: 'alias' };
+      }
+
+      // 3. Direct display name match
+      const exactMatch = safePlayers.find(p => norm(p.display_name) === normSessionName);
       if (exactMatch) {
         return { isLinked: true, masterPlayer: exactMatch, type: 'exactName' };
       }
@@ -271,7 +297,7 @@ function GameEditorInner({
   };
 
   const handleOpenLinkPopover = (index) => {
-    const entry = entries[index];
+    const entry = safeEntries[index];
     const linkInfo = getLinkedPlayerInfo(entry);
     setPopoverIndex(index);
     setSelectedMasterPlayerId(linkInfo.masterPlayer?.id || '');
@@ -281,15 +307,19 @@ function GameEditorInner({
   };
 
   const handleSaveLink = async () => {
-    if (popoverIndex === null || !entries[popoverIndex]) return;
-    const entry = entries[popoverIndex];
-    const extId = entry.externalId || entry.pokerNowId || null;
+    if (popoverIndex === null || !safeEntries[popoverIndex]) return;
+    const entry = safeEntries[popoverIndex];
+    const sessionName = (entry.name || '').trim();
+    const extId = (entry.externalId || entry.pokerNowId || '').trim();
+    const normExtId = norm(extId);
+    const normSessionName = norm(sessionName);
 
     setPlayerActionLoading(true);
     setPlayerActionError(null);
 
     try {
       let targetPlayerId = selectedMasterPlayerId;
+      let targetPlayerName = '';
 
       if (isCreatingNewPlayer) {
         const trimmedNewName = newMasterPlayerName.trim();
@@ -297,7 +327,15 @@ function GameEditorInner({
           throw new Error("Player name cannot be empty");
         }
 
-        if (supabase) {
+        const safePlayersList = Array.isArray(players) ? players : [];
+        const existingPlayer = safePlayersList.find(
+          p => norm(p.display_name) === norm(trimmedNewName)
+        );
+
+        if (existingPlayer) {
+          targetPlayerId = existingPlayer.id;
+          targetPlayerName = existingPlayer.display_name;
+        } else if (supabase) {
           const { data: newP, error: pErr } = await supabase
             .from('players')
             .insert([{ display_name: trimmedNewName }])
@@ -306,22 +344,103 @@ function GameEditorInner({
 
           if (pErr) throw pErr;
           targetPlayerId = newP.id;
+          targetPlayerName = newP.display_name;
         } else {
           targetPlayerId = generateId('player');
+          targetPlayerName = trimmedNewName;
         }
+      } else {
+        const safePlayersList = Array.isArray(players) ? players : [];
+        const found = safePlayersList.find(p => p.id === targetPlayerId);
+        targetPlayerName = found ? found.display_name : '';
       }
 
       if (!targetPlayerId) {
         throw new Error("Please select or create a master player.");
       }
 
-      if (extId && supabase) {
-        const { error: lErr } = await supabase
-          .from('player_links')
-          .upsert([{ player_id: targetPlayerId, external_player_id: extId }], { onConflict: 'external_player_id' });
-        if (lErr) throw lErr;
+      // Determine identity tokens to link
+      const tokensToLink = [];
+      if (extId) tokensToLink.push({ ext: extId, platform: 'pokernow', isExtId: true });
+      if (sessionName && (!extId || normExtId !== normSessionName)) {
+        tokensToLink.push({ ext: sessionName, platform: 'alias', isExtId: false });
       }
 
+      // 1. Supabase update/insert if connected
+      if (supabase) {
+        for (const t of tokensToLink) {
+          const { data: existingLinks } = await supabase
+            .from('player_links')
+            .select('id, player_id')
+            .or(`external_id.eq.${t.ext},external_player_id.eq.${t.ext},session_name.eq.${t.ext}`);
+
+          if (existingLinks && existingLinks.length > 0) {
+            for (const l of existingLinks) {
+              await supabase
+                .from('player_links')
+                .update({ player_id: targetPlayerId })
+                .eq('id', l.id);
+            }
+          } else {
+            await supabase
+              .from('player_links')
+              .insert([{
+                player_id: targetPlayerId,
+                platform: t.platform,
+                external_id: t.ext,
+                external_player_id: t.isExtId ? t.ext : null,
+                session_name: !t.isExtId ? t.ext : null
+              }]);
+          }
+        }
+      }
+
+      // 2. LocalStorage update for offline reliability
+      try {
+        const localPlayers = JSON.parse(localStorage.getItem('offsuite_players') || '[]');
+        if (isCreatingNewPlayer && !localPlayers.some(p => p.id === targetPlayerId)) {
+          localPlayers.push({ id: targetPlayerId, display_name: targetPlayerName });
+          localStorage.setItem('offsuite_players', JSON.stringify(localPlayers));
+        }
+
+        const localLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+        for (const t of tokensToLink) {
+          const idx = localLinks.findIndex(l => 
+            norm(l.external_id) === norm(t.ext) || 
+            norm(l.external_player_id) === norm(t.ext) || 
+            norm(l.session_name) === norm(t.ext)
+          );
+          if (idx >= 0) {
+            localLinks[idx].player_id = targetPlayerId;
+          } else {
+            localLinks.push({
+              id: generateId('link'),
+              player_id: targetPlayerId,
+              platform: t.platform,
+              external_id: t.ext,
+              external_player_id: t.isExtId ? t.ext : null,
+              session_name: !t.isExtId ? t.ext : null
+            });
+          }
+        }
+        localStorage.setItem('offsuite_player_links', JSON.stringify(localLinks));
+      } catch (e) {
+        console.warn("Could not save to localStorage:", e);
+      }
+
+      // 3. Update entry in active state
+      setEntries(prev => {
+        const next = [...(Array.isArray(prev) ? prev : [])];
+        if (next[popoverIndex]) {
+          next[popoverIndex] = {
+            ...next[popoverIndex],
+            playerId: targetPlayerId
+          };
+        }
+        return next;
+      });
+
+      // 4. Trigger parent refresh
       if (onUpdatePlayers) {
         await onUpdatePlayers();
       }
@@ -336,26 +455,54 @@ function GameEditorInner({
   };
 
   const handleUnlink = async () => {
-    if (popoverIndex === null || !entries[popoverIndex]) return;
-    const entry = entries[popoverIndex];
-    const extId = entry.externalId || entry.pokerNowId || null;
-
-    if (!extId) {
-      setPopoverIndex(null);
-      return;
-    }
+    if (popoverIndex === null || !safeEntries[popoverIndex]) return;
+    const entry = safeEntries[popoverIndex];
+    const sessionName = (entry.name || '').trim();
+    const extId = (entry.externalId || entry.pokerNowId || '').trim();
+    const normExtId = norm(extId);
+    const normSessionName = norm(sessionName);
 
     setPlayerActionLoading(true);
     setPlayerActionError(null);
 
     try {
       if (supabase) {
-        const { error } = await supabase
-          .from('player_links')
-          .delete()
-          .eq('external_player_id', extId);
-        if (error) throw error;
+        if (extId) {
+          await supabase
+            .from('player_links')
+            .delete()
+            .or(`external_id.eq.${extId},external_player_id.eq.${extId}`);
+        }
+        if (sessionName) {
+          await supabase
+            .from('player_links')
+            .delete()
+            .or(`external_id.eq.${sessionName},session_name.eq.${sessionName}`);
+        }
       }
+
+      // Update LocalStorage
+      try {
+        const localLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+        const filteredLinks = localLinks.filter(l => {
+          const lExt = norm(l.external_id || l.external_player_id || l.session_name);
+          return lExt !== normExtId && lExt !== normSessionName;
+        });
+        localStorage.setItem('offsuite_player_links', JSON.stringify(filteredLinks));
+      } catch (e) {
+        console.warn("Could not update local links:", e);
+      }
+
+      // Update active entry state
+      setEntries(prev => {
+        const next = [...(Array.isArray(prev) ? prev : [])];
+        if (next[popoverIndex]) {
+          const updated = { ...next[popoverIndex] };
+          delete updated.playerId;
+          next[popoverIndex] = updated;
+        }
+        return next;
+      });
 
       if (onUpdatePlayers) {
         await onUpdatePlayers();
@@ -369,6 +516,8 @@ function GameEditorInner({
       setPlayerActionLoading(false);
     }
   };
+
+  const safePlayers = Array.isArray(players) ? players : [];
 
   return (
     <div className="space-y-6 font-sans">
@@ -389,7 +538,7 @@ function GameEditorInner({
               </span>
             </h2>
             <div className="flex items-center gap-2 text-xs text-zinc-400 mt-0.5 font-mono">
-              <span>{entries.length} Players</span>
+              <span>{safeEntries.length} Players</span>
               <span className="text-zinc-600">•</span>
               <span className="flex items-center gap-1">
                 Status: 
@@ -502,18 +651,18 @@ function GameEditorInner({
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 font-medium">
-                {entries.map((entry, index) => {
-                  const net = (Number(entry.buyOut) || 0) + (Number(entry.stack) || 0) - (Number(entry.buyIn) || 0);
+                {safeEntries.map((entry, index) => {
+                  const net = (Number(entry?.buyOut) || 0) + (Number(entry?.stack) || 0) - (Number(entry?.buyIn) || 0);
                   const linkInfo = getLinkedPlayerInfo(entry);
                   const masterName = linkInfo.masterPlayer?.display_name;
 
                   return (
-                    <tr key={entry.id || index} className="hover:bg-white/[0.03] transition-colors group">
+                    <tr key={entry?.id || index} className="hover:bg-white/[0.03] transition-colors group">
                       <td className="p-3">
                         <div className="flex items-center gap-2">
                           <input 
                             type="text" 
-                            value={entry.name}
+                            value={entry?.name || ''}
                             onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
                             placeholder="Player name..."
                             className="bg-black border border-white/15 px-2.5 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-32 sm:w-40 transition-all font-sans font-semibold text-xs sm:text-sm"
@@ -523,10 +672,10 @@ function GameEditorInner({
                             onClick={() => handleOpenLinkPopover(index)}
                             className={`p-1.5 border transition-all ${
                               linkInfo.isLinked
-                                ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.3)] hover:bg-emerald-500/20'
+                                ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)] hover:bg-emerald-500/25'
                                 : 'bg-black/60 border-white/10 text-zinc-500 hover:text-zinc-300 hover:border-white/30'
                             }`}
-                            title={linkInfo.isLinked ? `Linked to ${masterName}` : "Link to Master Player Profile"}
+                            title={linkInfo.isLinked ? `Linked to Master Profile: ${masterName}` : "Link to Master Player Profile"}
                           >
                             <Link className="w-3.5 h-3.5" />
                           </button>
@@ -535,18 +684,20 @@ function GameEditorInner({
 
                       <td className="p-3 text-center">
                         <select 
-                          value={entry.currency || gameCurrency}
+                          value={entry?.currency || gameCurrency}
                           onChange={(e) => handleEntryChange(index, 'currency', e.target.value)}
                           className="bg-black border border-white/15 px-2 py-1.5 text-zinc-300 text-xs font-mono font-bold outline-none focus:border-cyan-400 transition-colors cursor-pointer"
                         >
-                          {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>)}
+                          {(Array.isArray(TOP_CURRENCIES) ? TOP_CURRENCIES : ['USD', 'CAD']).map(c => (
+                            <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>
+                          ))}
                         </select>
                       </td>
 
                       <td className="p-3 text-center">
                         <input 
                           type="checkbox" 
-                          checked={Boolean(entry.isBank)}
+                          checked={Boolean(entry?.isBank)}
                           onChange={(e) => handleEntryChange(index, 'isBank', e.target.checked)}
                           className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
                           title="Designate as Bank for this currency"
@@ -564,7 +715,7 @@ function GameEditorInner({
                           <input 
                             type="number" 
                             min="0"
-                            value={entry.buyIn === 0 ? '' : entry.buyIn}
+                            value={entry?.buyIn === 0 ? '' : (entry?.buyIn ?? '')}
                             onChange={(e) => handleEntryChange(index, 'buyIn', e.target.value === '' ? 0 : Number(e.target.value))}
                             className="w-16 bg-black border border-white/15 px-1 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
                           />
@@ -588,7 +739,7 @@ function GameEditorInner({
                           <input 
                             type="number" 
                             min="0"
-                            value={entry.buyOut === 0 ? '' : entry.buyOut}
+                            value={entry?.buyOut === 0 ? '' : (entry?.buyOut ?? '')}
                             onChange={(e) => handleEntryChange(index, 'buyOut', e.target.value === '' ? 0 : Number(e.target.value))}
                             className="w-16 bg-black border border-white/15 px-1 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
                           />
@@ -606,7 +757,7 @@ function GameEditorInner({
                           <input 
                             type="number" 
                             min="0"
-                            value={entry.stack === 0 ? '' : entry.stack}
+                            value={entry?.stack === 0 ? '' : (entry?.stack ?? '')}
                             onChange={(e) => handleEntryChange(index, 'stack', e.target.value === '' ? 0 : Number(e.target.value))}
                             className="w-20 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
                           />
@@ -647,7 +798,7 @@ function GameEditorInner({
 
           {(validationErrors?.length ?? 0) > 0 && (
             <div className="p-4 bg-rose-950/40 border-t border-rose-900/60 space-y-1">
-              {validationErrors.map((err, i) => (
+              {(Array.isArray(validationErrors) ? validationErrors : []).map((err, i) => (
                 <p key={i} className="text-rose-400 text-xs font-mono flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" /> {err}
                 </p>
@@ -659,14 +810,14 @@ function GameEditorInner({
         {/* Settlement Panel */}
         <div className="lg:col-span-1">
           <SessionSettlementPanel
-            entries={entries}
+            entries={safeEntries}
             settlementConfig={{
               chipsPerCad: ratioChips && ratioFiat ? (ratioChips / ratioFiat) : (1 / (chipValue || 1)),
               cadToUsd: exchangeRates?.CAD ? (1 / exchangeRates.CAD) : 0.74,
               bankByCountry: (function() {
                 const map = {};
-                entries.forEach(e => {
-                  if (e.isBank && e.currency) {
+                safeEntries.forEach(e => {
+                  if (e?.isBank && e?.currency) {
                     const cCode = e.currency === 'CAD' ? 'CA' : e.currency === 'USD' ? 'US' : 'CA';
                     map[cCode] = e.pokerNowId || e.externalId || e.name;
                   }
@@ -681,7 +832,7 @@ function GameEditorInner({
             exchangeRates={exchangeRates}
             nameOf={(pid) => {
               if (!pid) return null;
-              const p = players.find(x => x.id === pid);
+              const p = safePlayers.find(x => x.id === pid);
               return p ? p.display_name : null;
             }}
             isBalanced={isBalanced}
@@ -692,10 +843,10 @@ function GameEditorInner({
       </div>
 
       {/* In-Place Player Identity Link Popover Modal */}
-      {popoverIndex !== null && entries[popoverIndex] && (() => {
-        const targetEntry = entries[popoverIndex];
+      {popoverIndex !== null && safeEntries[popoverIndex] && (() => {
+        const targetEntry = safeEntries[popoverIndex];
         const linkInfo = getLinkedPlayerInfo(targetEntry);
-        const sessionName = (targetEntry.name || '').trim();
+        const sessionName = (targetEntry?.name || '').trim();
 
         return (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
@@ -735,7 +886,7 @@ function GameEditorInner({
                       className="w-full bg-black border border-white/20 text-zinc-100 px-3 py-2 text-xs font-medium outline-none focus:border-cyan-400 cursor-pointer"
                     >
                       <option value="" className="bg-zinc-950 text-zinc-400">-- Choose Master Player --</option>
-                      {players.map(p => (
+                      {safePlayers.map(p => (
                         <option key={p.id} value={p.id} className="bg-zinc-950 text-white">{p.display_name}</option>
                       ))}
                     </select>
@@ -828,70 +979,60 @@ function GameEditorInner({
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-1">Session Date</label>
-                <input 
-                  type="date" 
-                  value={date} 
-                  onChange={(e) => setDate(e.target.value)}
-                  className="w-full bg-black border border-white/20 text-zinc-100 font-mono px-3 py-2 text-xs outline-none focus:border-cyan-400 transition-colors"
-                />
+                <label className="block text-xs font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-400" /> Base Session Currency
+                </label>
+                <select
+                  value={gameCurrency}
+                  onChange={(e) => setGameCurrency(e.target.value)}
+                  className="w-full bg-black border border-white/20 text-zinc-100 px-3 py-2 text-xs font-mono font-bold outline-none focus:border-cyan-400 cursor-pointer"
+                >
+                  {(Array.isArray(TOP_CURRENCIES) ? TOP_CURRENCIES : ['USD', 'CAD']).map(c => (
+                    <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>
+                  ))}
+                </select>
               </div>
 
-              <div className="p-4 bg-black/60 border border-white/10 space-y-4">
-                <h4 className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-2">
-                  <Coins className="w-3.5 h-3.5" /> Chip Valuation Ratio
-                </h4>
-                
-                <div>
-                  <label className="block text-[11px] font-mono font-medium text-zinc-400 mb-1">Native Currency</label>
-                  <select 
-                    value={gameCurrency}
-                    onChange={(e) => setGameCurrency(e.target.value)}
-                    className="w-full bg-black border border-white/20 text-zinc-100 font-mono px-3 py-2 text-xs outline-none focus:border-cyan-400 transition-colors cursor-pointer"
-                  >
-                    {TOP_CURRENCIES.map(c => <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>)}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-mono font-medium text-zinc-400 mb-1">Chip Exchange Ratio</label>
-                  <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
-                      <input 
-                        type="number" 
-                        value={ratioChips === 0 ? '' : ratioChips}
-                        onChange={(e) => setRatioChips(Number(e.target.value) || 0)}
-                        className="w-full bg-black border border-white/20 text-zinc-100 font-mono pl-3 pr-8 py-2 text-xs outline-none focus:border-cyan-400 transition-colors [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
-                      />
-                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-zinc-500 text-xs font-bold font-mono">
-                        CHIPS
-                      </div>
-                    </div>
-                    <span className="text-zinc-500 font-bold font-mono">=</span>
-                    <div className="relative flex-1">
-                      <input 
-                        type="number" 
-                        step="0.01"
-                        value={ratioFiat === 0 ? '' : ratioFiat}
-                        onChange={(e) => setRatioFiat(Number(e.target.value) || 0)}
-                        className="w-full bg-black border border-white/20 text-zinc-100 font-mono pl-3 pr-10 py-2 text-xs outline-none focus:border-cyan-400 transition-colors [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
-                      />
-                      <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-zinc-500 text-xs font-bold font-mono">
-                        {gameCurrency}
-                      </div>
-                    </div>
+              <div className="border-t border-white/10 pt-4">
+                <label className="block text-xs font-mono font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Coins className="w-3.5 h-3.5 text-amber-400" /> Chip Ratio Definition
+                </label>
+                <div className="flex items-center gap-2 bg-black/60 p-3 border border-white/10">
+                  <div className="flex-1">
+                    <span className="text-[10px] font-mono text-zinc-500 uppercase block mb-1">Chips</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={ratioChips}
+                      onChange={(e) => setRatioChips(Math.max(1, Number(e.target.value) || 1))}
+                      className="w-full bg-black border border-white/20 px-2 py-1.5 text-zinc-100 font-mono text-xs outline-none focus:border-cyan-400 text-center"
+                    />
                   </div>
-                  <p className="text-[11px] font-mono text-zinc-400 mt-1">1 Chip = {formatFiat(chipValue, gameCurrency)}</p>
+                  <span className="text-zinc-500 font-bold font-mono pt-4">=</span>
+                  <div className="flex-1">
+                    <span className="text-[10px] font-mono text-zinc-500 uppercase block mb-1">Fiat Amount ({gameCurrency})</span>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={ratioFiat}
+                      onChange={(e) => setRatioFiat(Math.max(0.01, Number(e.target.value) || 1))}
+                      className="w-full bg-black border border-white/20 px-2 py-1.5 text-zinc-100 font-mono text-xs outline-none focus:border-cyan-400 text-center"
+                    />
+                  </div>
                 </div>
+                <p className="text-[11px] text-zinc-400 font-mono mt-2">
+                  Current: <span className="text-emerald-400 font-bold">1 Chip = {formatFiat(chipValue, gameCurrency)}</span>
+                </p>
               </div>
             </div>
 
-            <div className="pt-4 border-t border-white/10 flex justify-end">
-              <button 
+            <div className="flex justify-end pt-4 border-t border-white/10">
+              <button
                 onClick={() => setIsSettingsOpen(false)}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs font-bold uppercase tracking-wider transition-all shadow-[0_0_10px_rgba(16,185,129,0.4)]"
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-mono font-bold uppercase tracking-wider transition-all shadow-[0_0_10px_rgba(6,182,212,0.4)]"
               >
-                Apply Settings
+                Apply & Close
               </button>
             </div>
           </div>

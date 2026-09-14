@@ -59,51 +59,57 @@ export default function SessionSettlementPanel({
     return () => clearTimeout(t);
   }, [undoState]);
 
+  const safeEntriesList = useMemo(() => Array.isArray(entries) ? entries : [], [entries]);
+
   // Compute Country-Banker Settlement
   const bankerSettlement = useMemo(() => {
-    if (!isBalanced || totalBuyIn <= 0 || !Array.isArray(entries) || entries.length === 0) {
+    if (!isBalanced || totalBuyIn <= 0 || safeEntriesList.length === 0) {
       return null;
     }
-    const namedEntries = entries.map(e => ({
+    const namedEntries = safeEntriesList.map(e => ({
       ...e,
-      name: (nameOf(e.playerId) || e.name || '').trim()
+      name: (nameOf(e?.playerId) || e?.name || '').trim()
     }));
 
     return computeBankSettlement({
       entries: namedEntries,
-      chipsPerCad: settlementConfig.chipsPerCad || (1 / (chipValue || 1)),
-      cadToUsd: settlementConfig.cadToUsd || (exchangeRates?.CAD ? 1 / exchangeRates.CAD : 0.74),
-      bankByCountry: settlementConfig.bankByCountry || {},
-      countryByKey: settlementConfig.countryByKey || {}
+      chipsPerCad: settlementConfig?.chipsPerCad || (1 / (chipValue || 1)),
+      cadToUsd: settlementConfig?.cadToUsd || (exchangeRates?.CAD ? 1 / exchangeRates.CAD : 0.74),
+      bankByCountry: settlementConfig?.bankByCountry || {},
+      countryByKey: settlementConfig?.countryByKey || {}
     });
-  }, [isBalanced, totalBuyIn, entries, settlementConfig, chipValue, exchangeRates, nameOf]);
+  }, [isBalanced, totalBuyIn, safeEntriesList, settlementConfig, chipValue, exchangeRates, nameOf]);
 
   // Compute Peer-to-Peer Settlement (fallback / casual mode)
   const peerSettlement = useMemo(() => {
-    if (!isBalanced || totalBuyIn <= 0 || !Array.isArray(entries) || entries.length === 0) {
+    if (!isBalanced || totalBuyIn <= 0 || safeEntriesList.length === 0) {
       return null;
     }
     return calculateSettlement({
-      entries,
+      entries: safeEntriesList,
       chipValue,
       gameCurrency,
       settlementCurrency: gameCurrency,
       exchangeRates,
       useBankBuddies: false
     });
-  }, [isBalanced, totalBuyIn, entries, chipValue, gameCurrency, exchangeRates]);
+  }, [isBalanced, totalBuyIn, safeEntriesList, chipValue, gameCurrency, exchangeRates]);
 
   const pidByKey = useMemo(() => {
     const map = new Map();
-    for (const e of entries || []) {
-      map.set(keyOfEntry(e), e.playerId || null);
+    for (const e of safeEntriesList) {
+      if (e) {
+        map.set(keyOfEntry(e), e.playerId || null);
+      }
     }
     return map;
-  }, [entries]);
+  }, [safeEntriesList]);
+
+  const safeMarks = useMemo(() => Array.isArray(marks) ? marks : [], [marks]);
 
   const markFor = useCallback((legId) => {
-    return marks.find(m => m.leg_id === legId && !m.undone_at) || null;
-  }, [marks]);
+    return safeMarks.find(m => m && m.leg_id === legId && !m.undone_at) || null;
+  }, [safeMarks]);
 
   const toggleMark = useCallback(async (legId, buildRow) => {
     if (busy) return;
@@ -116,7 +122,7 @@ export default function SessionSettlementPanel({
       } else {
         const row = buildRow();
         const inserted = await sessionApi.addMarks([row]);
-        const ids = (inserted || []).map(r => r.id).filter(Boolean);
+        const ids = (Array.isArray(inserted) ? inserted : []).map(r => r?.id).filter(Boolean);
         if (ids.length) {
           setUndoState({ ids, label: `Marked "${row.party_name || 'Transfer'}" as settled` });
         }
@@ -132,8 +138,9 @@ export default function SessionSettlementPanel({
 
   const handleSettleAllInCountry = useCallback(async (countryCode) => {
     if (!bankerSettlement || busy) return;
-    const transfers = bankerSettlement.playerTransfers.filter(
-      t => t.country === countryCode && !markFor(t.legId)
+    const playerTransfers = Array.isArray(bankerSettlement.playerTransfers) ? bankerSettlement.playerTransfers : [];
+    const transfers = playerTransfers.filter(
+      t => t && t.country === countryCode && !markFor(t.legId)
     );
     if (transfers.length === 0) return;
 
@@ -157,7 +164,7 @@ export default function SessionSettlementPanel({
 
       const inserted = await sessionApi.addMarks(rowsToInsert);
       await reloadMarks();
-      const ids = (inserted || []).map(r => r.id).filter(Boolean);
+      const ids = (Array.isArray(inserted) ? inserted : []).map(r => r?.id).filter(Boolean);
       if (ids.length) {
         setUndoState({ ids, label: `Settled ${transfers.length} player(s) in ${countryCode}` });
       }
@@ -191,7 +198,7 @@ export default function SessionSettlementPanel({
         sessionId,
         isSettled: (legId) => Boolean(markFor(legId))
       });
-    } else if (peerSettlement?.transactions) {
+    } else if (Array.isArray(peerSettlement?.transactions)) {
       const dateStr = startDate ? ` (${startDate})` : '';
       text = `♠️ Poker Settlement${dateStr}\n`;
       text += peerSettlement.transactions.map(tx => `• ${tx.from} ➔ ${tx.to}: ${formatFiat(tx.amount, gameCurrency)}`).join('\n');
@@ -215,7 +222,8 @@ export default function SessionSettlementPanel({
   }, [mode, bankerSettlement, peerSettlement, sessionId, markFor, startDate, gameCurrency]);
 
   const countryOfBankKey = useCallback((bankKey) => {
-    return bankerSettlement?.countries?.find(c => c.bankKey === bankKey)?.code || null;
+    const countries = Array.isArray(bankerSettlement?.countries) ? bankerSettlement.countries : [];
+    return countries.find(c => c && c.bankKey === bankKey)?.code || null;
   }, [bankerSettlement]);
 
   if (!isBalanced || totalBuyIn === 0) {
@@ -229,6 +237,10 @@ export default function SessionSettlementPanel({
       </div>
     );
   }
+
+  const safeCountries = Array.isArray(bankerSettlement?.countries) ? bankerSettlement.countries : [];
+  const safePlayerTransfers = Array.isArray(bankerSettlement?.playerTransfers) ? bankerSettlement.playerTransfers : [];
+  const safeBankTransfers = Array.isArray(bankerSettlement?.bankTransfers) ? bankerSettlement.bankTransfers : [];
 
   return (
     <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl flex flex-col font-sans">
@@ -288,12 +300,13 @@ export default function SessionSettlementPanel({
       <div className="p-4 space-y-4 flex-1 overflow-y-auto max-h-[550px]">
         {mode === 'banker' && bankerSettlement && (
           <>
-            {bankerSettlement.countries.map((c) => {
-              const nonBank = c.members.filter(m => !m.isBank && Math.abs(m.netLocal) >= 0.005);
+            {safeCountries.map((c) => {
+              const members = Array.isArray(c?.members) ? c.members : [];
+              const nonBank = members.filter(m => m && !m.isBank && Math.abs(m.netLocal) >= 0.005);
               const converted = c.currency !== 'CAD';
               const transfersByKey = new Map(
-                bankerSettlement.playerTransfers
-                  .filter(t => t.country === c.code)
+                safePlayerTransfers
+                  .filter(t => t && t.country === c.code)
                   .map(t => [t.partyKey, t])
               );
               const unsettledCount = nonBank.filter(m => {
@@ -406,14 +419,14 @@ export default function SessionSettlementPanel({
             })}
 
             {/* Inter-Bank Transfers */}
-            {bankerSettlement.bankTransfers.length > 0 && (
+            {safeBankTransfers.length > 0 && (
               <div className="bg-black/60 border border-white/10 p-3.5 space-y-2">
                 <div className="text-xs font-bold font-mono text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5 text-amber-400 drop-shadow-[0_0_4px_rgba(245,158,11,0.8)]" />
                   Inter-Bank Clearing
                 </div>
                 <div className="divide-y divide-white/5">
-                  {bankerSettlement.bankTransfers.map((t) => {
+                  {safeBankTransfers.map((t) => {
                     const settled = Boolean(markFor(t.legId));
                     return (
                       <div key={t.legId} className="flex items-center justify-between py-2 text-xs gap-3">
@@ -448,7 +461,8 @@ export default function SessionSettlementPanel({
                             {t.from} <ArrowRight className="inline w-3 h-3 text-zinc-500 mx-0.5" /> {t.to}
                           </span>
                         </label>
-                        <div className="shrink-0">
+
+                        <div className="shrink-0 text-right">
                           {settled ? (
                             <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/30 uppercase">
                               <Check className="w-3 h-3" /> Cleared
@@ -468,34 +482,40 @@ export default function SessionSettlementPanel({
           </>
         )}
 
-        {/* Peer-to-Peer Mode */}
         {mode === 'peer' && peerSettlement && (
           <div className="space-y-2">
-            {peerSettlement.transactions.map((tx, idx) => (
-              <div key={idx} className="p-2.5 bg-black/60 border border-white/10 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2 font-sans font-medium text-zinc-200">
-                  <span>{tx.from}</span>
-                  <ArrowRight className="w-3 h-3 text-cyan-400" />
-                  <span>{tx.to}</span>
+            {(Array.isArray(peerSettlement.transactions) ? peerSettlement.transactions : []).map((t, i) => (
+              <div key={i} className="flex items-center justify-between p-3 bg-black/60 border border-white/10 text-xs">
+                <div className="flex items-center gap-2 font-medium font-sans">
+                  <span className="text-zinc-200">{t.from}</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-zinc-500" />
+                  <span className="text-zinc-200">{t.to}</span>
                 </div>
-                <span className="font-mono tabular-nums font-bold text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]">
-                  {formatFiat(tx.amount, gameCurrency)}
+                <span className="font-mono font-bold text-cyan-400 drop-shadow-[0_0_4px_rgba(6,182,212,0.6)]">
+                  {formatFiat(t.amount, gameCurrency)}
                 </span>
               </div>
             ))}
+            {(!peerSettlement.transactions || peerSettlement.transactions.length === 0) && (
+              <p className="text-xs text-zinc-500 font-mono italic p-3">No settlements needed. Everyone broke even.</p>
+            )}
           </div>
         )}
       </div>
 
-      {/* Undo Toast */}
+      {/* Undo Toast Notification */}
       {undoState && (
-        <div className="p-3 bg-zinc-900 border-t border-white/15 flex items-center justify-between text-xs font-mono">
-          <span className="text-zinc-300 truncate max-w-[200px]">{undoState.label}</span>
+        <div className="p-3 bg-zinc-900 border-t border-emerald-500/30 flex items-center justify-between text-xs animate-in fade-in slide-in-from-bottom duration-200">
+          <span className="text-emerald-400 font-medium font-sans flex items-center gap-1.5">
+            <Check className="w-3.5 h-3.5" />
+            {undoState.label}
+          </span>
           <button
             onClick={() => handleUndo(undoState.ids)}
-            className="text-cyan-400 hover:text-cyan-300 font-bold uppercase tracking-wider flex items-center gap-1"
+            disabled={busy}
+            className="text-[11px] font-mono font-bold uppercase tracking-wider text-zinc-300 hover:text-white flex items-center gap-1 px-2 py-1 bg-black border border-white/10 hover:border-white/30 transition-all"
           >
-            <RotateCcw className="w-3 h-3" /> Undo
+            <RotateCcw className="w-3 h-3 text-cyan-400" /> Undo
           </button>
         </div>
       )}
