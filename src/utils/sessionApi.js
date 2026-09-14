@@ -173,6 +173,69 @@ async function remove(id) {
   if (error) throw error;
 }
 
+// --- Cross-session settlement (admin_session_legs + settlement_marks) ---------
+
+/**
+ * Denormalised settlement legs for the /settlement roll-up. One light indexed
+ * read — the heavy `chart_data` / `entries` blobs are never touched.
+ *
+ * @returns {Promise<Array<Object>>}
+ */
+async function listLegs() {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from('admin_session_legs')
+      .select(LEG_COLUMNS)
+      .order('session_date', { ascending: false, nullsFirst: false });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('sessionApi.listLegs failed:', err);
+    return [];
+  }
+}
+
+/**
+ * Backfill / self-heal: build legs for any session that has none yet (rows
+ * saved before the legs table, or a prior write that failed). Cheap no-op once
+ * every session is covered.
+ *
+ * @returns {Promise<number>} sessions backfilled
+ */
+async function ensureLegs() {
+  if (!supabase) return 0;
+  try {
+    const [sessRes, legRes] = await Promise.all([
+      supabase.from('admin_sessions').select('id'),
+      supabase.from('admin_session_legs').select('session_id')
+    ]);
+    if (sessRes.error || legRes.error) return 0;
+
+    const covered = new Set((legRes.data || []).map((r) => r.session_id));
+    const missing = (sessRes.data || []).map((r) => r.id).filter((id) => !covered.has(id));
+    if (missing.length === 0) return 0;
+
+    const { data: rows, error } = await supabase
+      .from('admin_sessions')
+      .select('id, date, entries, settlement')
+      .in('id', missing);
+    if (error) return 0;
+
+    let n = 0;
+    for (const row of rows || []) {
+      const legs = legsFromSession(row);
+      if (legs.length === 0) continue;
+      const { error: insErr } = await supabase.from('admin_session_legs').insert(legs);
+      if (!insErr) n += 1;
+    }
+    return n;
+  } catch (err) {
+    console.warn('sessionApi.ensureLegs failed:', err);
+    return 0;
+  }
+}
+
 /**
  * Settlement marks live in a separate table (`settlement_marks`) so checking
  * off a payment is a fast single-row insert/delete rather than a whole-session
@@ -180,14 +243,19 @@ async function remove(id) {
  */
 async function listMarks({ sessionId = null } = {}) {
   if (!supabase) return [];
-  let query = supabase
-    .from('settlement_marks')
-    .select('*')
-    .is('undone_at', null);
-  if (sessionId) query = query.eq('session_id', sessionId);
-  const { data, error } = await query;
-  if (error) throw error;
-  return data || [];
+  try {
+    let query = supabase
+      .from('settlement_marks')
+      .select('*')
+      .is('undone_at', null);
+    if (sessionId) query = query.eq('session_id', sessionId);
+    const { data, error } = await query.order('settled_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (err) {
+    console.warn('sessionApi.listMarks failed:', err);
+    return [];
+  }
 }
 
 async function addMarks(markRows) {
@@ -209,13 +277,41 @@ async function undoMarks(markIds) {
   if (error) throw error;
 }
 
+// Aliases for bulk / single operations
+async function mark(row) {
+  if (!row) return null;
+  const inserted = await addMarks([row]);
+  return Array.isArray(inserted) && inserted.length > 0 ? inserted[0] : null;
+}
+
+async function markBulk(rows) {
+  return addMarks(rows);
+}
+
+async function unmark(markId) {
+  if (!markId) return;
+  return undoMarks([markId]);
+}
+
+async function unmarkBulk(markIds) {
+  return undoMarks(markIds);
+}
+
 export const sessionApi = {
   create,
   get,
   list,
   exists,
   remove,
+  listLegs,
+  ensureLegs,
   listMarks,
   addMarks,
-  undoMarks
+  undoMarks,
+  mark,
+  markBulk,
+  unmark,
+  unmarkBulk
 };
+
+export default sessionApi;

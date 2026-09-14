@@ -16,7 +16,8 @@ import {
 } from 'lucide-react';
 import { useIdentityGraph } from '../hooks/useIdentityGraph';
 import { sessionApi } from '../utils/sessionApi';
-import { buildCountrySettlement } from '../utils/settlementLedger';
+import { buildCountrySettlement, legsFromSession } from '../utils/settlementLedger';
+import { loadGamesFromStorage } from '../utils/storage';
 
 const COUNTRIES = [
   { code: 'CA', name: 'Canada', currency: 'CAD', flag: '🇨🇦' },
@@ -55,7 +56,7 @@ export default function SettlementPage({ embedded = false }) {
     return COUNTRIES.some((c) => c.code === code) ? code : 'CA';
   });
 
-  const [sessions, setSessions] = useState([]);
+  const [legs, setLegs] = useState([]);
   const [marks, setMarks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -85,12 +86,27 @@ export default function SettlementPage({ embedded = false }) {
     setLoading(true);
     setError(null);
     try {
-      const [sessRes, marksRes] = await Promise.all([
-        sessionApi.list(),
+      await sessionApi.ensureLegs().catch((err) => console.warn('ensureLegs notice:', err));
+      const [legsRes, marksRes] = await Promise.all([
+        sessionApi.listLegs(),
         sessionApi.listMarks()
       ]);
-      setSessions(sessRes || []);
-      setMarks(marksRes || []);
+
+      let finalLegs = Array.isArray(legsRes) ? legsRes : [];
+      // Fallback: derive legs from stored sessions if admin_session_legs has no records yet
+      if (finalLegs.length === 0) {
+        try {
+          const storedGames = loadGamesFromStorage();
+          if (Array.isArray(storedGames) && storedGames.length > 0) {
+            finalLegs = storedGames.flatMap(legsFromSession);
+          }
+        } catch (e) {
+          console.warn('Fallback games load error:', e);
+        }
+      }
+
+      setLegs(finalLegs);
+      setMarks(Array.isArray(marksRes) ? marksRes : []);
     } catch (err) {
       console.error('Failed to load settlement data:', err);
       setError(err.message || 'Failed to load ledger data');
@@ -109,9 +125,18 @@ export default function SettlementPage({ embedded = false }) {
   );
 
   const countryData = useMemo(() => {
-    if (!sessions || sessions.length === 0) return null;
-    return buildCountrySettlement(activeCountry, sessions, marks, resolve);
-  }, [activeCountry, sessions, marks, resolve]);
+    return buildCountrySettlement({
+      legs,
+      marks,
+      countryCode: activeCountry,
+      nameOf: resolve
+    });
+  }, [activeCountry, legs, marks, resolve]);
+
+  const trackedSessionCount = useMemo(() => {
+    const sessionIds = new Set(legs.map((l) => l.session_id || l.sessionId).filter(Boolean));
+    return sessionIds.size;
+  }, [legs]);
 
   const markIdsMap = useMemo(() => {
     const map = new Map();
@@ -134,7 +159,7 @@ export default function SettlementPage({ embedded = false }) {
     if (!ids || ids.length === 0 || busy) return;
     setBusy(true);
     try {
-      await sessionApi.unmarkBulk(ids);
+      await sessionApi.undoMarks(ids);
       setMarks((prev) => prev.filter((m) => !ids.includes(m.id)));
       setUndoToast(null);
     } catch (err) {
@@ -155,9 +180,9 @@ export default function SettlementPage({ embedded = false }) {
       leg_id: line.legId,
       scope: 'player',
       country: activeCountry,
-      party_key: player.key,
+      party_key: player.playerId || player.partyKey || player.key,
       party_name: player.name,
-      counterparty_key: line.bankKey || null,
+      counterparty_key: line.bankPartyKey || line.bankKey || null,
       counterparty_name: line.bankName || null,
       direction: line.direction,
       amount_cad: line.amountCad,
@@ -167,12 +192,12 @@ export default function SettlementPage({ embedded = false }) {
     }));
 
     try {
-      const inserted = await sessionApi.markBulk(payloads);
+      const inserted = await sessionApi.addMarks(payloads);
       if (inserted && inserted.length > 0) {
         setMarks((prev) => [...prev, ...inserted]);
         showUndo(
           inserted.map((m) => m.id),
-          `Settled ${inserted.length} line${inserted.length === 1 ? '' : 's'} for ${player.name}`
+          `Settled ${inserted.length} session${inserted.length === 1 ? '' : 's'} for ${player.name}`
         );
       }
     } catch (err) {
@@ -190,13 +215,13 @@ export default function SettlementPage({ embedded = false }) {
     setBusy(true);
     try {
       if (isSettled && markId) {
-        await sessionApi.unmark(markId);
+        await sessionApi.undoMarks([markId]);
         setMarks((prev) => prev.filter((m) => m.id !== markId));
       } else {
         const payload = buildPayload();
-        const inserted = await sessionApi.mark(payload);
-        if (inserted) {
-          setMarks((prev) => [...prev, inserted]);
+        const inserted = await sessionApi.addMarks([payload]);
+        if (inserted && inserted.length > 0) {
+          setMarks((prev) => [...prev, ...inserted]);
         }
       }
     } catch (err) {
@@ -215,20 +240,20 @@ export default function SettlementPage({ embedded = false }) {
         leg_id: b.legId,
         scope: 'bank',
         country: activeCountry,
-        party_key: b.fromKey,
+        party_key: b.fromPartyKey || b.fromKey || b.from,
         party_name: b.from,
-        counterparty_key: b.toKey,
+        counterparty_key: b.toPartyKey || b.toKey || b.to,
         counterparty_name: b.to,
         direction: 'bank',
         amount_cad: b.amountCad,
-        amount_local: b.amountCad,
+        amount_local: b.amountLocal ?? b.amountCad,
         currency: 'CAD',
         session_date: b.date || null
       };
-      const inserted = await sessionApi.mark(payload);
-      if (inserted) {
-        setMarks((prev) => [...prev, inserted]);
-        showUndo([inserted.id], `Settled bank transfer: ${b.from} → ${b.to}`);
+      const inserted = await sessionApi.addMarks([payload]);
+      if (inserted && inserted.length > 0) {
+        setMarks((prev) => [...prev, ...inserted]);
+        showUndo(inserted.map((m) => m.id), `Settled bank transfer: ${b.from} → ${b.to}`);
       }
     } catch (err) {
       console.error('Failed to settle bank line:', err);
@@ -248,7 +273,7 @@ export default function SettlementPage({ embedded = false }) {
                 Financial Clearing
               </span>
               <span className="text-xs text-zinc-500 font-mono">
-                {sessions.length} sessions tracked
+                {trackedSessionCount} sessions tracked
               </span>
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight mt-1">
@@ -368,7 +393,7 @@ function CountrySettlementView({
   }, [data, q]);
 
   const openBankLines = useMemo(() => {
-    return (data?.bankTransfers || []).filter((b) => !b.settled);
+    return (data?.bankLines || data?.bankTransfers || []).filter((b) => !b.settled);
   }, [data]);
 
   const recentlySettled = useMemo(() => {
@@ -381,9 +406,9 @@ function CountrySettlementView({
     leg_id: line.legId,
     scope: 'player',
     country: countryCode,
-    party_key: player.key,
+    party_key: player.playerId || player.partyKey || player.key,
     party_name: player.name,
-    counterparty_key: line.bankKey || null,
+    counterparty_key: line.bankPartyKey || line.bankKey || null,
     counterparty_name: line.bankName || null,
     direction: line.direction,
     amount_cad: line.amountCad,
@@ -424,10 +449,10 @@ function CountrySettlementView({
             Unsettled Player Debts
           </span>
           <span className="text-xl font-bold font-mono tabular-nums text-rose-400 mt-1 block">
-            {money(data.payLocal, currency)}
+            {money(data.collectLocal, currency)}
           </span>
           <span className="text-[10px] text-zinc-500 font-mono">
-            {data.payCount} pending payments to bank
+            {data.collectCount} pending payments to bank
           </span>
         </div>
 
@@ -436,10 +461,10 @@ function CountrySettlementView({
             Unsettled Player Payouts
           </span>
           <span className="text-xl font-bold font-mono tabular-nums text-emerald-400 mt-1 block">
-            {money(data.collectLocal, currency)}
+            {money(data.payLocal, currency)}
           </span>
           <span className="text-[10px] text-zinc-500 font-mono">
-            {data.collectCount} pending collections from bank
+            {data.payCount} pending collections from bank
           </span>
         </div>
       </div>
