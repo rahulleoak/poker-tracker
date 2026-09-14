@@ -3,8 +3,7 @@
 -- =========================================================================
 
 -- 1. SESSIONS TABLE
-CREATE TABLE IF NOT EXISTS public.sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS public.sessions (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     date TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     poker_now_url TEXT,
@@ -14,8 +13,7 @@ CREATE TABLE IF NOT EXISTS public.sessions (
 );
 
 -- 2. LEDGER TABLE
-CREATE TABLE IF NOT EXISTS public.ledger (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS public.ledger (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id UUID REFERENCES public.sessions(id) ON DELETE CASCADE,
     player_name TEXT,
     buy_in NUMERIC DEFAULT 0,
@@ -37,8 +35,7 @@ CREATE TABLE IF NOT EXISTS public.ledger (
 CREATE INDEX IF NOT EXISTS idx_ledger_session_id ON public.ledger(session_id);
 
 -- 3B. PLAYERS AND PLAYER LINKS TABLES
-CREATE TABLE IF NOT EXISTS public.players (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS public.players (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     display_name TEXT NOT NULL UNIQUE,
     country TEXT,                          -- 'CA' | 'US' (see src/utils/countries.js); null = unset
     preferred_currency TEXT DEFAULT 'USD',
@@ -49,8 +46,7 @@ CREATE TABLE IF NOT EXISTS public.players (
 ALTER TABLE public.players ADD COLUMN IF NOT EXISTS country TEXT;
 ALTER TABLE public.players ADD COLUMN IF NOT EXISTS preferred_currency TEXT DEFAULT 'USD';
 
-CREATE TABLE IF NOT EXISTS public.player_links (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS public.player_links (\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     player_id UUID REFERENCES public.players(id) ON DELETE CASCADE,
     platform TEXT DEFAULT 'pokernow',
     external_id TEXT,
@@ -77,34 +73,60 @@ ALTER TABLE public.players ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.player_links ENABLE ROW LEVEL SECURITY;
 
 -- Sessions: Public read and collaborative write access
-DROP POLICY IF EXISTS "Sessions viewable by participants or owner" ON public.sessions;
-CREATE POLICY "Sessions are viewable by everyone" ON public.sessions FOR SELECT USING (true);
+DROP POLICY IF EXISTS \"Sessions viewable by participants or owner\" ON public.sessions;
+DROP POLICY IF EXISTS \"Sessions are viewable by everyone\" ON public.sessions;
+CREATE POLICY \"Sessions are viewable by everyone\" ON public.sessions FOR SELECT USING (true);
 
-DROP POLICY IF EXISTS "Sessions insert/update by owner" ON public.sessions;
-CREATE POLICY "Sessions can be inserted by anyone" ON public.sessions FOR INSERT WITH CHECK (true);
-CREATE POLICY "Sessions can be updated by anyone" ON public.sessions FOR UPDATE USING (true);
-CREATE POLICY "Sessions can be deleted by anyone" ON public.sessions FOR DELETE USING (true);
+DROP POLICY IF EXISTS \"Sessions insert/update by owner\" ON public.sessions;
+DROP POLICY IF EXISTS \"Sessions can be inserted by anyone\" ON public.sessions;
+CREATE POLICY \"Sessions can be inserted by anyone\" ON public.sessions FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS \"Sessions can be updated by anyone\" ON public.sessions;
+CREATE POLICY \"Sessions can be updated by anyone\" ON public.sessions FOR UPDATE USING (true);
+
+DROP POLICY IF EXISTS \"Sessions can be deleted by anyone\" ON public.sessions;
+CREATE POLICY \"Sessions can be deleted by anyone\" ON public.sessions FOR DELETE USING (true);
 
 -- Ledger: Public read and collaborative write access
-DROP POLICY IF EXISTS "Ledger viewable if session is viewable or player matches" ON public.ledger;
-CREATE POLICY "Ledger is viewable by everyone" ON public.ledger FOR SELECT USING (true);
+DROP POLICY IF EXISTS \"Ledger viewable if session is viewable or player matches\" ON public.ledger;
+DROP POLICY IF EXISTS \"Ledger is viewable by everyone\" ON public.ledger;
+CREATE POLICY \"Ledger is viewable by everyone\" ON public.ledger FOR SELECT USING (true);
 
-DROP POLICY IF EXISTS "Ledger insert/update by session owner or player" ON public.ledger;
-CREATE POLICY "Ledger can be inserted by anyone" ON public.ledger FOR INSERT WITH CHECK (true);
-CREATE POLICY "Ledger can be updated by anyone" ON public.ledger FOR UPDATE USING (true);
-CREATE POLICY "Ledger can be deleted by anyone" ON public.ledger FOR DELETE USING (true);
+DROP POLICY IF EXISTS \"Ledger insert/update by session owner or player\" ON public.ledger;
+DROP POLICY IF EXISTS \"Ledger can be inserted by anyone\" ON public.ledger;
+CREATE POLICY \"Ledger can be inserted by anyone\" ON public.ledger FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS \"Ledger can be updated by anyone\" ON public.ledger;
+CREATE POLICY \"Ledger can be updated by anyone\" ON public.ledger FOR UPDATE USING (true);
+
+DROP POLICY IF EXISTS \"Ledger can be deleted by anyone\" ON public.ledger;
+CREATE POLICY \"Ledger can be deleted by anyone\" ON public.ledger FOR DELETE USING (true);
 
 -- Players: Public read and collaborative write access
-CREATE POLICY "Players are viewable by everyone" ON public.players FOR SELECT USING (true);
-CREATE POLICY "Players can be inserted by anyone" ON public.players FOR INSERT WITH CHECK (true);
-CREATE POLICY "Players can be updated by anyone" ON public.players FOR UPDATE USING (true);
-CREATE POLICY "Players can be deleted by anyone" ON public.players FOR DELETE USING (true);
+DROP POLICY IF EXISTS \"Players are viewable by everyone\" ON public.players;
+CREATE POLICY \"Players are viewable by everyone\" ON public.players FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS \"Players can be inserted by anyone\" ON public.players;
+CREATE POLICY \"Players can be inserted by anyone\" ON public.players FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS \"Players can be updated by anyone\" ON public.players;
+CREATE POLICY \"Players can be updated by anyone\" ON public.players FOR UPDATE USING (true);
+
+DROP POLICY IF EXISTS \"Players can be deleted by anyone\" ON public.players;
+CREATE POLICY \"Players can be deleted by anyone\" ON public.players FOR DELETE USING (true);
 
 -- Player Links: Public read and collaborative write access
-CREATE POLICY "Player links are viewable by everyone" ON public.player_links FOR SELECT USING (true);
-CREATE POLICY "Player links can be inserted by anyone" ON public.player_links FOR INSERT WITH CHECK (true);
-CREATE POLICY "Player links can be updated by anyone" ON public.player_links FOR UPDATE USING (true);
-CREATE POLICY "Player links can be deleted by anyone" ON public.player_links FOR DELETE USING (true);
+DROP POLICY IF EXISTS \"Player links are viewable by everyone\" ON public.player_links;
+CREATE POLICY \"Player links are viewable by everyone\" ON public.player_links FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS \"Player links can be inserted by anyone\" ON public.player_links;
+CREATE POLICY \"Player links can be inserted by anyone\" ON public.player_links FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS \"Player links can be updated by anyone\" ON public.player_links;
+CREATE POLICY \"Player links can be updated by anyone\" ON public.player_links FOR UPDATE USING (true);
+
+DROP POLICY IF EXISTS \"Player links can be deleted by anyone\" ON public.player_links;
+CREATE POLICY \"Player links can be deleted by anyone\" ON public.player_links FOR DELETE USING (true);
 
 -- =========================================================================
 -- 6. PROCESSED SESSIONS & ANALYTICS
@@ -154,14 +176,14 @@ CREATE TRIGGER trg_admin_sessions_touch
 
 ALTER TABLE public.admin_sessions ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "admin_sessions readable by everyone" ON public.admin_sessions;
-CREATE POLICY "admin_sessions readable by everyone" ON public.admin_sessions FOR SELECT USING (true);
-DROP POLICY IF EXISTS "admin_sessions insertable by anyone" ON public.admin_sessions;
-CREATE POLICY "admin_sessions insertable by anyone" ON public.admin_sessions FOR INSERT WITH CHECK (true);
-DROP POLICY IF EXISTS "admin_sessions updatable by anyone" ON public.admin_sessions;
-CREATE POLICY "admin_sessions updatable by anyone" ON public.admin_sessions FOR UPDATE USING (true);
-DROP POLICY IF EXISTS "admin_sessions deletable by anyone" ON public.admin_sessions;
-CREATE POLICY "admin_sessions deletable by anyone" ON public.admin_sessions FOR DELETE USING (true);
+DROP POLICY IF EXISTS \"admin_sessions readable by everyone\" ON public.admin_sessions;
+CREATE POLICY \"admin_sessions readable by everyone\" ON public.admin_sessions FOR SELECT USING (true);
+DROP POLICY IF EXISTS \"admin_sessions insertable by anyone\" ON public.admin_sessions;
+CREATE POLICY \"admin_sessions insertable by anyone\" ON public.admin_sessions FOR INSERT WITH CHECK (true);
+DROP POLICY IF EXISTS \"admin_sessions updatable by anyone\" ON public.admin_sessions;
+CREATE POLICY \"admin_sessions updatable by anyone\" ON public.admin_sessions FOR UPDATE USING (true);
+DROP POLICY IF EXISTS \"admin_sessions deletable by anyone\" ON public.admin_sessions;
+CREATE POLICY \"admin_sessions deletable by anyone\" ON public.admin_sessions FOR DELETE USING (true);
 
 -- =========================================================================
 -- 7. BANK DEFAULTS
@@ -175,10 +197,10 @@ CREATE TABLE IF NOT EXISTS public.admin_bank_defaults (
 
 ALTER TABLE public.admin_bank_defaults ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "admin_bank_defaults readable by everyone" ON public.admin_bank_defaults;
-CREATE POLICY "admin_bank_defaults readable by everyone" ON public.admin_bank_defaults FOR SELECT USING (true);
-DROP POLICY IF EXISTS "admin_bank_defaults writable by anyone" ON public.admin_bank_defaults;
-CREATE POLICY "admin_bank_defaults writable by anyone" ON public.admin_bank_defaults FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS \"admin_bank_defaults readable by everyone\" ON public.admin_bank_defaults;
+CREATE POLICY \"admin_bank_defaults readable by everyone\" ON public.admin_bank_defaults FOR SELECT USING (true);
+DROP POLICY IF EXISTS \"admin_bank_defaults writable by anyone\" ON public.admin_bank_defaults;
+CREATE POLICY \"admin_bank_defaults writable by anyone\" ON public.admin_bank_defaults FOR ALL USING (true) WITH CHECK (true);
 
 -- =========================================================================
 -- 8. SETTLEMENT MARKS
@@ -220,10 +242,10 @@ CREATE INDEX IF NOT EXISTS settlement_marks_country_idx
 
 ALTER TABLE public.settlement_marks ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "settlement_marks readable by everyone" ON public.settlement_marks;
-CREATE POLICY "settlement_marks readable by everyone" ON public.settlement_marks FOR SELECT USING (true);
-DROP POLICY IF EXISTS "settlement_marks writable by anyone" ON public.settlement_marks;
-CREATE POLICY "settlement_marks writable by anyone" ON public.settlement_marks FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS \"settlement_marks readable by everyone\" ON public.settlement_marks;
+CREATE POLICY \"settlement_marks readable by everyone\" ON public.settlement_marks FOR SELECT USING (true);
+DROP POLICY IF EXISTS \"settlement_marks writable by anyone\" ON public.settlement_marks;
+CREATE POLICY \"settlement_marks writable by anyone\" ON public.settlement_marks FOR ALL USING (true) WITH CHECK (true);
 
 -- =========================================================================
 -- 9. SESSION SETTLEMENT LEGS
@@ -259,5 +281,7 @@ CREATE INDEX IF NOT EXISTS admin_session_legs_party_idx
 
 ALTER TABLE public.admin_session_legs ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "admin_session_legs readable by everyone" ON public.admin_session_legs;
-CREATE POLICY "admin_session_legs readable by everyone" ON public.admin_session_legs FOR SELECT USING (true);
+DROP POLICY IF EXISTS \"admin_session_legs readable by everyone\" ON public.admin_session_legs;
+CREATE POLICY \"admin_session_legs readable by everyone\" ON public.admin_session_legs FOR SELECT USING (true);
+DROP POLICY IF EXISTS \"admin_session_legs writable by anyone\" ON public.admin_session_legs;
+CREATE POLICY \"admin_session_legs writable by anyone\" ON public.admin_session_legs FOR ALL USING (true) WITH CHECK (true);
