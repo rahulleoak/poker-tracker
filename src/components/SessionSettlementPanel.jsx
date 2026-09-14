@@ -228,10 +228,10 @@ export default function SessionSettlementPanel({
 
   if (!isBalanced || totalBuyIn === 0) {
     return (
-      <div className="hud-corner-reticle bg-hud-card/80 border border-white/10 p-6 text-center space-y-3 backdrop-blur-xl">
+      <div className="hud-corner-reticle bg-hud-card/80 border border-white/10 p-8 text-center space-y-3 backdrop-blur-xl">
         <AlertCircle className="w-8 h-8 text-amber-400 drop-shadow-[0_0_6px_rgba(245,158,11,0.8)] mx-auto" />
         <h3 className="font-bold text-white font-sans text-sm uppercase tracking-wider">Ledger Discrepancy</h3>
-        <p className="text-xs text-zinc-400 max-w-xs mx-auto font-sans">
+        <p className="text-xs text-zinc-400 max-w-sm mx-auto font-sans">
           Balance buy-ins with ending stacks to compute bank routes.
         </p>
       </div>
@@ -265,171 +265,175 @@ export default function SessionSettlementPanel({
           <div className="flex bg-black/80 border border-white/10 p-0.5">
             <button
               onClick={() => setMode('banker')}
-              className={`px-2.5 py-1 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                 mode === 'banker' 
                   ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-[0_0_6px_rgba(16,185,129,0.3)]' 
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Landmark className="w-3 h-3" /> Banker
+              <Landmark className="w-3.5 h-3.5" /> Banker
             </button>
             <button
               onClick={() => setMode('peer')}
-              className={`px-2.5 py-1 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
                 mode === 'peer' 
                   ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/30 shadow-[0_0_6px_rgba(6,182,212,0.3)]' 
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
             >
-              <Users className="w-3 h-3" /> P2P
+              <Users className="w-3.5 h-3.5" /> P2P
             </button>
           </div>
 
           <button
             onClick={handleCopySummary}
-            className="px-2.5 py-1.5 text-xs font-mono font-bold uppercase tracking-wider bg-black/60 hover:bg-zinc-900 text-zinc-200 border border-white/15 transition-all flex items-center gap-1.5 hover:border-cyan-400 hover:text-cyan-300"
+            className="px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider bg-black/60 hover:bg-zinc-900 text-zinc-200 border border-white/15 transition-all flex items-center gap-1.5 hover:border-cyan-400 hover:text-cyan-300"
             title="Copy formatted settlement text"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
-            <span>{copied ? 'Copied' : 'Copy'}</span>
+            <span>{copied ? 'Copied' : 'Copy Text'}</span>
           </button>
         </div>
       </div>
 
       {/* Content */}
-      <div className="p-4 space-y-4 flex-1 overflow-y-auto max-h-[550px]">
+      <div className="p-4 sm:p-6 space-y-6 flex-1">
         {mode === 'banker' && bankerSettlement && (
           <>
-            {safeCountries.map((c) => {
-              const members = Array.isArray(c?.members) ? c.members : [];
-              const nonBank = members.filter(m => m && !m.isBank && Math.abs(m.netLocal) >= 0.005);
-              const converted = c.currency !== 'CAD';
-              const transfersByKey = new Map(
-                safePlayerTransfers
-                  .filter(t => t && t.country === c.code)
-                  .map(t => [t.partyKey, t])
-              );
-              const unsettledCount = nonBank.filter(m => {
-                const t = transfersByKey.get(m.key);
-                return t ? !markFor(t.legId) : true;
-              }).length;
+            <div className={`grid grid-cols-1 ${safeCountries.length > 1 ? 'lg:grid-cols-2' : ''} gap-4`}>
+              {safeCountries.map((c) => {
+                const members = Array.isArray(c?.members) ? c.members : [];
+                const nonBank = members.filter(m => m && !m.isBank && Math.abs(m.netLocal) >= 0.005);
+                const converted = c.currency !== 'CAD';
+                const transfersByKey = new Map(
+                  safePlayerTransfers
+                    .filter(t => t && t.country === c.code)
+                    .map(t => [t.partyKey, t])
+                );
+                const unsettledCount = nonBank.filter(m => {
+                  const t = transfersByKey.get(m.key);
+                  return t ? !markFor(t.legId) : true;
+                }).length;
 
-              return (
-                <div key={c.code} className="bg-black/60 border border-white/10 p-3.5 space-y-3">
-                  <div className="flex items-center justify-between flex-wrap gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">{c.flag}</span>
-                      <span className="text-xs font-bold text-white uppercase tracking-wider font-sans">{c.name}</span>
-                      <span className="text-xs text-zinc-400 font-mono">
-                        {c.bankName ? `· Bank: ${c.bankName}` : '· No Bank'}
-                      </span>
+                return (
+                  <div key={c.code} className="bg-black/60 border border-white/10 p-4 space-y-3.5">
+                    <div className="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">{c.flag}</span>
+                        <div>
+                          <span className="text-xs font-bold text-white uppercase tracking-wider font-sans block">{c.name} Ledger</span>
+                          <span className="text-[11px] text-zinc-400 font-mono">
+                            {c.bankName ? `Standing Bank: ${c.bankName}` : 'No Standing Bank Assigned'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {c.bankName && unsettledCount > 0 && (
+                        <button
+                          onClick={() => handleSettleAllInCountry(c.code)}
+                          disabled={busy}
+                          className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 transition-colors bg-emerald-500/10 px-2.5 py-1 border border-emerald-500/30"
+                        >
+                          Settle All ({unsettledCount})
+                        </button>
+                      )}
                     </div>
 
-                    {c.bankName && unsettledCount > 0 && (
-                      <button
-                        onClick={() => handleSettleAllInCountry(c.code)}
-                        disabled={busy}
-                        className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 transition-colors"
-                      >
-                        Settle All ({unsettledCount})
-                      </button>
+                    {c.bankName ? (
+                      <div className="divide-y divide-white/5">
+                        {nonBank.map((m) => {
+                          const t = transfersByKey.get(m.key);
+                          const settled = t ? Boolean(markFor(t.legId)) : false;
+
+                          return (
+                            <div key={m.key} className="flex items-center justify-between py-2 text-xs gap-3">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                {t && (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      toggleMark(t.legId, () => ({
+                                        session_id: sessionId,
+                                        leg_id: t.legId,
+                                        scope: 'player',
+                                        country: t.country,
+                                        party_key: pidByKey.get(t.partyKey) || t.partyKey,
+                                        party_name: t.partyName,
+                                        counterparty_key: pidByKey.get(t.bankKey) || t.bankKey,
+                                        counterparty_name: t.bankName,
+                                        direction: t.direction,
+                                        amount_cad: t.amount,
+                                        amount_local: t.amountLocal,
+                                        currency: t.currency,
+                                        session_date: startDate || null
+                                      }))
+                                    }
+                                    className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
+                                      settled
+                                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+                                        : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
+                                    }`}
+                                    title={settled ? "Settled (Click to mark unsettled)" : "Click to mark as settled"}
+                                  >
+                                    <Check className={`w-3 h-3 stroke-[3] transition-transform ${settled ? 'scale-100' : 'scale-0'}`} />
+                                  </button>
+                                )}
+                                <span className={`truncate font-medium font-sans ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
+                                  {m.name}
+                                </span>
+                              </div>
+
+                              <div className="shrink-0 text-right">
+                                {settled ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/30 uppercase">
+                                    <Check className="w-3 h-3" /> Settled
+                                  </span>
+                                ) : (
+                                  <span className={`font-mono tabular-nums text-xs font-bold ${m.netLocal >= 0 ? 'text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]' : 'text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]'}`}>
+                                    {m.netLocal >= 0
+                                      ? `receives ${money(m.netLocal, c.currency)}`
+                                      : `pays ${money(m.netLocal, c.currency)}`}
+                                    {converted && (
+                                      <span className="text-zinc-500 text-[10px] ml-1 font-normal font-mono">
+                                        ({money(m.netCad, 'CAD')})
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {nonBank.length === 0 && (
+                          <div className="py-2 text-xs text-zinc-500 font-mono italic">All players in {c.name} broke even.</div>
+                        )}
+
+                        <div className="flex items-center justify-between pt-2.5 text-xs text-zinc-400 font-mono">
+                          <span className="flex items-center gap-1.5 font-medium">
+                            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                            {c.bankName} (Bank)
+                          </span>
+                          <span className="font-bold text-zinc-200 tabular-nums">
+                            Net: {c.netLocal >= 0 ? '+' : '−'}{money(c.netLocal, c.currency)}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-zinc-500 font-mono italic py-2">Assign a banker in the Roster tab for {c.name} to route regional debts.</p>
                     )}
                   </div>
-
-                  {c.bankName ? (
-                    <div className="divide-y divide-white/5">
-                      {nonBank.map((m) => {
-                        const t = transfersByKey.get(m.key);
-                        const settled = t ? Boolean(markFor(t.legId)) : false;
-
-                        return (
-                          <div key={m.key} className="flex items-center justify-between py-2 text-xs gap-3">
-                            <div className="flex items-center gap-2.5 min-w-0">
-                              {t && (
-                                <button
-                                  type="button"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    toggleMark(t.legId, () => ({
-                                      session_id: sessionId,
-                                      leg_id: t.legId,
-                                      scope: 'player',
-                                      country: t.country,
-                                      party_key: pidByKey.get(t.partyKey) || t.partyKey,
-                                      party_name: t.partyName,
-                                      counterparty_key: pidByKey.get(t.bankKey) || t.bankKey,
-                                      counterparty_name: t.bankName,
-                                      direction: t.direction,
-                                      amount_cad: t.amount,
-                                      amount_local: t.amountLocal,
-                                      currency: t.currency,
-                                      session_date: startDate || null
-                                    }))
-                                  }
-                                  className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
-                                    settled
-                                      ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
-                                      : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
-                                  }`}
-                                  title={settled ? "Settled (Click to mark unsettled)" : "Click to mark as settled"}
-                                >
-                                  <Check className={`w-3 h-3 stroke-[3] transition-transform ${settled ? 'scale-100' : 'scale-0'}`} />
-                                </button>
-                              )}
-                              <span className={`truncate font-medium font-sans ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
-                                {m.name}
-                              </span>
-                            </div>
-
-                            <div className="shrink-0 text-right">
-                              {settled ? (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/30 uppercase">
-                                  <Check className="w-3 h-3" /> Settled
-                                </span>
-                              ) : (
-                                <span className={`font-mono tabular-nums text-xs font-bold ${m.netLocal >= 0 ? 'text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]' : 'text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]'}`}>
-                                  {m.netLocal >= 0
-                                    ? `receives ${money(m.netLocal, c.currency)}`
-                                    : `pays ${money(m.netLocal, c.currency)}`}
-                                  {converted && (
-                                    <span className="text-zinc-500 text-[10px] ml-1 font-normal font-mono">
-                                      ({money(m.netCad, 'CAD')})
-                                    </span>
-                                  )}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {nonBank.length === 0 && (
-                        <div className="py-2 text-xs text-zinc-500 font-mono italic">All players in {c.name} broke even.</div>
-                      )}
-
-                      <div className="flex items-center justify-between pt-2 text-xs text-zinc-400 font-mono">
-                        <span className="flex items-center gap-1.5 font-medium">
-                          <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-                          {c.bankName} (Bank)
-                        </span>
-                        <span className="font-bold text-zinc-200 tabular-nums">
-                          Net: {c.netLocal >= 0 ? '+' : '−'}{money(c.netLocal, c.currency)}
-                        </span>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-zinc-500 font-mono italic">Assign a banker for {c.name} to route regional debts.</p>
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
 
             {/* Inter-Bank Transfers */}
             {safeBankTransfers.length > 0 && (
-              <div className="bg-black/60 border border-white/10 p-3.5 space-y-2">
-                <div className="text-xs font-bold font-mono text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+              <div className="bg-black/60 border border-white/10 p-4 space-y-3">
+                <div className="text-xs font-bold font-mono text-amber-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-white/10 pb-2">
                   <Sparkles className="w-3.5 h-3.5 text-amber-400 drop-shadow-[0_0_4px_rgba(245,158,11,0.8)]" />
-                  Inter-Bank Clearing
+                  Inter-Bank Clearing Desk
                 </div>
                 <div className="divide-y divide-white/5">
                   {safeBankTransfers.map((t) => {
@@ -497,7 +501,7 @@ export default function SessionSettlementPanel({
         {mode === 'peer' && peerSettlement && (
           <div className="space-y-2">
             {(Array.isArray(peerSettlement.transactions) ? peerSettlement.transactions : []).map((t, i) => (
-              <div key={i} className="flex items-center justify-between p-3 bg-black/60 border border-white/10 text-xs">
+              <div key={i} className="flex items-center justify-between p-3.5 bg-black/60 border border-white/10 text-xs">
                 <div className="flex items-center gap-2 font-medium font-sans">
                   <span className="text-zinc-200">{t.from}</span>
                   <ArrowRight className="w-3.5 h-3.5 text-zinc-500" />
