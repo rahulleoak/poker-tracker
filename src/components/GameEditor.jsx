@@ -15,7 +15,8 @@ import {
   DollarSign,
   Link,
   Unlink,
-  UserPlus
+  UserPlus,
+  Check
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
@@ -605,10 +606,10 @@ function GameEditorInner({
       </div>
 
       {/* Main Grid: Ledger Editor on Left, Unified Settlement Panel on Right */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
         
         {/* Ledger Table */}
-        <div className="lg:col-span-2 hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl flex flex-col">
+        <div className="xl:col-span-8 hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl flex flex-col min-w-0">
           <div className="p-4 border-b border-white/10 bg-black/60 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h3 className="font-bold text-white flex items-center gap-2 font-sans uppercase tracking-wider text-sm">
@@ -641,14 +642,14 @@ function GameEditorInner({
             <table className="w-full text-left border-collapse text-xs sm:text-sm">
               <thead>
                 <tr className="border-b border-white/10 bg-black/80 text-zinc-400 font-mono font-semibold uppercase tracking-wider text-[11px]">
-                  <th className="p-3">Player</th>
-                  <th className="p-3 text-center">Currency</th>
-                  <th className="p-3 text-center">Bank</th>
-                  <th className="p-3 text-center">Buy-In</th>
-                  <th className="p-3 text-center">Buy-Out</th>
-                  <th className="p-3 text-center">Stack</th>
-                  <th className="p-3 text-right">Net</th>
-                  <th className="p-3 text-right w-10"></th>
+                  <th className="p-2.5 sm:p-3">Player</th>
+                  <th className="p-2 sm:p-3 text-center w-16">FX</th>
+                  <th className="p-2 sm:p-3 text-center w-14">Bank</th>
+                  <th className="p-2 sm:p-3 text-center">Buy-In</th>
+                  <th className="p-2 sm:p-3 text-center">Buy-Out</th>
+                  <th className="p-2 sm:p-3 text-center">Stack</th>
+                  <th className="p-2.5 sm:p-3 text-right">Net</th>
+                  <th className="p-2 sm:p-3 text-right w-8"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5 font-medium">
@@ -659,19 +660,19 @@ function GameEditorInner({
 
                   return (
                     <tr key={entry?.id || index} className="hover:bg-white/[0.03] transition-colors group">
-                      <td className="p-3">
-                        <div className="flex items-center gap-2">
+                      <td className="p-2.5 sm:p-3">
+                        <div className="flex items-center gap-1.5">
                           <input 
                             type="text" 
                             value={entry?.name || ''}
                             onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
                             placeholder="Player name..."
-                            className="bg-black border border-white/15 px-2.5 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-32 sm:w-40 transition-all font-sans font-semibold text-xs sm:text-sm"
+                            className="bg-black border border-white/15 px-2 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-28 sm:w-36 transition-all font-sans font-semibold text-xs sm:text-sm"
                           />
                           <button
                             type="button"
                             onClick={() => handleOpenLinkPopover(index)}
-                            className={`p-1.5 border transition-all ${
+                            className={`p-1.5 border transition-all shrink-0 ${
                               linkInfo.isLinked
                                 ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)] hover:bg-emerald-500/25'
                                 : 'bg-black/60 border-white/10 text-zinc-500 hover:text-zinc-300 hover:border-white/30'
@@ -683,11 +684,11 @@ function GameEditorInner({
                         </div>
                       </td>
 
-                      <td className="p-3 text-center">
+                      <td className="p-2 sm:p-3 text-center">
                         <select 
                           value={entry?.currency || gameCurrency}
                           onChange={(e) => handleEntryChange(index, 'currency', e.target.value)}
-                          className="bg-black border border-white/15 px-2 py-1.5 text-zinc-300 text-xs font-mono font-bold outline-none focus:border-cyan-400 transition-colors cursor-pointer"
+                          className="bg-black border border-white/15 px-1.5 py-1.5 text-zinc-300 text-xs font-mono font-bold outline-none focus:border-cyan-400 transition-colors cursor-pointer"
                         >
                           {(Array.isArray(TOP_CURRENCIES) ? TOP_CURRENCIES : ['USD', 'CAD']).map(c => (
                             <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>
@@ -695,21 +696,26 @@ function GameEditorInner({
                         </select>
                       </td>
 
-                      <td className="p-3 text-center">
-                        <input 
-                          type="checkbox" 
-                          checked={Boolean(entry?.isBank)}
-                          onChange={(e) => handleEntryChange(index, 'isBank', e.target.checked)}
-                          className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
-                          title="Designate as Bank for this currency"
-                        />
+                      <td className="p-2 sm:p-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleEntryChange(index, 'isBank', !entry?.isBank)}
+                          className={`w-5 h-5 mx-auto border transition-all flex items-center justify-center cursor-pointer ${
+                            entry?.isBank
+                              ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]'
+                              : 'bg-black/80 border-white/20 text-transparent hover:border-white/40'
+                          }`}
+                          title={entry?.isBank ? "Designated Bank (Click to toggle off)" : "Click to designate as Bank for this currency"}
+                        >
+                          <Check className={`w-3.5 h-3.5 stroke-[3] transition-transform ${entry?.isBank ? 'scale-100 text-cyan-400' : 'scale-0'}`} />
+                        </button>
                       </td>
 
-                      <td className="p-3">
+                      <td className="p-2 sm:p-3">
                         <div className="flex items-center justify-center gap-1">
                           <button 
                             onClick={() => adjustValue(index, 'buyIn', -globalIncrement)}
-                            className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                            className="p-1 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
                           >
                             <Minus className="w-3 h-3" />
                           </button>
@@ -718,22 +724,22 @@ function GameEditorInner({
                             min="0"
                             value={entry?.buyIn === 0 ? '' : (entry?.buyIn ?? '')}
                             onChange={(e) => handleEntryChange(index, 'buyIn', e.target.value === '' ? 0 : Number(e.target.value))}
-                            className="w-16 bg-black border border-white/15 px-1 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-14 sm:w-16 bg-black border border-white/15 px-1 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
                           />
                           <button 
                             onClick={() => adjustValue(index, 'buyIn', globalIncrement)}
-                            className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                            className="p-1 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
                           >
                             <Plus className="w-3 h-3" />
                           </button>
                         </div>
                       </td>
 
-                      <td className="p-3">
+                      <td className="p-2 sm:p-3">
                         <div className="flex items-center justify-center gap-1">
                           <button 
                             onClick={() => adjustValue(index, 'buyOut', -globalIncrement)}
-                            className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                            className="p-1 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
                           >
                             <Minus className="w-3 h-3" />
                           </button>
@@ -742,30 +748,30 @@ function GameEditorInner({
                             min="0"
                             value={entry?.buyOut === 0 ? '' : (entry?.buyOut ?? '')}
                             onChange={(e) => handleEntryChange(index, 'buyOut', e.target.value === '' ? 0 : Number(e.target.value))}
-                            className="w-16 bg-black border border-white/15 px-1 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-14 sm:w-16 bg-black border border-white/15 px-1 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
                           />
                           <button 
                             onClick={() => adjustValue(index, 'buyOut', globalIncrement)}
-                            className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                            className="p-1 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
                           >
                             <Plus className="w-3 h-3" />
                           </button>
                         </div>
                       </td>
 
-                      <td className="p-3">
+                      <td className="p-2 sm:p-3">
                         <div className="flex justify-center">
                           <input 
                             type="number" 
                             min="0"
                             value={entry?.stack === 0 ? '' : (entry?.stack ?? '')}
                             onChange={(e) => handleEntryChange(index, 'stack', e.target.value === '' ? 0 : Number(e.target.value))}
-                            className="w-20 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-16 sm:w-20 bg-black border border-white/15 px-1.5 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
                           />
                         </div>
                       </td>
 
-                      <td className={`p-3 text-right font-mono tabular-nums font-bold ${
+                      <td className={`p-2.5 sm:p-3 text-right font-mono tabular-nums font-bold ${
                         net > 0 ? 'text-emerald-400 drop-shadow-[0_0_6px_rgba(34,197,94,0.6)]' :
                         net < 0 ? 'text-rose-400 drop-shadow-[0_0_6px_rgba(244,63,94,0.6)]' :
                         'text-zinc-500'
@@ -773,7 +779,7 @@ function GameEditorInner({
                         {net > 0 ? '+' : ''}{net === 0 ? `0` : formatChips(net)}
                       </td>
 
-                      <td className="p-3 text-right">
+                      <td className="p-2 sm:p-3 text-right">
                         <button 
                           onClick={() => handleRemoveRow(index)}
                           className="text-zinc-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
@@ -809,7 +815,7 @@ function GameEditorInner({
         </div>
 
         {/* Settlement Panel */}
-        <div className="lg:col-span-1">
+        <div className="xl:col-span-4 min-w-0">
           <SessionSettlementPanel
             entries={safeEntries}
             settlementConfig={{

@@ -574,7 +574,7 @@ export default function App() {
     <div className="min-h-screen bg-black text-zinc-200 font-sans selection:bg-emerald-500/30 selection:text-emerald-300">
       {/* Top HUD Glass Navbar */}
       <nav className="bg-black/80 border-b border-white/10 backdrop-blur-xl sticky top-0 z-30">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div 
             onClick={() => navigate('/dashboard')}
             className="flex items-center gap-2.5 text-emerald-400 font-bold text-lg tracking-tight cursor-pointer hover:opacity-90 transition-opacity group"
@@ -642,7 +642,7 @@ export default function App() {
       </nav>
 
       {/* Main Routed Page Content */}
-      <main className="max-w-6xl mx-auto px-4 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Routes>
           <Route path="/" element={
             <Dashboard 
@@ -716,7 +716,7 @@ export default function App() {
 
       {/* Footer HUD Readout */}
       <footer className="border-t border-white/10 mt-12 py-6 text-center text-xs text-zinc-500 font-mono">
-        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
           <p className="flex items-center gap-2 font-medium">
             <span className="text-zinc-300 font-sans font-bold">OffSuite</span>
             <span className="text-zinc-700 font-mono">::</span>

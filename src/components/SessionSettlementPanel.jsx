@@ -344,13 +344,12 @@ export default function SessionSettlementPanel({
 
                         return (
                           <div key={m.key} className="flex items-center justify-between py-2 text-xs gap-3">
-                            <label className="flex items-center gap-2.5 min-w-0 cursor-pointer select-none">
+                            <div className="flex items-center gap-2.5 min-w-0">
                               {t && (
-                                <input
-                                  type="checkbox"
-                                  checked={settled}
+                                <button
+                                  type="button"
                                   disabled={busy}
-                                  onChange={() =>
+                                  onClick={() =>
                                     toggleMark(t.legId, () => ({
                                       session_id: sessionId,
                                       leg_id: t.legId,
@@ -367,13 +366,20 @@ export default function SessionSettlementPanel({
                                       session_date: startDate || null
                                     }))
                                   }
-                                  className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
-                                />
+                                  className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
+                                    settled
+                                      ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+                                      : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
+                                  }`}
+                                  title={settled ? "Settled (Click to mark unsettled)" : "Click to mark as settled"}
+                                >
+                                  <Check className={`w-3 h-3 stroke-[3] transition-transform ${settled ? 'scale-100' : 'scale-0'}`} />
+                                </button>
                               )}
                               <span className={`truncate font-medium font-sans ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
                                 {m.name}
                               </span>
-                            </label>
+                            </div>
 
                             <div className="shrink-0 text-right">
                               {settled ? (
@@ -430,12 +436,11 @@ export default function SessionSettlementPanel({
                     const settled = Boolean(markFor(t.legId));
                     return (
                       <div key={t.legId} className="flex items-center justify-between py-2 text-xs gap-3">
-                        <label className="flex items-center gap-2 min-w-0 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={settled}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <button
+                            type="button"
                             disabled={busy}
-                            onChange={() =>
+                            onClick={() =>
                               toggleMark(t.legId, () => ({
                                 session_id: sessionId,
                                 leg_id: t.legId,
@@ -455,12 +460,19 @@ export default function SessionSettlementPanel({
                                 session_date: startDate || null
                               }))
                             }
-                            className="w-4 h-4 rounded border-white/20 text-emerald-500 focus:ring-emerald-500 bg-black cursor-pointer"
-                          />
+                            className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
+                              settled
+                                ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+                                : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
+                            }`}
+                            title={settled ? "Cleared (Click to mark uncleared)" : "Click to mark as cleared"}
+                          >
+                            <Check className={`w-3 h-3 stroke-[3] transition-transform ${settled ? 'scale-100' : 'scale-0'}`} />
+                          </button>
                           <span className={`truncate font-mono font-semibold ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
                             {t.from} <ArrowRight className="inline w-3 h-3 text-zinc-500 mx-0.5" /> {t.to}
                           </span>
-                        </label>
+                        </div>
 
                         <div className="shrink-0 text-right">
                           {settled ? (
