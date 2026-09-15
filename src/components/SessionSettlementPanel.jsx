@@ -15,6 +15,7 @@ import { calculateSettlement } from '../utils/settlement';
 import { buildSettlementText } from '../utils/settlementText';
 import { sessionApi } from '../utils/sessionApi';
 import { formatFiat } from '../utils/formatters';
+import CountryFlag from './CountryFlag';
 
 const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
 
@@ -59,9 +60,13 @@ export default function SessionSettlementPanel({
     return () => clearTimeout(t);
   }, [undoState]);
 
-  const safeEntriesList = useMemo(() => Array.isArray(entries) ? entries : [], [entries]);
+  const safeEntriesList = useMemo(() => {
+    return (Array.isArray(entries) ? entries : []).filter(
+      (e) => e && typeof e === 'object' && (e.name || '').trim() !== ''
+    );
+  }, [entries]);
 
-  // Compute Country-Banker Settlement
+  // Compute Banker Multi-Country Settlement
   const bankerSettlement = useMemo(() => {
     if (!isBalanced || totalBuyIn <= 0 || safeEntriesList.length === 0) {
       return null;
@@ -75,6 +80,7 @@ export default function SessionSettlementPanel({
       entries: namedEntries,
       chipsPerCad: settlementConfig?.chipsPerCad || (1 / (chipValue || 1)),
       cadToUsd: settlementConfig?.cadToUsd || (exchangeRates?.CAD ? 1 / exchangeRates.CAD : 0.74),
+      exchangeRates: settlementConfig?.exchangeRates || exchangeRates,
       bankByCountry: settlementConfig?.bankByCountry || {},
       countryByKey: settlementConfig?.countryByKey || {}
     });
@@ -105,83 +111,67 @@ export default function SessionSettlementPanel({
     return map;
   }, [safeEntriesList]);
 
-  const safeMarks = useMemo(() => Array.isArray(marks) ? marks : [], [marks]);
+  // Marks map for quick check by leg_id
+  const markMap = useMemo(() => {
+    const map = new Map();
+    for (const m of marks) {
+      if (m && m.leg_id) {
+        map.set(m.leg_id, m);
+      }
+    }
+    return map;
+  }, [marks]);
 
-  const markFor = useCallback((legId) => {
-    return safeMarks.find(m => m && m.leg_id === legId && !m.undone_at) || null;
-  }, [safeMarks]);
+  const showUndo = (markId, label) => {
+    setUndoState({ markId, label });
+  };
 
-  const toggleMark = useCallback(async (legId, buildRow) => {
+  const handleToggle = async (isCurrentlySettled, leg) => {
     if (busy) return;
     setBusy(true);
     try {
-      const existing = markFor(legId);
-      if (existing) {
-        await sessionApi.undoMarks([existing.id]);
-        setUndoState(null);
+      if (isCurrentlySettled) {
+        const existing = markMap.get(leg.legId);
+        if (existing) {
+          await sessionApi.undoMarks([existing.id]);
+          setMarks(prev => prev.filter(m => m.id !== existing.id));
+        }
       } else {
-        const row = buildRow();
-        const inserted = await sessionApi.addMarks([row]);
-        const ids = (Array.isArray(inserted) ? inserted : []).map(r => r?.id).filter(Boolean);
-        if (ids.length) {
-          setUndoState({ ids, label: `Marked "${row.party_name || 'Transfer'}" as settled` });
+        const payload = {
+          session_id: sessionId,
+          leg_id: leg.legId,
+          scope: leg.scope, // 'player' | 'bank'
+          country: leg.country || null,
+          party_key: leg.partyKey || leg.fromKey || leg.partyName || leg.from,
+          party_name: leg.partyName || leg.from,
+          counterparty_key: leg.bankKey || leg.toKey || null,
+          counterparty_name: leg.bankName || leg.to || null,
+          direction: leg.direction,
+          amount_cad: leg.amount,
+          amount_local: leg.amountLocal ?? leg.amount,
+          currency: leg.currency || 'CAD',
+          session_date: startDate
+        };
+        const inserted = await sessionApi.addMarks([payload]);
+        if (inserted && inserted[0]) {
+          setMarks(prev => [...prev, inserted[0]]);
+          showUndo(inserted[0].id, `Marked settled: ${leg.partyName || leg.from || ''}`);
         }
       }
-      await reloadMarks();
       if (onSettleChange) onSettleChange();
     } catch (err) {
       console.error('Failed to toggle settlement mark:', err);
     } finally {
       setBusy(false);
     }
-  }, [busy, markFor, reloadMarks, onSettleChange]);
+  };
 
-  const handleSettleAllInCountry = useCallback(async (countryCode) => {
-    if (!bankerSettlement || busy) return;
-    const playerTransfers = Array.isArray(bankerSettlement.playerTransfers) ? bankerSettlement.playerTransfers : [];
-    const transfers = playerTransfers.filter(
-      t => t && t.country === countryCode && !markFor(t.legId)
-    );
-    if (transfers.length === 0) return;
-
+  const handleUndo = async (markId) => {
+    if (!markId || busy) return;
     setBusy(true);
     try {
-      const rowsToInsert = transfers.map(t => ({
-        session_id: sessionId,
-        leg_id: t.legId,
-        scope: 'player',
-        country: t.country,
-        party_key: pidByKey.get(t.partyKey) || t.partyKey,
-        party_name: t.partyName,
-        counterparty_key: pidByKey.get(t.bankKey) || t.bankKey,
-        counterparty_name: t.bankName,
-        direction: t.direction,
-        amount_cad: t.amount,
-        amount_local: t.amountLocal,
-        currency: t.currency,
-        session_date: startDate || null
-      }));
-
-      const inserted = await sessionApi.addMarks(rowsToInsert);
-      await reloadMarks();
-      const ids = (Array.isArray(inserted) ? inserted : []).map(r => r?.id).filter(Boolean);
-      if (ids.length) {
-        setUndoState({ ids, label: `Settled ${transfers.length} player(s) in ${countryCode}` });
-      }
-      if (onSettleChange) onSettleChange();
-    } catch (err) {
-      console.error('Failed to batch settle:', err);
-    } finally {
-      setBusy(false);
-    }
-  }, [bankerSettlement, busy, markFor, sessionId, pidByKey, startDate, reloadMarks, onSettleChange]);
-
-  const handleUndo = useCallback(async (ids) => {
-    if (!ids?.length || busy) return;
-    setBusy(true);
-    try {
-      await sessionApi.undoMarks(ids);
-      await reloadMarks();
+      await sessionApi.undoMarks([markId]);
+      setMarks(prev => prev.filter(m => m.id !== markId));
       setUndoState(null);
       if (onSettleChange) onSettleChange();
     } catch (err) {
@@ -189,349 +179,302 @@ export default function SessionSettlementPanel({
     } finally {
       setBusy(false);
     }
-  }, [busy, reloadMarks, onSettleChange]);
+  };
 
-  const handleCopySummary = useCallback(async () => {
-    let text = '';
-    if (mode === 'banker' && bankerSettlement) {
-      text = buildSettlementText(bankerSettlement, {
-        sessionId,
-        isSettled: (legId) => Boolean(markFor(legId))
-      });
-    } else if (Array.isArray(peerSettlement?.transactions)) {
-      const dateStr = startDate ? ` (${startDate})` : '';
-      text = `♠️ Poker Settlement${dateStr}\n`;
-      text += peerSettlement.transactions.map(tx => `• ${tx.from} ➔ ${tx.to}: ${formatFiat(tx.amount, gameCurrency)}`).join('\n');
-    }
+  const handleCopy = () => {
+    if (!bankerSettlement && !peerSettlement) return;
+    const text = mode === 'banker' && bankerSettlement
+      ? buildSettlementText(bankerSettlement, { markIds: marks.map(m => m.leg_id), gameCurrency })
+      : peerSettlement?.settlementInstructions || '';
+    
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }, [mode, bankerSettlement, peerSettlement, sessionId, markFor, startDate, gameCurrency]);
-
-  const countryOfBankKey = useCallback((bankKey) => {
-    const countries = Array.isArray(bankerSettlement?.countries) ? bankerSettlement.countries : [];
-    return countries.find(c => c && c.bankKey === bankKey)?.code || null;
-  }, [bankerSettlement]);
-
-  if (!isBalanced || totalBuyIn === 0) {
+  if (!isBalanced || totalBuyIn <= 0) {
     return (
-      <div className="hud-corner-reticle bg-hud-card/80 border border-white/10 p-8 text-center space-y-3 backdrop-blur-xl">
-        <AlertCircle className="w-8 h-8 text-amber-400 drop-shadow-[0_0_6px_rgba(245,158,11,0.8)] mx-auto" />
-        <h3 className="font-bold text-white font-sans text-sm uppercase tracking-wider">Ledger Discrepancy</h3>
-        <p className="text-xs text-zinc-400 max-w-sm mx-auto font-sans">
-          Balance buy-ins with ending stacks to compute bank routes.
+      <div className="hud-corner-reticle bg-hud-card/90 border border-amber-500/20 p-6 text-center">
+        <AlertCircle className="w-8 h-8 text-amber-400 mx-auto mb-2" />
+        <h4 className="text-sm font-bold text-white uppercase font-mono tracking-wider">
+          Session Not Balanced
+        </h4>
+        <p className="text-xs text-zinc-400 mt-1">
+          Total buy-in must equal total cash-out before settlement instructions can be calculated.
         </p>
       </div>
     );
   }
 
-  const safeCountries = Array.isArray(bankerSettlement?.countries) ? bankerSettlement.countries : [];
-  const safePlayerTransfers = Array.isArray(bankerSettlement?.playerTransfers) ? bankerSettlement.playerTransfers : [];
-  const safeBankTransfers = Array.isArray(bankerSettlement?.bankTransfers) ? bankerSettlement.bankTransfers : [];
+  const allLegs = bankerSettlement 
+    ? [...(bankerSettlement.playerTransfers || []), ...(bankerSettlement.bankTransfers || [])]
+    : [];
+  const settledCount = allLegs.filter(l => markMap.has(l.legId)).length;
+  const isFullySettled = allLegs.length > 0 && settledCount === allLegs.length;
 
   return (
-    <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl flex flex-col font-sans">
-      {/* Header */}
-      <div className="p-4 border-b border-white/10 bg-black/60 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.3)]">
-            <Landmark className="w-4 h-4" />
+    <div className="space-y-6">
+      {/* Header bar */}
+      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4 shadow-xl backdrop-blur-xl">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+              <Landmark className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-white text-base tracking-tight">
+                  Session Settlement Checklist
+                </h3>
+                {isFullySettled && (
+                  <span className="px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-mono font-bold uppercase tracking-wider">
+                    Cleared
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 font-mono">
+                {mode === 'banker' ? 'Two-tier regional banking ledger' : 'Direct peer-to-peer minimal transfers'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-xs font-bold text-white font-sans uppercase tracking-wider flex items-center gap-1.5">
-              Settlement Checklist
-              <span className="text-[9px] uppercase font-mono font-bold tracking-widest px-1.5 py-0.5 bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
-                Live
-              </span>
-            </h3>
-            <p className="text-[11px] text-zinc-500 font-mono">Banker routes & ledger state</p>
+
+          <div className="flex items-center gap-2">
+            {/* Mode toggle */}
+            <div className="flex bg-black/60 border border-white/10 p-0.5">
+              <button
+                onClick={() => setMode('banker')}
+                className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-all ${
+                  mode === 'banker'
+                    ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Banker Ledger
+              </button>
+              <button
+                onClick={() => setMode('peer')}
+                className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-all ${
+                  mode === 'peer'
+                    ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                P2P Flow
+              </button>
+            </div>
+
+            {/* Copy button */}
+            <button
+              onClick={handleCopy}
+              className="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-white/15 text-zinc-200 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? 'Copied' : 'Copy Chat'}
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="flex bg-black/80 border border-white/10 p-0.5">
-            <button
-              onClick={() => setMode('banker')}
-              className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
-                mode === 'banker' 
-                  ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/30 shadow-[0_0_6px_rgba(16,185,129,0.3)]' 
-                  : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <Landmark className="w-3.5 h-3.5" /> Banker
-            </button>
-            <button
-              onClick={() => setMode('peer')}
-              className={`px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-1.5 ${
-                mode === 'peer' 
-                  ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/30 shadow-[0_0_6px_rgba(6,182,212,0.3)]' 
-                  : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <Users className="w-3.5 h-3.5" /> P2P
-            </button>
+        {/* Status progress bar */}
+        {mode === 'banker' && allLegs.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-white/5 flex items-center justify-between text-xs font-mono text-zinc-400">
+            <span>
+              Progress: <strong className="text-white">{settledCount}</strong> of <strong className="text-white">{allLegs.length}</strong> transfers completed
+            </span>
+            <div className="w-48 h-1.5 bg-zinc-800 overflow-hidden ml-4">
+              <div 
+                className="h-full bg-emerald-400 transition-all duration-300"
+                style={{ width: `${(settledCount / allLegs.length) * 100}%` }}
+              />
+            </div>
           </div>
-
-          <button
-            onClick={handleCopySummary}
-            className="px-3 py-1.5 text-xs font-mono font-bold uppercase tracking-wider bg-black/60 hover:bg-zinc-900 text-zinc-200 border border-white/15 transition-all flex items-center gap-1.5 hover:border-cyan-400 hover:text-cyan-300"
-            title="Copy formatted settlement text"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
-            <span>{copied ? 'Copied' : 'Copy Text'}</span>
-          </button>
-        </div>
+        )}
       </div>
 
-      {/* Content */}
-      <div className="p-4 sm:p-6 space-y-6 flex-1">
-        {mode === 'banker' && bankerSettlement && (
-          <>
-            <div className={`grid grid-cols-1 ${safeCountries.length > 1 ? 'lg:grid-cols-2' : ''} gap-4`}>
-              {safeCountries.map((c) => {
-                const members = Array.isArray(c?.members) ? c.members : [];
-                const nonBank = members.filter(m => m && !m.isBank && Math.abs(m.netLocal) >= 0.005);
-                const converted = c.currency !== 'CAD';
-                const transfersByKey = new Map(
-                  safePlayerTransfers
-                    .filter(t => t && t.country === c.code)
-                    .map(t => [t.partyKey, t])
-                );
-                const unsettledCount = nonBank.filter(m => {
-                  const t = transfersByKey.get(m.key);
-                  return t ? !markFor(t.legId) : true;
-                }).length;
+      {/* Banker Multi-Country Ledger Mode */}
+      {mode === 'banker' && bankerSettlement && (
+        <div className="space-y-4">
+          {/* Countries / Ledger Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {bankerSettlement.countries.map(c => {
+              const countryTransfers = bankerSettlement.playerTransfers.filter(t => t.country === c.code);
+              const openCount = countryTransfers.filter(t => !markMap.has(t.legId)).length;
 
-                return (
-                  <div key={c.code} className="bg-black/60 border border-white/10 p-4 space-y-3.5">
-                    <div className="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{c.flag}</span>
-                        <div>
-                          <span className="text-xs font-bold text-white uppercase tracking-wider font-sans block">{c.name} Ledger</span>
-                          <span className="text-[11px] text-zinc-400 font-mono">
-                            {c.bankName ? `Standing Bank: ${c.bankName}` : 'No Standing Bank Assigned'}
-                          </span>
-                        </div>
+              return (
+                <div 
+                  key={c.code}
+                  className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-xl backdrop-blur-xl flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                      <div className="flex items-center gap-2.5">
+                        <CountryFlag code={c.code} className="w-5 h-3.5 rounded-[2px] shadow-sm shrink-0" />
+                        <h4 className="font-bold text-white text-sm">
+                          {c.name} Ledger
+                        </h4>
                       </div>
-
-                      {c.bankName && unsettledCount > 0 && (
-                        <button
-                          onClick={() => handleSettleAllInCountry(c.code)}
-                          disabled={busy}
-                          className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 transition-colors bg-emerald-500/10 px-2.5 py-1 border border-emerald-500/30"
-                        >
-                          Settle All ({unsettledCount})
-                        </button>
-                      )}
+                      <span className="text-xs font-mono font-bold text-zinc-400">
+                        {c.currency}
+                      </span>
                     </div>
 
-                    {c.bankName ? (
-                      <div className="divide-y divide-white/5">
-                        {nonBank.map((m) => {
-                          const t = transfersByKey.get(m.key);
-                          const settled = t ? Boolean(markFor(t.legId)) : false;
+                    <div className="mt-3 space-y-1 text-xs font-mono">
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Standing Bank:</span>
+                        <strong className="text-white">{c.bankName || 'None assigned'}</strong>
+                      </div>
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Regional Net:</span>
+                        <strong className={c.netLocal >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                          {c.netLocal >= 0 ? '+' : ''}{money(c.netLocal, c.currency)}
+                        </strong>
+                      </div>
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Pending Transfers:</span>
+                        <strong className={openCount === 0 ? 'text-emerald-400' : 'text-amber-400'}>
+                          {openCount} Open
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
 
+                  {/* Player transfers within this country */}
+                  <div className="mt-4 pt-3 border-t border-white/5 space-y-2">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 block">
+                      Player ⇄ Bank Settlements
+                    </span>
+                    {countryTransfers.length === 0 ? (
+                      <p className="text-xs text-zinc-500 italic">No non-bank player transfers in this region.</p>
+                    ) : (
+                      <div className="divide-y divide-white/5">
+                        {countryTransfers.map(t => {
+                          const settled = markMap.has(t.legId);
                           return (
-                            <div key={m.key} className="flex items-center justify-between py-2 text-xs gap-3">
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                {t && (
-                                  <button
-                                    type="button"
-                                    disabled={busy}
-                                    onClick={() =>
-                                      toggleMark(t.legId, () => ({
-                                        session_id: sessionId,
-                                        leg_id: t.legId,
-                                        scope: 'player',
-                                        country: t.country,
-                                        party_key: pidByKey.get(t.partyKey) || t.partyKey,
-                                        party_name: t.partyName,
-                                        counterparty_key: pidByKey.get(t.bankKey) || t.bankKey,
-                                        counterparty_name: t.bankName,
-                                        direction: t.direction,
-                                        amount_cad: t.amount,
-                                        amount_local: t.amountLocal,
-                                        currency: t.currency,
-                                        session_date: startDate || null
-                                      }))
-                                    }
-                                    className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
-                                      settled
-                                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
-                                        : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
-                                    }`}
-                                    title={settled ? "Settled (Click to mark unsettled)" : "Click to mark as settled"}
-                                  >
-                                    <Check className={`w-3 h-3 stroke-[3] transition-transform ${settled ? 'scale-100' : 'scale-0'}`} />
-                                  </button>
-                                )}
-                                <span className={`truncate font-medium font-sans ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
-                                  {m.name}
+                            <div 
+                              key={t.legId}
+                              className="py-2 flex items-center justify-between text-xs font-mono gap-2"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <button
+                                  onClick={() => handleToggle(settled, t)}
+                                  disabled={busy}
+                                  className={`w-4 h-4 border transition-all flex items-center justify-center shrink-0 ${
+                                    settled
+                                      ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400'
+                                      : 'bg-black/60 border-white/20 text-transparent hover:border-white/40'
+                                  }`}
+                                >
+                                  <Check className={`w-3 h-3 stroke-[3] ${settled ? 'scale-100' : 'scale-0'}`} />
+                                </button>
+                                <span className={`truncate ${settled ? 'line-through text-zinc-600' : 'text-zinc-200'}`}>
+                                  {t.from} → {t.to}
                                 </span>
                               </div>
-
-                              <div className="shrink-0 text-right">
-                                {settled ? (
-                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/30 uppercase">
-                                    <Check className="w-3 h-3" /> Settled
-                                  </span>
-                                ) : (
-                                  <span className={`font-mono tabular-nums text-xs font-bold ${m.netLocal >= 0 ? 'text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]' : 'text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]'}`}>
-                                    {m.netLocal >= 0
-                                      ? `receives ${money(m.netLocal, c.currency)}`
-                                      : `pays ${money(m.netLocal, c.currency)}`}
-                                    {converted && (
-                                      <span className="text-zinc-500 text-[10px] ml-1 font-normal font-mono">
-                                        ({money(m.netCad, 'CAD')})
-                                      </span>
-                                    )}
-                                  </span>
-                                )}
-                              </div>
+                              <span className={`font-bold tabular-nums shrink-0 ${settled ? 'text-zinc-600' : 'text-emerald-400'}`}>
+                                {money(t.amountLocal, t.currency)}
+                              </span>
                             </div>
                           );
                         })}
-
-                        {nonBank.length === 0 && (
-                          <div className="py-2 text-xs text-zinc-500 font-mono italic">All players in {c.name} broke even.</div>
-                        )}
-
-                        <div className="flex items-center justify-between pt-2.5 text-xs text-zinc-400 font-mono">
-                          <span className="flex items-center gap-1.5 font-medium">
-                            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-                            {c.bankName} (Bank)
-                          </span>
-                          <span className="font-bold text-zinc-200 tabular-nums">
-                            Net: {c.netLocal >= 0 ? '+' : '−'}{money(c.netLocal, c.currency)}
-                          </span>
-                        </div>
                       </div>
-                    ) : (
-                      <p className="text-xs text-zinc-500 font-mono italic py-2">Assign a banker in the Roster tab for {c.name} to route regional debts.</p>
                     )}
                   </div>
-                );
-              })}
-            </div>
-
-            {/* Inter-Bank Transfers */}
-            {safeBankTransfers.length > 0 && (
-              <div className="bg-black/60 border border-white/10 p-4 space-y-3">
-                <div className="text-xs font-bold font-mono text-amber-400 uppercase tracking-wider flex items-center gap-1.5 border-b border-white/10 pb-2">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400 drop-shadow-[0_0_4px_rgba(245,158,11,0.8)]" />
-                  Inter-Bank Clearing Desk
                 </div>
-                <div className="divide-y divide-white/5">
-                  {safeBankTransfers.map((t) => {
-                    const settled = Boolean(markFor(t.legId));
-                    return (
-                      <div key={t.legId} className="flex items-center justify-between py-2 text-xs gap-3">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() =>
-                              toggleMark(t.legId, () => ({
-                                session_id: sessionId,
-                                leg_id: t.legId,
-                                scope: 'bank',
-                                country: countryOfBankKey(t.fromKey),
-                                party_key: pidByKey.get(t.fromKey) || t.fromKey,
-                                party_name: t.from,
-                                counterparty_key: pidByKey.get(t.toKey) || t.toKey,
-                                counterparty_name: t.to,
-                                direction: 'bank',
-                                amount_cad: t.amount,
-                                amount_local:
-                                  bankerSettlement.cadToUsd !== 1
-                                    ? t.amount * bankerSettlement.cadToUsd
-                                    : t.amount,
-                                currency: 'CAD',
-                                session_date: startDate || null
-                              }))
-                            }
-                            className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
-                              settled
-                                ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
-                                : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
-                            }`}
-                            title={settled ? "Cleared (Click to mark uncleared)" : "Click to mark as cleared"}
-                          >
-                            <Check className={`w-3 h-3 stroke-[3] transition-transform ${settled ? 'scale-100' : 'scale-0'}`} />
-                          </button>
-                          <span className={`truncate font-mono font-semibold ${settled ? 'text-zinc-600 line-through' : 'text-zinc-200'}`}>
-                            {t.from} <ArrowRight className="inline w-3 h-3 text-zinc-500 mx-0.5" /> {t.to}
-                          </span>
-                        </div>
+              );
+            })}
+          </div>
 
-                        <div className="shrink-0 text-right">
-                          {settled ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 border border-emerald-500/30 uppercase">
-                              <Check className="w-3 h-3" /> Cleared
-                            </span>
-                          ) : (
-                            <span className="font-mono tabular-nums text-xs font-bold text-amber-400 drop-shadow-[0_0_4px_rgba(245,158,11,0.6)]">
-                              {money(t.amount, 'CAD')}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+          {/* Inter-Bank Transfers */}
+          {bankerSettlement.bankTransfers && bankerSettlement.bankTransfers.length > 0 && (
+            <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-xl backdrop-blur-xl">
+              <div className="flex items-center gap-2 border-b border-white/10 pb-3">
+                <Landmark className="w-4 h-4 text-emerald-400" />
+                <h4 className="font-bold text-white text-sm font-mono uppercase tracking-wider">
+                  Inter-Bank Balancing Transfers
+                </h4>
               </div>
-            )}
-          </>
-        )}
+              <div className="divide-y divide-white/5 mt-3">
+                {bankerSettlement.bankTransfers.map(b => {
+                  const settled = markMap.has(b.legId);
+                  return (
+                    <div 
+                      key={b.legId}
+                      className="py-2.5 flex items-center justify-between text-xs font-mono gap-4"
+                    >
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleToggle(settled, b)}
+                          disabled={busy}
+                          className={`w-4 h-4 border transition-all flex items-center justify-center shrink-0 ${
+                            settled
+                              ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400'
+                              : 'bg-black/60 border-white/20 text-transparent hover:border-white/40'
+                          }`}
+                        >
+                          <Check className={`w-3 h-3 stroke-[3] ${settled ? 'scale-100' : 'scale-0'}`} />
+                        </button>
+                        <span className={`font-bold ${settled ? 'line-through text-zinc-600' : 'text-zinc-200'}`}>
+                          {b.from}
+                        </span>
+                        <ArrowRight className="w-3.5 h-3.5 text-zinc-500" />
+                        <span className={`font-bold ${settled ? 'line-through text-zinc-600' : 'text-zinc-200'}`}>
+                          {b.to}
+                        </span>
+                      </div>
+                      <span className={`font-bold tabular-nums ${settled ? 'text-zinc-600' : 'text-emerald-400'}`}>
+                        {money(b.amount, 'CAD')}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
-        {mode === 'peer' && peerSettlement && (
-          <div className="space-y-2">
-            {(Array.isArray(peerSettlement.transactions) ? peerSettlement.transactions : []).map((t, i) => (
-              <div key={i} className="flex items-center justify-between p-3.5 bg-black/60 border border-white/10 text-xs">
-                <div className="flex items-center gap-2 font-medium font-sans">
-                  <span className="text-zinc-200">{t.from}</span>
+      {/* Peer-to-Peer Mode */}
+      {mode === 'peer' && peerSettlement && (
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-xl backdrop-blur-xl space-y-4">
+          <div className="flex items-center justify-between border-b border-white/10 pb-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-cyan-400" />
+              <h4 className="font-bold text-white text-sm font-mono uppercase tracking-wider">
+                Direct Peer Transfers ({peerSettlement.settlements.length})
+              </h4>
+            </div>
+            <span className="text-xs font-mono text-zinc-400">
+              Total Volume: {formatFiat(peerSettlement.totalVolume, gameCurrency)}
+            </span>
+          </div>
+
+          <div className="divide-y divide-white/5">
+            {peerSettlement.settlements.map((s, idx) => (
+              <div key={idx} className="py-2.5 flex items-center justify-between text-xs font-mono">
+                <div className="flex items-center gap-2">
+                  <span className="text-rose-300 font-medium">{s.from}</span>
                   <ArrowRight className="w-3.5 h-3.5 text-zinc-500" />
-                  <span className="text-zinc-200">{t.to}</span>
+                  <span className="text-emerald-300 font-medium">{s.to}</span>
                 </div>
-                <span className="font-mono font-bold text-cyan-400 drop-shadow-[0_0_4px_rgba(6,182,212,0.6)]">
-                  {formatFiat(t.amount, gameCurrency)}
+                <span className="font-bold text-zinc-100">
+                  {formatFiat(s.amount, gameCurrency)}
                 </span>
               </div>
             ))}
-            {(!peerSettlement.transactions || peerSettlement.transactions.length === 0) && (
-              <p className="text-xs text-zinc-500 font-mono italic p-3">No settlements needed. Everyone broke even.</p>
-            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Undo Toast Notification */}
+      {/* Undo Toast */}
       {undoState && (
-        <div className="p-3 bg-zinc-900 border-t border-emerald-500/30 flex items-center justify-between text-xs animate-in fade-in slide-in-from-bottom duration-200">
-          <span className="text-emerald-400 font-medium font-sans flex items-center gap-1.5">
-            <Check className="w-3.5 h-3.5" />
-            {undoState.label}
-          </span>
+        <div className="fixed bottom-6 right-6 bg-black/95 border border-emerald-500/50 text-white px-4 py-3 shadow-2xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200 backdrop-blur-md font-mono text-xs">
+          <ShieldCheck className="w-4 h-4 text-emerald-400" />
+          <span>{undoState.label}</span>
           <button
-            onClick={() => handleUndo(undoState.ids)}
-            disabled={busy}
-            className="text-[11px] font-mono font-bold uppercase tracking-wider text-zinc-300 hover:text-white flex items-center gap-1 px-2 py-1 bg-black border border-white/10 hover:border-white/30 transition-all"
+            onClick={() => handleUndo(undoState.markId)}
+            className="ml-2 underline text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-bold"
           >
-            <RotateCcw className="w-3 h-3 text-cyan-400" /> Undo
+            <RotateCcw className="w-3 h-3" /> Undo
           </button>
         </div>
       )}

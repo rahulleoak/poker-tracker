@@ -197,9 +197,8 @@ async function listLegs() {
 }
 
 /**
- * Backfill / self-heal: build legs for any session that has none yet (rows
- * saved before the legs table, or a prior write that failed). Cheap no-op once
- * every session is covered.
+ * Backfill / self-heal: build legs for any session that has none yet or where
+ * legacy legs had countries misaligned with player currencies/settlement config.
  *
  * @returns {Promise<number>} sessions backfilled
  */
@@ -207,25 +206,41 @@ async function ensureLegs() {
   if (!supabase) return 0;
   try {
     const [sessRes, legRes] = await Promise.all([
-      supabase.from('admin_sessions').select('id'),
-      supabase.from('admin_session_legs').select('session_id')
+      supabase.from('admin_sessions').select('id, date, currency, entries, settlement'),
+      supabase.from('admin_session_legs').select('session_id, country, currency')
     ]);
-    if (sessRes.error || legRes.error) return 0;
+    if (sessRes.error || !sessRes.data || sessRes.data.length === 0) {
+      if (sessRes.error) console.warn('sessionApi.ensureLegs query error:', sessRes.error);
+      return 0;
+    }
 
-    const covered = new Set((legRes.data || []).map((r) => r.session_id));
-    const missing = (sessRes.data || []).map((r) => r.id).filter((id) => !covered.has(id));
-    if (missing.length === 0) return 0;
+    const existingLegs = legRes.data || [];
+    const covered = new Set(existingLegs.map((r) => r.session_id));
+    const missing = sessRes.data.filter((s) => !covered.has(s.id));
 
-    const { data: rows, error } = await supabase
-      .from('admin_sessions')
-      .select('id, date, entries, settlement')
-      .in('id', missing);
-    if (error) return 0;
+    // Also detect legacy sessions whose legs were hardcoded to 'CA' before multi-currency support
+    const misaligned = sessRes.data.filter((s) => {
+      if (!covered.has(s.id)) return false;
+      const sLegs = existingLegs.filter((l) => l.session_id === s.id);
+      if (sLegs.length === 0) return true;
+      const entries = Array.isArray(s.entries) ? s.entries : [];
+      const sCur = s.currency || 'CAD';
+      const hasNonCad = sCur !== 'CAD' || entries.some((e) => e.currency && e.currency !== 'CAD');
+      // If session has non-CAD currency or entries but legs table only has CA
+      if (hasNonCad && sLegs.every((l) => l.country === 'CA')) {
+        return true;
+      }
+      return false;
+    });
+
+    const sessionsToUpdate = [...missing, ...misaligned];
+    if (sessionsToUpdate.length === 0) return 0;
 
     let n = 0;
-    for (const row of rows || []) {
+    for (const row of sessionsToUpdate) {
       const legs = legsFromSession(row);
       if (legs.length === 0) continue;
+      await supabase.from('admin_session_legs').delete().eq('session_id', row.id);
       const { error: insErr } = await supabase.from('admin_session_legs').insert(legs);
       if (!insErr) n += 1;
     }

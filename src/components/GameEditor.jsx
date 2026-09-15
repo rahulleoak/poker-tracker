@@ -26,6 +26,7 @@ import { supabase } from '../utils/supabase';
 import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
 import { calculateSettlement } from '../utils/settlement';
 import { keyOfEntry } from '../utils/bankSettlement';
+import { countryFromCurrency } from '../utils/countries';
 import { parsePokerNowLogStats } from '../utils/csvParser';
 import { mergeSessionEntries } from '../utils/sessionMapper';
 import InfoTooltip from './InfoTooltip';
@@ -1328,12 +1329,13 @@ function GameEditorInner({
             settlementConfig={{
               chipsPerCad: ratioChips && ratioFiat ? (ratioChips / ratioFiat) : (1 / (chipValue || 1)),
               cadToUsd: exchangeRates?.CAD ? (1 / exchangeRates.CAD) : 0.74,
+              exchangeRates,
               countryByKey: (function() {
                 const map = {};
                 safeEntries.forEach(e => {
                   if (!e) return;
                   const k = keyOfEntry(e);
-                  map[k] = (e.currency === 'USD' || e.currency === 'US') ? 'US' : 'CA';
+                  map[k] = countryFromCurrency(e.currency || gameCurrency);
                 });
                 return map;
               })(),
@@ -1341,7 +1343,7 @@ function GameEditorInner({
                 const map = {};
                 safeEntries.forEach(e => {
                   if (e?.isBank) {
-                    const cCode = (e.currency === 'USD' || e.currency === 'US') ? 'US' : 'CA';
+                    const cCode = countryFromCurrency(e.currency || gameCurrency);
                     map[cCode] = keyOfEntry(e);
                   }
                 });

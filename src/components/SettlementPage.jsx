@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Landmark,
@@ -11,16 +11,13 @@ import {
   ChevronUp,
   Check
 } from 'lucide-react';
-import { useIdentityGraph, makeNameResolver } from '../hooks/useIdentityGraph';
+import { useIdentityGraph, makeNameResolver, makeIdResolver } from '../hooks/useIdentityGraph';
 import { sessionApi } from '../utils/sessionApi';
 import { buildCountrySettlement, legsFromSession } from '../utils/settlementLedger';
+import { country, countryFromCurrency, COUNTRIES } from '../utils/countries';
 import { loadGamesFromStorage } from '../utils/storage';
 import { ErrorBoundary } from './ErrorBoundary';
-
-const COUNTRIES = [
-  { code: 'CA', name: 'Canada', currency: 'CAD', flag: '🇨🇦' },
-  { code: 'US', name: 'United States', currency: 'USD', flag: '🇺🇸' }
-];
+import CountryFlag from './CountryFlag';
 
 const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
 
@@ -58,9 +55,11 @@ function SettlementPageContent({ embedded = false }) {
   const navigate = useNavigate();
 
   const [activeCountry, setActiveCountry] = useState(() => {
-    const code = (routeCountry || 'CA').toUpperCase();
-    return COUNTRIES.some((c) => c.code === code) ? code : 'CA';
+    return (routeCountry || 'CA').toUpperCase();
   });
+
+  const [countryDropdownOpen, setCountryDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
 
   const [legs, setLegs] = useState([]);
   const [marks, setMarks] = useState([]);
@@ -70,17 +69,32 @@ function SettlementPageContent({ embedded = false }) {
   const [search, setSearch] = useState('');
   const [undoToast, setUndoToast] = useState(null);
 
-  const { players, resolve } = useIdentityGraph();
+  const { players, playerLinks, resolve, resolveId } = useIdentityGraph();
 
   const nameOf = useMemo(() => {
     if (typeof resolve === 'function') return resolve;
-    return makeNameResolver(players);
-  }, [resolve, players]);
+    return makeNameResolver(players, playerLinks);
+  }, [resolve, players, playerLinks]);
+
+  const idOf = useMemo(() => {
+    if (typeof resolveId === 'function') return resolveId;
+    return makeIdResolver(players, playerLinks);
+  }, [resolveId, players, playerLinks]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setCountryDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     if (routeCountry) {
       const code = routeCountry.toUpperCase();
-      if (COUNTRIES.some((c) => c.code === code) && code !== activeCountry) {
+      if (code !== activeCountry) {
         setActiveCountry(code);
       }
     }
@@ -103,17 +117,24 @@ function SettlementPageContent({ embedded = false }) {
         sessionApi.listMarks()
       ]);
 
-      let finalLegs = Array.isArray(legsRes) ? legsRes : [];
-      // Fallback: derive legs from stored sessions if admin_session_legs has no records yet
-      if (finalLegs.length === 0) {
-        try {
-          const storedGames = loadGamesFromStorage();
-          if (Array.isArray(storedGames) && storedGames.length > 0) {
-            finalLegs = storedGames.flatMap(legsFromSession);
+      let finalLegs = Array.isArray(legsRes) ? [...legsRes] : [];
+      try {
+        const storedGames = loadGamesFromStorage();
+        if (Array.isArray(storedGames) && storedGames.length > 0) {
+          const localLegs = storedGames.flatMap(legsFromSession);
+          if (finalLegs.length === 0) {
+            finalLegs = localLegs;
+          } else {
+            const coveredSessionIds = new Set(finalLegs.map((l) => l.session_id || l.sessionId));
+            for (const leg of localLegs) {
+              if (!coveredSessionIds.has(leg.session_id || leg.sessionId)) {
+                finalLegs.push(leg);
+              }
+            }
           }
-        } catch (e) {
-          console.warn('Fallback games load error:', e);
         }
+      } catch (e) {
+        console.warn('Fallback games load error:', e);
       }
 
       setLegs(finalLegs);
@@ -130,8 +151,40 @@ function SettlementPageContent({ embedded = false }) {
     loadData();
   }, [loadData]);
 
+  const activeCountriesList = useMemo(() => {
+    const presentCodes = new Set(['CA', 'US']);
+    (legs || []).forEach((l) => {
+      if (l?.country) presentCodes.add(l.country.toUpperCase());
+      if (l?.counter_country) presentCodes.add(l.counter_country.toUpperCase());
+      if (l?.currency) presentCodes.add(countryFromCurrency(l.currency));
+    });
+    (players || []).forEach((p) => {
+      if (p?.country) presentCodes.add(p.country.toUpperCase());
+      if (p?.preferred_currency) presentCodes.add(countryFromCurrency(p.preferred_currency));
+      if (p?.currency) presentCodes.add(countryFromCurrency(p.currency));
+    });
+    try {
+      const stored = loadGamesFromStorage();
+      (stored || []).forEach((g) => {
+        if (g?.currency) presentCodes.add(countryFromCurrency(g.currency));
+        (g?.entries || []).forEach((e) => {
+          if (e?.currency) presentCodes.add(countryFromCurrency(e.currency));
+          if (e?.preferred_currency) presentCodes.add(countryFromCurrency(e.preferred_currency));
+        });
+        if (g?.settlement?.bankByCountry) {
+          Object.keys(g.settlement.bankByCountry).forEach((c) => presentCodes.add(c.toUpperCase()));
+        }
+      });
+    } catch {
+      // ignore
+    }
+    if (activeCountry) presentCodes.add(activeCountry.toUpperCase());
+
+    return Array.from(presentCodes).map((cCode) => country(cCode));
+  }, [legs, players, activeCountry]);
+
   const currentCountryConfig = useMemo(
-    () => COUNTRIES.find((c) => c.code === activeCountry) || COUNTRIES[0],
+    () => country(activeCountry),
     [activeCountry]
   );
 
@@ -140,9 +193,10 @@ function SettlementPageContent({ embedded = false }) {
       legs,
       marks,
       countryCode: activeCountry,
-      nameOf
+      nameOf,
+      resolveId: idOf
     });
-  }, [activeCountry, legs, marks, nameOf]);
+  }, [activeCountry, legs, marks, nameOf, idOf]);
 
   const trackedSessionCount = useMemo(() => {
     const sessionIds = new Set(legs.map((l) => l.session_id || l.sessionId).filter(Boolean));
@@ -277,8 +331,8 @@ function SettlementPageContent({ embedded = false }) {
 
   return (
     <div className="space-y-6 font-sans">
-      {/* Top Header Card */}
-      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 shadow-xl backdrop-blur-xl">
+      {/* Top Header Card with relative z-30 so dropdown menu floats cleanly above lower cards */}
+      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 shadow-xl backdrop-blur-xl relative z-30">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -297,26 +351,63 @@ function SettlementPageContent({ embedded = false }) {
             </p>
           </div>
 
-          {/* Country Selector Tabs */}
-          <div className="flex gap-2 bg-black/60 border border-white/10 p-1 self-start md:self-auto">
-            {COUNTRIES.map((c) => {
-              const active = c.code === activeCountry;
-              return (
-                <button
-                  key={c.code}
-                  onClick={() => handleCountrySelect(c.code)}
-                  className={`px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
-                    active
-                      ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
-                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
-                  }`}
-                >
-                  <span className="text-base">{c.flag}</span>
-                  <span>{c.name}</span>
-                  <span className="text-[10px] text-zinc-500">({c.currency})</span>
-                </button>
-              );
-            })}
+          {/* Regional Ledger Dropdown Selector */}
+          <div className="relative self-start md:self-auto z-40" ref={dropdownRef}>
+            <div className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+              <Landmark className="w-3 h-3 text-emerald-400" />
+              <span>Regional Ledger</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCountryDropdownOpen((prev) => !prev)}
+              className="bg-black/90 hover:bg-zinc-900/90 border border-white/20 hover:border-emerald-500/50 text-white font-mono text-xs sm:text-sm font-bold px-3 py-2 flex items-center justify-between gap-3 min-w-[220px] transition-all shadow-lg focus:outline-none focus:border-emerald-400 focus:shadow-[0_0_10px_rgba(16,185,129,0.3)]"
+            >
+              <div className="flex items-center gap-2.5 truncate">
+                <CountryFlag code={currentCountryConfig.code} className="w-5 h-3.5 rounded-[2px] shadow-sm shrink-0" />
+                <span className="font-sans font-bold text-zinc-100 truncate">{currentCountryConfig.name}</span>
+                <span className="text-emerald-400 text-xs font-mono">({currentCountryConfig.currency})</span>
+              </div>
+              <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 shrink-0 ${countryDropdownOpen ? 'rotate-180 text-emerald-400' : ''}`} />
+            </button>
+
+            {countryDropdownOpen && (
+              <div className="absolute right-0 mt-1 w-64 bg-zinc-950/98 shadow-2xl shadow-black/90 backdrop-blur-2xl z-50 rounded-sm overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-3 py-2 text-[10px] font-mono text-zinc-500 uppercase tracking-widest bg-black/70">
+                  Select Active Bank Ledger
+                </div>
+                <div className="max-h-60 overflow-y-auto py-1">
+                  {activeCountriesList.map((c) => {
+                    const isSelected = c.code === activeCountry;
+                    return (
+                      <button
+                        key={c.code}
+                        type="button"
+                        onClick={() => {
+                          handleCountrySelect(c.code);
+                          setCountryDropdownOpen(false);
+                        }}
+                        className={`w-full px-3 py-2.5 text-left text-xs font-mono flex items-center justify-between transition-colors ${
+                          isSelected
+                            ? 'bg-emerald-500/15 text-emerald-300 font-bold'
+                            : 'text-zinc-300 hover:bg-white/5 hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <CountryFlag code={c.code} className="w-4 h-3 rounded-[2px] shadow-sm shrink-0" />
+                          <span className="font-sans truncate">{c.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] text-zinc-400 font-bold px-1.5 py-0.5 bg-black/60 border border-white/5">
+                            {c.currency}
+                          </span>
+                          {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -360,17 +451,15 @@ function SettlementPageContent({ embedded = false }) {
 
       {/* Undo Toast */}
       {undoToast && (
-        <div className="fixed bottom-6 right-6 z-50 bg-zinc-900 border border-emerald-500/40 shadow-2xl p-4 flex items-center gap-4 text-xs font-mono animate-in fade-in slide-in-from-bottom duration-200 max-w-md">
-          <span className="text-emerald-400 flex items-center gap-2 font-medium">
-            <CheckCircle2 className="w-4 h-4" />
-            {undoToast.label}
-          </span>
+        <div className="fixed bottom-6 right-6 bg-black/95 border border-emerald-500/50 text-white px-4 py-3 shadow-2xl flex items-center gap-3 z-50 animate-in fade-in slide-in-from-bottom-2 duration-200 backdrop-blur-md">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="text-xs font-mono font-medium">{undoToast.label}</span>
           <button
             onClick={() => handleUndo(undoToast.ids)}
             disabled={busy}
-            className="px-3 py-1 bg-black border border-white/20 text-zinc-200 hover:text-white hover:border-emerald-400 uppercase tracking-wider font-bold transition-all ml-auto shrink-0 flex items-center gap-1"
+            className="ml-2 text-xs font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 underline underline-offset-4 flex items-center gap-1"
           >
-            <RotateCcw className="w-3 h-3 text-cyan-400" /> Undo
+            <RotateCcw className="w-3 h-3" /> Undo
           </button>
         </div>
       )}
@@ -391,333 +480,270 @@ function CountrySettlementView({
   onSettleBankLine,
   onUndoIds
 }) {
-  const q = search.trim().toLowerCase();
-  const safeResolve = typeof resolve === 'function' ? resolve : () => null;
+  const [expandedParties, setExpandedParties] = useState(() => new Set());
 
-  const activePlayers = useMemo(() => {
-    return (data?.players || [])
-      .filter((p) => p.outstandingCount > 0)
-      .filter((p) => !q || p.name?.toLowerCase().includes(q));
-  }, [data, q]);
+  const toggleParty = (k) => {
+    setExpandedParties((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  };
 
-  const clearedPlayers = useMemo(() => {
-    return (data?.players || [])
-      .filter((p) => p.outstandingCount === 0 && (p.lines?.length || 0) > 0)
-      .filter((p) => !q || p.name?.toLowerCase().includes(q));
-  }, [data, q]);
+  const { summary, players, bankTransfers, recentActivity } = data || {};
 
-  const openBankLines = useMemo(() => {
-    return (data?.bankLines || data?.bankTransfers || []).filter((b) => !b.settled);
-  }, [data]);
+  const filteredPlayers = useMemo(() => {
+    if (!players || !Array.isArray(players)) return [];
+    if (!search || !search.trim()) return players;
+    const q = search.trim().toLowerCase();
+    return players.filter(
+      (p) =>
+        (p.name && p.name.toLowerCase().includes(q)) ||
+        (p.partyKey && p.partyKey.toLowerCase().includes(q)) ||
+        (p.lines && p.lines.some((l) => l.sessionDate && l.sessionDate.includes(q)))
+    );
+  }, [players, search]);
 
-  const recentlySettled = useMemo(() => {
-    return (data?.recentMarks || []).slice(0, 10);
-  }, [data]);
-
-  const settlePlayer = (player) => onSettlePlayer(player);
-  const settleLine = (player, line) => ({
-    session_id: line.sessionId,
-    leg_id: line.legId,
-    scope: 'player',
-    country: countryCode,
-    party_key: player.playerId || player.partyKey || player.key,
-    party_name: player.name,
-    counterparty_key: line.bankPartyKey || line.bankKey || null,
-    counterparty_name: line.bankName || null,
-    direction: line.direction,
-    amount_cad: line.amountCad,
-    amount_local: line.amountLocal,
-    currency: line.currency || currency,
-    session_date: line.date || null
-  });
-  const toggleLine = (settled, sId, lId, payloadFn) => onToggleLine(settled, sId, lId, payloadFn);
-  const settleBankLine = (b) => onSettleBankLine(b);
+  const settledPlayers = filteredPlayers.filter((p) => p.settled);
+  const openPlayers = filteredPlayers.filter((p) => !p.settled);
 
   return (
     <div className="space-y-6">
-      {/* Country Net Balance Overview Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4">
-          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">
-            Net Banker Position ({countryName})
+      {/* 3 Metric Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono">
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-lg backdrop-blur-xl">
+          <span className="text-[11px] text-zinc-500 uppercase tracking-widest block font-bold">
+            Active Standing Banker
           </span>
-          <span
-            className={`text-xl font-bold font-mono tabular-nums mt-1 block ${
-              (data?.netOutstandingLocal || 0) > 0
-                ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(34,197,94,0.6)]'
-                : (data?.netOutstandingLocal || 0) < 0
-                ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]'
-                : 'text-zinc-400'
-            }`}
-          >
-            {(data?.netOutstandingLocal || 0) >= 0 ? '+' : '−'}
-            {money(data?.netOutstandingLocal || 0, currency)}
-          </span>
-          <span className="text-[10px] text-zinc-500 font-mono">
-            {(data?.netOutstandingLocal || 0) >= 0 ? 'Bank is owed by players' : 'Bank owes players'}
-          </span>
+          <div className="text-xl font-bold text-white mt-1.5 flex items-center gap-2">
+            <Landmark className="w-5 h-5 text-emerald-400" />
+            <span className="font-sans">{summary?.bankName || 'No standing bank'}</span>
+          </div>
+          <p className="text-[11px] text-zinc-500 mt-1 flex items-center gap-1.5">
+            <CountryFlag code={countryCode} className="w-3.5 h-2.5 rounded-[1px]" />
+            <span>{countryName} ({countryCode})</span>
+          </p>
         </div>
 
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4">
-          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">
-            Unsettled Player Debts
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-lg backdrop-blur-xl">
+          <span className="text-[11px] text-zinc-500 uppercase tracking-widest block font-bold">
+            Ledger Balance
           </span>
-          <span className="text-xl font-bold font-mono tabular-nums text-rose-400 mt-1 block">
-            {money(data?.collectLocal || 0, currency)}
-          </span>
-          <span className="text-[10px] text-zinc-500 font-mono">
-            {data?.collectCount || 0} pending payments to bank
-          </span>
+          <div className={`text-xl font-bold mt-1.5 ${
+            (summary?.bankNetLocal || 0) > 0.005 ? 'text-emerald-400 drop-shadow-[0_0_8px_rgba(16,185,129,0.5)]' :
+            (summary?.bankNetLocal || 0) < -0.005 ? 'text-rose-400 drop-shadow-[0_0_8px_rgba(244,63,94,0.5)]' :
+            'text-zinc-400'
+          }`}>
+            {(summary?.bankNetLocal || 0) > 0.005 ? '+' : ''}
+            {money(summary?.bankNetLocal || 0, currency)}
+          </div>
+          <p className="text-[11px] text-zinc-500 mt-1">
+            Net position of regional bank
+          </p>
         </div>
 
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4">
-          <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block">
-            Unsettled Player Payouts
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-5 shadow-lg backdrop-blur-xl">
+          <span className="text-[11px] text-zinc-500 uppercase tracking-widest block font-bold">
+            Outstanding Action
           </span>
-          <span className="text-xl font-bold font-mono tabular-nums text-emerald-400 mt-1 block">
-            {money(data?.payLocal || 0, currency)}
-          </span>
-          <span className="text-[10px] text-zinc-500 font-mono">
-            {data?.payCount || 0} pending collections from bank
-          </span>
+          <div className="text-xl font-bold text-cyan-400 mt-1.5 drop-shadow-[0_0_8px_rgba(6,182,212,0.5)]">
+            {openPlayers.length} / {filteredPlayers.length} Players
+          </div>
+          <p className="text-[11px] text-zinc-500 mt-1">
+            Awaiting clearing verification
+          </p>
         </div>
       </div>
 
-      {/* Active Outstanding Players */}
-      {activePlayers.length > 0 ? (
-        <div className="space-y-3">
-          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-            <Users className="w-3.5 h-3.5 text-cyan-400" />
-            Outstanding Players ({activePlayers.length})
+      {/* Main Players Ledger Table */}
+      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl">
+        <div className="p-4 border-b border-white/10 bg-black/60 flex items-center justify-between">
+          <h3 className="font-bold text-white text-xs uppercase tracking-wider font-mono flex items-center gap-2">
+            <Users className="w-4 h-4 text-cyan-400" />
+            Player Clearing Positions
           </h3>
-          <div className="bg-black/60 border border-white/10 divide-y divide-white/5 overflow-hidden">
-            {activePlayers.map((p) => (
-              <PlayerCard
-                key={p.key}
-                player={p}
-                currency={currency}
-                busy={busy}
-                onSettleAll={() => settlePlayer(p)}
-                onToggleLine={(line) =>
-                  toggleLine(line.settled, line.sessionId, line.legId, () => settleLine(p, line))
-                }
-              />
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="bg-black/40 border border-white/10 p-5 text-center text-xs font-mono text-zinc-500 uppercase tracking-wider">
-          No players with outstanding balances in {countryName}.
-        </div>
-      )}
-
-      {/* Inter-Bank Transfers */}
-      {openBankLines.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-            <Landmark className="w-3.5 h-3.5 text-amber-400" />
-            Between Regional Banks
-          </h3>
-          <div className="bg-black/60 border border-white/10 divide-y divide-white/5 overflow-hidden">
-            {openBankLines.map((b) => (
-              <div
-                key={`${b.sessionId}:${b.legId}`}
-                className="flex items-center justify-between px-4 py-3 text-xs gap-3 hover:bg-white/[0.02] transition-colors font-mono"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => settleBankLine(b)}
-                    className="w-4 h-4 rounded-none border border-white/25 bg-black/80 hover:border-emerald-400 flex items-center justify-center cursor-pointer transition-all shrink-0"
-                    title="Mark bank transfer settled"
-                  >
-                    <Check className="w-3 h-3 text-transparent hover:text-emerald-400" />
-                  </button>
-                  <span className="text-zinc-200 font-semibold truncate">
-                    {b.from} <ArrowRight className="inline w-3 h-3 text-zinc-500 mx-1" /> {b.to}
-                    <span className="text-zinc-500 font-normal ml-2">· {fmtDate(b.date)}</span>
-                  </span>
-                </div>
-                <span className="font-bold text-amber-400 tabular-nums shrink-0">
-                  {money(b.amountCad, 'CAD')}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Cleared Players Collapsible */}
-      {clearedPlayers.length > 0 && (
-        <details className="group space-y-2">
-          <summary className="text-xs font-mono font-semibold text-zinc-500 hover:text-zinc-400 cursor-pointer flex items-center gap-1.5 select-none uppercase tracking-wider">
-            <span className="group-open:rotate-90 transition-transform">▸</span>
-            Fully Settled Players ({clearedPlayers.length})
-          </summary>
-          <div className="bg-black/40 border border-white/10 divide-y divide-white/5 overflow-hidden">
-            {clearedPlayers.map((p) => (
-              <PlayerCard
-                key={p.key}
-                player={p}
-                currency={currency}
-                busy={busy}
-                cleared
-                onSettleAll={() => {}}
-                onToggleLine={(line) =>
-                  toggleLine(line.settled, line.sessionId, line.legId, () => settleLine(p, line))
-                }
-              />
-            ))}
-          </div>
-        </details>
-      )}
-
-      {/* Recently Settled Audit Log */}
-      {recentlySettled.length > 0 && (
-        <div className="space-y-3 pt-2">
-          <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-            <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
-            Recently Settled Activity
-          </h3>
-          <div className="bg-black/40 border border-white/10 divide-y divide-white/5 overflow-hidden">
-            {recentlySettled.map((m) => (
-              <div key={m.id} className="flex items-center justify-between px-4 py-2.5 text-xs gap-3 font-mono">
-                <span className="text-zinc-400 truncate">
-                  <strong className="text-zinc-200">{safeResolve(m.party_key) || m.party_name}</strong>
-                  {m.counterparty_name && (
-                    <>
-                      {' '}
-                      <span className="text-zinc-600">
-                        {m.direction === 'from_bank' ? '←' : '→'}
-                      </span>{' '}
-                      <strong className="text-zinc-300">{safeResolve(m.counterparty_key) || m.counterparty_name}</strong>
-                    </>
-                  )}
-                  <span className="text-zinc-500 ml-2">· {ago(m.settled_at)}</span>
-                </span>
-                <div className="flex items-center gap-3 shrink-0">
-                  {m.amount_local != null && (
-                    <span className="text-zinc-300 font-bold tabular-nums">
-                      {money(m.amount_local, m.currency || currency)}
-                    </span>
-                  )}
-                  <button
-                    onClick={() => onUndoIds([m.id])}
-                    disabled={busy}
-                    className="text-[10px] font-mono font-bold uppercase tracking-wider text-emerald-400 hover:text-emerald-300 disabled:opacity-40 transition-colors bg-black px-2 py-0.5 border border-white/15"
-                  >
-                    Undo
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PlayerCard({ player, currency, busy, cleared, onSettleAll, onToggleLine }) {
-  const [open, setOpen] = useState(false);
-  const owes = player.direction === 'owes_bank';
-
-  return (
-    <div className="p-3.5 hover:bg-white/[0.02] transition-colors">
-      <div className="flex items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          {!cleared ? (
-            <button
-              onClick={onSettleAll}
-              disabled={busy}
-              className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider bg-emerald-600 hover:bg-emerald-500 text-white transition-all shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.3)]"
-              title={`Settle all ${player.outstandingCount} outstanding sessions for ${player.name}`}
-            >
-              Settle All
-            </button>
-          ) : (
-            <span className="w-5 h-5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0 font-mono text-xs">
-              ✓
-            </span>
-          )}
-
-          <button onClick={() => setOpen((o) => !o)} className="text-left min-w-0 flex-1">
-            <span className={`font-bold text-sm truncate block font-sans ${cleared ? 'text-zinc-500' : 'text-zinc-100'}`}>
-              {player.name}
-            </span>
-            <span className="text-[11px] font-mono text-zinc-500">
-              {cleared
-                ? `${player.lines?.length || 0} session${(player.lines?.length || 0) === 1 ? '' : 's'} · cleared`
-                : `${player.outstandingCount} session${player.outstandingCount === 1 ? '' : 's'} outstanding`}
-            </span>
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3 shrink-0">
-          <span
-            className={`font-mono font-bold text-xs tabular-nums ${
-              cleared 
-                ? 'text-zinc-500' 
-                : owes 
-                ? 'text-rose-400 drop-shadow-[0_0_4px_rgba(244,63,94,0.6)]' 
-                : 'text-emerald-400 drop-shadow-[0_0_4px_rgba(34,197,94,0.6)]'
-            }`}
-          >
-            {cleared ? 'SETTLED' : `${owes ? 'owes ' : 'receives '}${money(player.outstandingLocal, currency)}`}
+          <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+            {filteredPlayers.length} total players
           </span>
-
-          <button
-            onClick={() => setOpen((o) => !o)}
-            className="p-1 text-zinc-400 hover:text-zinc-200 transition-colors"
-            title="Expand session breakdown"
-          >
-            {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
         </div>
+
+        {filteredPlayers.length === 0 ? (
+          <div className="p-12 text-center text-zinc-500 font-mono text-xs uppercase tracking-wider">
+            No player ledger entries found for {countryName}.
+          </div>
+        ) : (
+          <div className="divide-y divide-white/5">
+            {filteredPlayers.map((player) => {
+              const isExpanded = expandedParties.has(player.partyKey);
+              const openCount = player.lines.filter((l) => !l.settled).length;
+              const owesBank = player.netLocal < -0.005;
+              const bankOwes = player.netLocal > 0.005;
+
+              return (
+                <div key={player.partyKey} className="transition-colors hover:bg-white/[0.02]">
+                  <div className="p-4 flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <button
+                        onClick={() => toggleParty(player.partyKey)}
+                        className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        {isExpanded ? (
+                          <ChevronUp className="w-4 h-4" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4" />
+                        )}
+                      </button>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white text-sm tracking-tight">
+                            {player.name}
+                          </span>
+                          {player.settled ? (
+                            <span className="text-[9px] font-mono font-bold uppercase tracking-widest px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                              Settled
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-mono font-bold uppercase tracking-widest px-1.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                              {openCount} Open
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-zinc-500 font-mono mt-0.5">
+                          {player.lines.length} session leg{player.lines.length === 1 ? '' : 's'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      <div className="text-right font-mono">
+                        <div className={`text-sm font-bold ${
+                          bankOwes ? 'text-emerald-400' : owesBank ? 'text-rose-400' : 'text-zinc-400'
+                        }`}>
+                          {bankOwes ? 'Bank Owes ' : owesBank ? 'Owes Bank ' : 'Settled '}
+                          {money(player.netLocal, currency)}
+                        </div>
+                      </div>
+
+                      {!player.settled && (
+                        <button
+                          onClick={() => onSettlePlayer(player)}
+                          disabled={busy}
+                          className="px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-mono font-bold uppercase tracking-wider transition-all disabled:opacity-50 shadow-[0_0_8px_rgba(16,185,129,0.3)]"
+                        >
+                          Settle All ({openCount})
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Expanded Session Line Items */}
+                  {isExpanded && (
+                    <div className="bg-black/60 border-t border-white/5 p-4 space-y-2">
+                      <div className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mb-2">
+                        Individual Session Ledger Lines
+                      </div>
+                      <div className="divide-y divide-white/5">
+                        {player.lines.map((line) => (
+                          <div
+                            key={line.legId}
+                            className="py-2 flex items-center justify-between text-xs font-mono gap-4"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <button
+                                onClick={() =>
+                                  onToggleLine(
+                                    line.settled,
+                                    line.sessionId,
+                                    line.legId,
+                                    () => ({
+                                      session_id: line.sessionId,
+                                      leg_id: line.legId,
+                                      scope: 'player',
+                                      country: countryCode,
+                                      party_key: player.playerId || player.partyKey || player.key,
+                                      party_name: player.name,
+                                      counterparty_key: line.bankPartyKey || line.bankKey || null,
+                                      counterparty_name: line.bankName || null,
+                                      direction: line.direction,
+                                      amount_cad: line.amountCad,
+                                      amount_local: line.amountLocal,
+                                      currency: line.currency || currency,
+                                      session_date: line.date || null
+                                    })
+                                  )
+                                }
+                                disabled={busy}
+                                className={`w-4 h-4 border transition-all flex items-center justify-center ${
+                                  line.settled
+                                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400'
+                                    : 'bg-black/60 border-white/20 text-transparent hover:border-white/40'
+                                }`}
+                              >
+                                <Check className={`w-3 h-3 stroke-[3] ${line.settled ? 'scale-100' : 'scale-0'}`} />
+                              </button>
+                              <span className="text-zinc-400">
+                                {fmtDate(line.sessionDate || line.date)}
+                              </span>
+                              <span className="text-zinc-300 truncate">
+                                {line.direction === 'from_bank'
+                                  ? `Received from ${line.bankName || 'Bank'}`
+                                  : `Sent to ${line.bankName || 'Bank'}`}
+                              </span>
+                            </div>
+
+                            <div className={`font-bold tabular-nums ${
+                              line.direction === 'from_bank' ? 'text-emerald-400' : 'text-rose-400'
+                            }`}>
+                              {line.direction === 'from_bank' ? '+' : '-'}
+                              {money(line.amountLocal, line.currency || currency)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
-      {open && (
-        <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5 pl-2 font-mono">
-          {(player.lines || []).map((line) => {
-            const lineOwes = line.direction === 'to_bank';
-            return (
-              <div
-                key={`${line.sessionId}:${line.legId}`}
-                className="flex items-center justify-between py-1.5 px-2 text-xs hover:bg-white/[0.03] transition-colors"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
+      {/* Inter-Bank Transfers Table (if present) */}
+      {bankTransfers && bankTransfers.length > 0 && (
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl">
+          <div className="p-4 border-b border-white/10 bg-black/60 flex items-center justify-between">
+            <h3 className="font-bold text-white text-xs uppercase tracking-wider font-mono flex items-center gap-2">
+              <Landmark className="w-4 h-4 text-emerald-400" />
+              Inter-Bank Balancing Transfers
+            </h3>
+          </div>
+          <div className="divide-y divide-white/5 p-4">
+            {bankTransfers.map((b) => (
+              <div key={b.legId} className="py-2.5 flex items-center justify-between text-xs font-mono gap-4">
+                <div className="flex items-center gap-2">
                   <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onToggleLine(line)}
-                    className={`w-4 h-4 shrink-0 border transition-all flex items-center justify-center cursor-pointer ${
-                      line.settled
-                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
-                        : 'bg-black/80 border-white/25 text-transparent hover:border-emerald-400/60'
+                    onClick={() => onSettleBankLine(b)}
+                    disabled={busy || b.settled}
+                    className={`w-4 h-4 border transition-all flex items-center justify-center ${
+                      b.settled
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-400'
+                        : 'bg-black/60 border-white/20 text-transparent hover:border-white/40'
                     }`}
-                    title={line.settled ? "Settled (Click to mark unsettled)" : "Click to mark settled"}
                   >
-                    <Check className={`w-3 h-3 stroke-[3] transition-transform ${line.settled ? 'scale-100' : 'scale-0'}`} />
+                    <Check className={`w-3 h-3 stroke-[3] ${b.settled ? 'scale-100' : 'scale-0'}`} />
                   </button>
-                  <span className={`truncate text-xs ${line.settled ? 'text-zinc-600 line-through' : 'text-zinc-300'}`}>
-                    {fmtDate(line.date)} · {lineOwes ? 'owes bank' : 'bank owes'}
-                  </span>
+                  <span className="text-zinc-300 font-bold">{b.from}</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-zinc-500" />
+                  <span className="text-zinc-300 font-bold">{b.to}</span>
                 </div>
-                <span
-                  className={`font-mono font-bold tabular-nums text-xs shrink-0 ${
-                    line.settled
-                      ? 'text-zinc-700 line-through'
-                      : lineOwes
-                      ? 'text-rose-400'
-                      : 'text-emerald-400'
-                  }`}
-                >
-                  {money(line.amountLocal, line.currency || currency)}
-                </span>
+                <div className="font-bold text-emerald-400">
+                  {money(b.amountLocal || b.amountCad, 'CAD')}
+                </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
       )}
     </div>

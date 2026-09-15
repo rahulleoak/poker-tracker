@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import { computeBankSettlement, keyOfEntry } from '../../src/utils/bankSettlement.js';
+import { country, countryFromCurrency } from '../../src/utils/countries.js';
 
 // buyIn/buyOut/stack shorthand: net chips = buyOut + stack - buyIn
 const p = (name, net, extra = {}) => ({ name, pokerNowId: name.toLowerCase(), buyIn: 0, buyOut: 0, stack: net, ...extra });
@@ -9,6 +10,23 @@ test('keyOfEntry prefers pokerNowId then externalId then name', () => {
   assert.strictEqual(keyOfEntry({ pokerNowId: 'ABC', name: 'x' }), 'abc');
   assert.strictEqual(keyOfEntry({ externalId: 'Def', name: 'x' }), 'def');
   assert.strictEqual(keyOfEntry({ name: 'Gary' }), 'gary');
+});
+
+test('country and countryFromCurrency correctly map multi-currency and regional countries', () => {
+  assert.strictEqual(countryFromCurrency('SGD'), 'SG');
+  assert.strictEqual(countryFromCurrency('USD'), 'US');
+  assert.strictEqual(countryFromCurrency('CAD'), 'CA');
+  assert.strictEqual(countryFromCurrency('EUR'), 'EU');
+  assert.strictEqual(countryFromCurrency('GBP'), 'GB');
+
+  const sg = country('SG');
+  assert.strictEqual(sg.name, 'Singapore');
+  assert.strictEqual(sg.currency, 'SGD');
+  assert.strictEqual(sg.flag, '🇸🇬');
+
+  const us = country('US');
+  assert.strictEqual(us.name, 'United States');
+  assert.strictEqual(us.currency, 'USD');
 });
 
 test('single country: non-bank players settle their whole net with the bank', () => {
@@ -39,8 +57,8 @@ test('two countries: banks settle each country aggregate net between themselves'
     p('BankCA', -100, { pokerNowId: 'bankca' }),
     p('P1', 400, { pokerNowId: 'p1' }),
     p('BankUS', 0, { pokerNowId: 'bankus' }),
-    p('P2', -300, { pokerNowId: 'p2' })
-  ];
+    p('P2', -300, { pokerNowId: 'p2' }
+  )];
   const r = computeBankSettlement({
     entries,
     countryByKey: { bankus: 'US', p2: 'US' }, // BankCA + P1 default to CA
@@ -57,6 +75,69 @@ test('two countries: banks settle each country aggregate net between themselves'
   assert.strictEqual(r.bankTransfers[0].from, 'BankUS');
   assert.strictEqual(r.bankTransfers[0].to, 'BankCA');
   assert.ok(Math.abs(r.bankTransfers[0].amount - 3) < 1e-9);
+});
+
+test('multi-currency game with SGD and USD banks (Singapore + US)', () => {
+  const entries = [
+    p('Michelle Tay', 2500, { currency: 'SGD', pokerNowId: 'mtay' }),
+    p('Michelle Tan', 1910, { currency: 'SGD', pokerNowId: 'mtan' }),
+    p('Deon', -3525, { currency: 'SGD', pokerNowId: 'deon' }),
+    p('Danesh', 0, { currency: 'SGD', isBank: true, pokerNowId: 'danesh' }),
+    p('LA', 0, { currency: 'SGD', pokerNowId: 'la' }),
+    p('Rahul', -885, { currency: 'USD', isBank: true, pokerNowId: 'rahul' })
+  ];
+
+  const r = computeBankSettlement({
+    entries,
+    countryByKey: {
+      mtay: 'SG',
+      mtan: 'SG',
+      deon: 'SG',
+      danesh: 'SG',
+      la: 'SG',
+      rahul: 'US'
+    },
+    bankByCountry: {
+      SG: 'danesh',
+      US: 'rahul'
+    },
+    chipsPerCad: 100
+  });
+
+  assert.strictEqual(r.balanced, true);
+  const sg = r.countries.find((c) => c.code === 'SG');
+  const us = r.countries.find((c) => c.code === 'US');
+
+  assert.ok(sg, 'Singapore ledger exists');
+  assert.ok(us, 'US ledger exists');
+  assert.strictEqual(sg.name, 'Singapore');
+  assert.strictEqual(sg.currency, 'SGD');
+  assert.strictEqual(sg.flag, '🇸🇬');
+  assert.strictEqual(sg.bankName, 'Danesh');
+
+  assert.strictEqual(us.name, 'United States');
+  assert.strictEqual(us.currency, 'USD');
+  assert.strictEqual(us.flag, '🇺🇸');
+  assert.strictEqual(us.bankName, 'Rahul');
+
+  // Check intra-country transfers for Singapore
+  const mtayLeg = r.playerTransfers.find((t) => t.to === 'Michelle Tay');
+  assert.ok(mtayLeg);
+  assert.strictEqual(mtayLeg.from, 'Danesh');
+  assert.strictEqual(mtayLeg.currency, 'SGD');
+  assert.ok(Math.abs(mtayLeg.amountLocal - 25) < 1e-9);
+
+  const deonLeg = r.playerTransfers.find((t) => t.from === 'Deon');
+  assert.ok(deonLeg);
+  assert.strictEqual(deonLeg.to, 'Danesh');
+  assert.strictEqual(deonLeg.currency, 'SGD');
+  assert.ok(Math.abs(deonLeg.amountLocal - 35.25) < 1e-9);
+
+  // Check inter-bank transfer between Danesh and Rahul
+  assert.strictEqual(r.bankTransfers.length, 1);
+  assert.strictEqual(r.bankTransfers[0].from, 'Rahul');
+  assert.strictEqual(r.bankTransfers[0].to, 'Danesh');
+  assert.ok(Math.abs(r.bankTransfers[0].amount - 8.85) < 1e-9);
 });
 
 test('country with no bank: its players fall through to the inter-country pool', () => {

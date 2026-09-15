@@ -21,21 +21,71 @@ async function load() {
   };
 }
 
-export function makeNameResolver(players = []) {
-  const map = new Map();
+export function makeNameResolver(players = [], playerLinks = []) {
+  const byId = new Map();
+  const byExternal = new Map();
+  const byName = new Map();
+
   for (const p of players || []) {
-    if (p && p.id) {
-      map.set(p.id, p.display_name || p.name || null);
+    if (!p) continue;
+    const name = p.display_name || p.name || null;
+    if (p.id) {
+      byId.set(p.id, name);
+      if (name) byName.set(String(name).trim().toLowerCase(), name);
     }
   }
+
+  for (const l of playerLinks || []) {
+    if (!l || !l.external_id) continue;
+    const pName = byId.get(l.player_id);
+    if (pName) {
+      byExternal.set(String(l.external_id).trim().toLowerCase(), pName);
+    }
+  }
+
   return (key) => {
     if (!key) return null;
-    return map.get(key) || null;
+    if (byId.has(key)) return byId.get(key);
+    const normKey = String(key).trim().toLowerCase();
+    if (byExternal.has(normKey)) return byExternal.get(normKey);
+    if (byName.has(normKey)) return byName.get(normKey);
+    return null;
+  };
+}
+
+export function makeIdResolver(players = [], playerLinks = []) {
+  const byId = new Set();
+  const byExternal = new Map();
+  const byName = new Map();
+
+  for (const p of players || []) {
+    if (!p) continue;
+    if (p.id) {
+      byId.add(p.id);
+      const name = p.display_name || p.name;
+      if (name) byName.set(String(name).trim().toLowerCase(), p.id);
+    }
+  }
+
+  for (const l of playerLinks || []) {
+    if (!l || !l.external_id) continue;
+    if (l.player_id) {
+      byExternal.set(String(l.external_id).trim().toLowerCase(), l.player_id);
+    }
+  }
+
+  return (key) => {
+    if (!key) return null;
+    if (byId.has(key)) return key;
+    const normKey = String(key).trim().toLowerCase();
+    if (byExternal.has(normKey)) return byExternal.get(normKey);
+    if (byName.has(normKey)) return byName.get(normKey);
+    return null;
   };
 }
 
 /**
- * @returns {{ players: Array, playerLinks: Array, loading: boolean, error: Error|null, refresh: () => void, resolve: (key: string) => string|null, nameOf: (key: string) => string|null }}
+ * @returns {{ players: Array, playerLinks: Array, loading: boolean, error: Error|null, refresh: () => void, resolve: (key: string) => string|null, nameOf: (key: string) => string|null, resolveId: (key: string) => string|null }}
  */
 export function useIdentityGraph() {
   const [state, setState] = useState(() =>
@@ -72,9 +122,16 @@ export function useIdentityGraph() {
 
   const refresh = useCallback(() => run(true), [run]);
 
-  const resolve = useMemo(() => makeNameResolver(state.players), [state.players]);
+  const resolve = useMemo(
+    () => makeNameResolver(state.players, state.playerLinks),
+    [state.players, state.playerLinks]
+  );
+  const resolveId = useMemo(
+    () => makeIdResolver(state.players, state.playerLinks),
+    [state.players, state.playerLinks]
+  );
 
-  return { ...state, resolve, nameOf: resolve, refresh };
+  return { ...state, resolve, nameOf: resolve, resolveId, refresh };
 }
 
 /** Drop the shared cache so the next `useIdentityGraph` mount refetches. */
