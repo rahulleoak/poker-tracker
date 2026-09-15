@@ -15,6 +15,7 @@ import { calculateSettlement } from '../utils/settlement';
 import { buildSettlementText } from '../utils/settlementText';
 import { sessionApi } from '../utils/sessionApi';
 import { formatFiat } from '../utils/formatters';
+import CountryFlag from './CountryFlag';
 
 const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
 
@@ -306,8 +307,8 @@ export default function SessionSettlementPanel({
                 >
                   <div>
                     <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{c.flag}</span>
+                      <div className="flex items-center gap-2.5">
+                        <CountryFlag code={c.code} className="w-5 h-3.5 rounded-[2px] shadow-sm shrink-0" />
                         <h4 className="font-bold text-white text-sm">
                           {c.name} Ledger
                         </h4>

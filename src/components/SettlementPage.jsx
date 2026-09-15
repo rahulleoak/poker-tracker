@@ -17,6 +17,7 @@ import { buildCountrySettlement, legsFromSession } from '../utils/settlementLedg
 import { country, COUNTRIES } from '../utils/countries';
 import { loadGamesFromStorage } from '../utils/storage';
 import { ErrorBoundary } from './ErrorBoundary';
+import CountryFlag from './CountryFlag';
 
 const money = (n, currency = 'CAD') => `$${Math.abs(Number(n) || 0).toFixed(2)} ${currency}`;
 
@@ -299,8 +300,8 @@ function SettlementPageContent({ embedded = false }) {
 
   return (
     <div className="space-y-6 font-sans">
-      {/* Top Header Card */}
-      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 shadow-xl backdrop-blur-xl">
+      {/* Top Header Card with relative z-30 so dropdown menu floats above lower cards */}
+      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 shadow-xl backdrop-blur-xl relative z-30">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -320,7 +321,7 @@ function SettlementPageContent({ embedded = false }) {
           </div>
 
           {/* Regional Ledger Dropdown Selector */}
-          <div className="relative self-start md:self-auto" ref={dropdownRef}>
+          <div className="relative self-start md:self-auto z-40" ref={dropdownRef}>
             <div className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
               <Landmark className="w-3 h-3 text-emerald-400" />
               <span>Regional Ledger</span>
@@ -330,8 +331,8 @@ function SettlementPageContent({ embedded = false }) {
               onClick={() => setCountryDropdownOpen((prev) => !prev)}
               className="bg-black/90 hover:bg-zinc-900/90 border border-white/20 hover:border-emerald-500/50 text-white font-mono text-xs sm:text-sm font-bold px-3 py-2 flex items-center justify-between gap-3 min-w-[220px] transition-all shadow-lg focus:outline-none focus:border-emerald-400 focus:shadow-[0_0_10px_rgba(16,185,129,0.3)]"
             >
-              <div className="flex items-center gap-2 truncate">
-                <span className="text-base leading-none">{currentCountryConfig.flag}</span>
+              <div className="flex items-center gap-2.5 truncate">
+                <CountryFlag code={currentCountryConfig.code} className="w-5 h-3.5 rounded-[2px] shadow-sm shrink-0" />
                 <span className="font-sans font-bold text-zinc-100 truncate">{currentCountryConfig.name}</span>
                 <span className="text-emerald-400 text-xs font-mono">({currentCountryConfig.currency})</span>
               </div>
@@ -339,7 +340,7 @@ function SettlementPageContent({ embedded = false }) {
             </button>
 
             {countryDropdownOpen && (
-              <div className="absolute right-0 mt-1.5 w-64 bg-zinc-950/95 border border-white/20 shadow-2xl backdrop-blur-xl z-50 divide-y divide-white/5 animate-in fade-in zoom-in-95 duration-150">
+              <div className="absolute right-0 mt-1.5 w-64 bg-zinc-950/98 border border-white/20 shadow-2xl backdrop-blur-xl z-50 divide-y divide-white/5 animate-in fade-in zoom-in-95 duration-150">
                 <div className="px-3 py-2 text-[10px] font-mono text-zinc-500 uppercase tracking-widest bg-black/60">
                   Select Active Bank Ledger
                 </div>
@@ -361,7 +362,7 @@ function SettlementPageContent({ embedded = false }) {
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <span className="text-base">{c.flag}</span>
+                          <CountryFlag code={c.code} className="w-4 h-3 rounded-[2px] shadow-sm shrink-0" />
                           <span className="font-sans truncate">{c.name}</span>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
@@ -488,8 +489,9 @@ function CountrySettlementView({
             <Landmark className="w-5 h-5 text-emerald-400" />
             <span className="font-sans">{summary?.bankName || 'No standing bank'}</span>
           </div>
-          <p className="text-[11px] text-zinc-500 mt-1">
-            {countryName} ({countryCode})
+          <p className="text-[11px] text-zinc-500 mt-1 flex items-center gap-1.5">
+            <CountryFlag code={countryCode} className="w-3.5 h-2.5 rounded-[1px]" />
+            <span>{countryName} ({countryCode})</span>
           </p>
         </div>
 
