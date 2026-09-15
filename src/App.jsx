@@ -681,6 +681,7 @@ export default function App() {
           <Route path="/sessions/:sessionId" element={
             <SessionEditorRoute
               games={games}
+              globalCurrency={globalCurrency}
               globalIncrement={globalIncrement}
               setGlobalIncrement={setGlobalIncrement}
               exchangeRates={exchangeRates}
@@ -769,7 +770,7 @@ export default function App() {
   );
 }
 
-function SessionEditorRoute({ games, globalIncrement, setGlobalIncrement, exchangeRates, players, playerLinks, onUpdatePlayers, onSave, onBack, onDelete }) {
+function SessionEditorRoute({ games, globalCurrency, globalIncrement, setGlobalIncrement, exchangeRates, players, playerLinks, onUpdatePlayers, onSave, onBack, onDelete }) {
   const { sessionId } = useParams();
   const game = games.find(g => g && g.id === sessionId);
 
@@ -791,6 +792,7 @@ function SessionEditorRoute({ games, globalIncrement, setGlobalIncrement, exchan
   return (
     <GameEditor 
       game={game} 
+      globalCurrency={globalCurrency}
       globalIncrement={globalIncrement}
       setGlobalIncrement={setGlobalIncrement}
       exchangeRates={exchangeRates}

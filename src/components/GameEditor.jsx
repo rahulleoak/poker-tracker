@@ -20,7 +20,8 @@ import {
   UserPlus,
   Check,
   Users,
-  Layers
+  Layers,
+  Activity
 } from 'lucide-react';
 import { supabase } from '../utils/supabase';
 import { TOP_CURRENCIES, formatFiat, formatChips } from '../utils/formatters';
@@ -29,11 +30,39 @@ import { keyOfEntry } from '../utils/bankSettlement';
 import { countryFromCurrency } from '../utils/countries';
 import { parsePokerNowLogStats } from '../utils/csvParser';
 import { mergeSessionEntries } from '../utils/sessionMapper';
+import { parseCumulativeNet, reconcileCumulativeNet } from '../utils/pokernow-utils/parseHandLog';
+import { toChartData } from '../utils/chartData';
+import { resolveEntryIdentity } from '../utils/adminIdentity';
 import InfoTooltip from './InfoTooltip';
 import SessionSettlementPanel from './SessionSettlementPanel';
+import SessionAnalyticsPanel from './SessionAnalyticsPanel';
 
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 const norm = (v) => String(v || '').trim().toLowerCase();
+
+const formatSessionTitleDate = (dateStr) => {
+  if (!dateStr) return 'SESSION';
+  try {
+    const parts = String(dateStr).trim().split(/[-/T ]/);
+    if (parts.length >= 3) {
+      const year = parts[0].length === 4 ? parts[0] : parts[2];
+      const monthIdx = parts[0].length === 4 ? parseInt(parts[1], 10) - 1 : parseInt(parts[0], 10) - 1;
+      const day = parts[0].length === 4 ? parseInt(parts[2], 10) : parseInt(parts[1], 10);
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      if (monthIdx >= 0 && monthIdx < 12 && !isNaN(day) && year) {
+        return `${months[monthIdx]} ${day} ${year}`;
+      }
+    }
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      const month = d.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+      return `${month} ${d.getUTCDate()} ${d.getUTCFullYear()}`;
+    }
+    return String(dateStr).toUpperCase();
+  } catch {
+    return String(dateStr).toUpperCase();
+  }
+};
 
 export default function GameEditor(props) {
   return <GameEditorInner key={props.game?.id} {...props} />;
@@ -41,6 +70,7 @@ export default function GameEditor(props) {
 
 function GameEditorInner({ 
   game, 
+  globalCurrency = 'USD',
   globalIncrement = 100, 
   setGlobalIncrement, 
   exchangeRates, 
@@ -68,7 +98,7 @@ function GameEditorInner({
   };
 
   // Local state to manage edits without hitting DB on every keystroke
-  const [activeTab, setActiveTab] = useState('roster'); // 'roster' | 'settlement'
+  const [activeTab, setActiveTab] = useState('roster'); // 'roster' | 'settlement' | 'analytics'
   const [compactMode, setCompactMode] = useState(true);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState(() => new Set());
 
@@ -86,10 +116,13 @@ function GameEditorInner({
       { id: generateId('entry'), name: '', buyIn: 0, buyOut: 0, stack: 0, currency: game?.currency || 'USD', isBank: false }
     ];
   });
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
   const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved' | 'error'
   const [saveError, setSaveError] = useState(null);
   const [isParsingLog, setIsParsingLog] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Link to Master Player Popover state
   const [popoverIndex, setPopoverIndex] = useState(null);
   const [selectedMasterPlayerId, setSelectedMasterPlayerId] = useState('');
   const [newMasterPlayerName, setNewMasterPlayerName] = useState('');
@@ -97,7 +130,16 @@ function GameEditorInner({
   const [playerActionLoading, setPlayerActionLoading] = useState(false);
   const [playerActionError, setPlayerActionError] = useState(null);
 
-  // Sync state if game prop fundamentally changes
+  // Dynamic Map of master player profiles keyed by id
+  const masterPlayerMap = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(players) ? players : []).forEach(p => {
+      if (p && p.id) map.set(p.id, p);
+    });
+    return map;
+  }, [players]);
+
+  // Sync state if game prop changes
   useEffect(() => {
     if (game) {
       setDate(game.date || new Date().toISOString().split('T')[0]);
@@ -105,33 +147,44 @@ function GameEditorInner({
       setChipValue(game.chipValue || 1);
       setRatioChips(game.chipValue ? Math.round(1 / game.chipValue) : 100);
       setRatioFiat(1);
-      if (game.entries && Array.isArray(game.entries) && game.entries.length > 0) {
+      if (Array.isArray(game.entries) && game.entries.length > 0) {
         setEntries(sanitizeEntries(game.entries, game.currency || 'USD'));
       }
     }
   }, [game]);
 
-  // Keep chipValue in sync with ratio inputs
+  // Ratio calculations
   useEffect(() => {
-    if (ratioChips > 0 && ratioFiat > 0) {
-      setChipValue(ratioFiat / ratioChips);
+    if (ratioChips && ratioFiat && ratioChips > 0 && ratioFiat > 0) {
+      const calculatedChipValue = ratioFiat / ratioChips;
+      setChipValue(calculatedChipValue);
     }
   }, [ratioChips, ratioFiat]);
 
-  // Auto-save debounce
+  // Auto-save debounce with stable change detection
   const isFirstMount = useRef(true);
   const onSaveRef = useRef(onSave);
+  const lastSavedSnapshot = useRef('');
+
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
 
   useEffect(() => {
+    const currentSnapshot = JSON.stringify({ date, gameCurrency, chipValue, entries });
     if (isFirstMount.current) {
       isFirstMount.current = false;
+      lastSavedSnapshot.current = currentSnapshot;
+      return;
+    }
+
+    if (currentSnapshot === lastSavedSnapshot.current) {
       return;
     }
 
     setSaveStatus('saving');
+    setSaveError(null);
+
     const timer = setTimeout(async () => {
       try {
         if (onSaveRef.current) {
@@ -143,22 +196,25 @@ function GameEditorInner({
             entries
           });
         }
+        lastSavedSnapshot.current = currentSnapshot;
         setSaveStatus('saved');
-        setTimeout(() => setSaveStatus('idle'), 2000);
+        setTimeout(() => {
+          setSaveStatus(prev => (prev === 'saved' ? 'idle' : prev));
+        }, 2500);
       } catch (err) {
         console.error("Auto-save failed:", err);
         setSaveStatus('error');
         setSaveError(err.message || 'Save failed');
       }
-    }, 800);
+    }, 1000);
 
     return () => clearTimeout(timer);
-  }, [date, gameCurrency, chipValue, entries, game]);
+  }, [date, gameCurrency, chipValue, entries]);
 
   // Safe checks on entries list
   const safeEntries = useMemo(() => Array.isArray(entries) ? entries : [], [entries]);
 
-  // Totals & Balancing calculations
+  // Summary Metrics
   const totalBuyIn = useMemo(() => {
     return safeEntries.reduce((sum, e) => sum + (Number(e?.buyIn) || 0), 0);
   }, [safeEntries]);
@@ -175,128 +231,99 @@ function GameEditorInner({
   const netDifference = totalBuyIn - totalOut;
   const isBalanced = Math.abs(netDifference) < 0.001;
 
+  // Global FX conversion for total money in play
+  const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
+  const targetFx = fxRate(globalCurrency || 'USD');
+
+  const totalMoneyInGameFiat = useMemo(() => {
+    return safeEntries.reduce((sum, e) => {
+      const eCurr = e.currency || gameCurrency || 'USD';
+      const eFx = fxRate(eCurr);
+      const buyIn = Number(e.buyIn) || 0;
+      return sum + (((buyIn * chipValue) / eFx) * targetFx);
+    }, 0);
+  }, [safeEntries, gameCurrency, chipValue, exchangeRates, globalCurrency, targetFx]);
+
   // Validation
   const validationErrors = useMemo(() => {
     const errors = [];
     if (!date) errors.push("Session date is required.");
-    if (!safeEntries.length) errors.push("At least one player entry is required.");
-    
-    safeEntries.forEach((entry, idx) => {
-      if (!entry?.name?.trim()) {
-        errors.push(`Row ${idx + 1}: Player name is required.`);
+    if (safeEntries.length === 0) errors.push("Session must have at least one player row.");
+
+    const names = new Set();
+    safeEntries.forEach((e, idx) => {
+      const name = (e?.name || '').trim();
+      if (!name) {
+        errors.push(`Row ${idx + 1} has an empty player name.`);
+      } else {
+        const lower = name.toLowerCase();
+        if (names.has(lower)) {
+          // Warning duplicate names
+        }
+        names.add(lower);
       }
+
+      if ((Number(e?.buyIn) || 0) < 0) errors.push(`Row ${idx + 1} (${name || 'Unnamed'}) has negative Buy-In.`);
+      if ((Number(e?.buyOut) || 0) < 0) errors.push(`Row ${idx + 1} (${name || 'Unnamed'}) has negative Buy-Out.`);
+      if ((Number(e?.stack) || 0) < 0) errors.push(`Row ${idx + 1} (${name || 'Unnamed'}) has negative Ending Stack.`);
     });
+
+    if (!isBalanced) {
+      errors.push(`Ledger is out of balance by ${Math.abs(netDifference).toFixed(2)} chips.`);
+    }
 
     return errors;
-  }, [date, safeEntries]);
+  }, [date, safeEntries, isBalanced, netDifference]);
 
-  // Handlers
-  const handleEntryChange = (index, field, value) => {
-    setEntries(prev => {
-      const next = [...prev];
-      if (!next[index]) return prev;
-
-      if (field === 'isBank' && value === true) {
-        const currentCurrency = next[index].currency || gameCurrency;
-        // Unset bank for all other entries with same currency
-        next.forEach((e, i) => {
-          if (i !== index && (e?.currency || gameCurrency) === currentCurrency) {
-            next[i] = { ...next[i], isBank: false };
-          }
-        });
-      }
-
-      next[index] = { ...next[index], [field]: value };
-      return next;
-    });
-  };
-
-  const adjustValue = (index, field, delta) => {
-    setEntries(prev => {
-      const next = [...prev];
-      if (!next[index]) return prev;
-      const current = Number(next[index][field]) || 0;
-      const updated = Math.max(0, current + delta);
-      next[index] = { ...next[index], [field]: updated };
-      return next;
-    });
-  };
-
-  const handleAddRow = () => {
-    setEntries(prev => [
-      ...prev,
-      { id: generateId('entry'), name: '', buyIn: 0, buyOut: 0, stack: 0, currency: gameCurrency, isBank: false }
-    ]);
-  };
-
-  const handleRemoveRow = (index) => {
-    setEntries(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleRemoveGroup = (memberIndices) => {
-    const set = new Set(memberIndices);
-    setEntries(prev => prev.filter((_, i) => !set.has(i)));
-  };
-
-  // --- IDENTITY GRAPH LOOKUPS ---
-  const masterPlayerMap = useMemo(() => {
-    const map = new Map();
-    (Array.isArray(players) ? players : []).forEach(p => {
-      if (p && p.id) map.set(p.id, p);
-    });
-    return map;
-  }, [players]);
-
+  // Helper to resolve player link info
   const getLinkedPlayerInfo = (entry) => {
     if (!entry) return { isLinked: false, masterPlayer: null, linkRecord: null, matchedBy: null };
-    
-    // 0. Direct playerId on entry
-    const directId = entry.playerId || entry.player_id;
-    if (directId && masterPlayerMap.has(directId)) {
-      return { isLinked: true, masterPlayer: masterPlayerMap.get(directId), linkRecord: null, matchedBy: 'direct' };
+
+    // Direct manual link on entry
+    if (entry.playerId && masterPlayerMap.has(entry.playerId)) {
+      return { isLinked: true, masterPlayer: masterPlayerMap.get(entry.playerId), linkRecord: null, matchedBy: 'direct' };
     }
 
     const normExtId = norm(entry.pokerNowId || entry.externalId || entry.player_external_id || entry.external_player_id);
     const normName = norm(entry.name);
 
-    // 1. Match via external_id in playerLinks
+    // 1. Check external ID / PokerNow ID match against player_links
     if (normExtId) {
       const link = (playerLinks || []).find(l => {
         const ext = norm(l.external_id || l.external_player_id);
-        return ext === normExtId;
+        return ext && ext === normExtId;
       });
       if (link && masterPlayerMap.has(link.player_id)) {
-        return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'extId' };
+        return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'external_id' };
       }
     }
 
-    // 2. Match via session alias in playerLinks
+    // 2. Check seat-name / alias match against player_links
     if (normName) {
       const link = (playerLinks || []).find(l => {
-        const ext = norm(l.external_id || l.external_player_id || l.session_name);
-        return ext === normName;
+        const ext = norm(l.external_id || l.external_player_id);
+        const alias = norm(l.session_name);
+        return (ext && ext === normName) || (alias && alias === normName);
       });
       if (link && masterPlayerMap.has(link.player_id)) {
         return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'alias' };
       }
 
-      // 3. Direct display_name match with registered master player profile (auto self-link)
-      const exactMatch = (Array.isArray(players) ? players : []).find(
-        p => p && (norm(p.display_name) === normName || norm(p.name) === normName)
-      );
-      if (exactMatch) {
-        return { isLinked: true, masterPlayer: exactMatch, linkRecord: null, matchedBy: 'name' };
+      // 3. Direct display_name match
+      const exactPlayer = (players || []).find(p => norm(p.display_name) === normName || norm(p.name) === normName);
+      if (exactPlayer) {
+        return { isLinked: true, masterPlayer: exactPlayer, linkRecord: null, matchedBy: 'display_name' };
       }
     }
 
     return { isLinked: false, masterPlayer: null, linkRecord: null, matchedBy: null };
   };
 
-  // Group entries by Master Player Profile (for compacted view)
+  // --- COMPACTED ROSTER GROUPS ---
   const compactedGroups = useMemo(() => {
-    const groupsMap = new Map();
+    const groups = new Map();
 
-    safeEntries.forEach((entry, originalIndex) => {
+    safeEntries.forEach((entry, index) => {
       const linkInfo = getLinkedPlayerInfo(entry);
       let groupKey;
       let displayName;
@@ -304,75 +331,77 @@ function GameEditorInner({
       let masterPlayer = null;
 
       if (linkInfo.isLinked && linkInfo.masterPlayer) {
-        groupKey = `player:${linkInfo.masterPlayer.id}`;
+        groupKey = `master-${linkInfo.masterPlayer.id}`;
         displayName = linkInfo.masterPlayer.display_name || linkInfo.masterPlayer.name;
         isLinked = true;
         masterPlayer = linkInfo.masterPlayer;
       } else {
-        groupKey = `unlinked:${entry?.id || originalIndex}:${(entry?.name || '').trim()}`;
-        displayName = (entry?.name || '').trim() || 'Unnamed';
-        isLinked = false;
-        masterPlayer = null;
+        const fallbackName = (entry?.name || '').trim();
+        groupKey = fallbackName ? `name-${norm(fallbackName)}` : `entry-${entry?.id || index}`;
+        displayName = fallbackName || 'Unnamed Player';
       }
 
-      if (!groupsMap.has(groupKey)) {
-        groupsMap.set(groupKey, {
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
           key: groupKey,
           displayName,
           isLinked,
           masterPlayer,
-          currency: entry?.currency || gameCurrency,
-          isBank: Boolean(entry?.isBank),
-          memberIndices: [originalIndex],
-          memberEntries: [entry],
-          matchedBy: linkInfo.matchedBy
+          primaryIndex: index,
+          memberIndices: [index],
+          currency: entry.currency || gameCurrency,
+          isBank: Boolean(entry.isBank),
+          buyIn: Number(entry.buyIn) || 0,
+          buyOut: Number(entry.buyOut) || 0,
+          stack: Number(entry.stack) || 0,
+          rawAliases: entry.name ? [entry.name] : []
         });
       } else {
-        const grp = groupsMap.get(groupKey);
-        grp.memberIndices.push(originalIndex);
-        grp.memberEntries.push(entry);
-        if (entry?.isBank) grp.isBank = true;
+        const grp = groups.get(groupKey);
+        grp.memberIndices.push(index);
+        grp.buyIn += Number(entry.buyIn) || 0;
+        grp.buyOut += Number(entry.buyOut) || 0;
+        grp.stack += Number(entry.stack) || 0;
+        if (entry.isBank) grp.isBank = true;
+        if (entry.name && !grp.rawAliases.includes(entry.name)) {
+          grp.rawAliases.push(entry.name);
+        }
       }
     });
 
-    return Array.from(groupsMap.values()).map(grp => {
-      const totalBuyIn = grp.memberEntries.reduce((s, e) => s + (Number(e?.buyIn) || 0), 0);
-      const totalBuyOut = grp.memberEntries.reduce((s, e) => s + (Number(e?.buyOut) || 0), 0);
-      const totalStack = grp.memberEntries.reduce((s, e) => s + (Number(e?.stack) || 0), 0);
-      const net = totalBuyOut + totalStack - totalBuyIn;
-
+    return Array.from(groups.values()).map(grp => {
+      const net = grp.buyOut + grp.stack - grp.buyIn;
       return {
         ...grp,
-        buyIn: totalBuyIn,
-        buyOut: totalBuyOut,
-        stack: totalStack,
         net,
-        hasMultipleSeats: grp.memberEntries.length > 1,
-        seatCount: grp.memberEntries.length
+        seatCount: grp.memberIndices.length,
+        hasMultipleSeats: grp.memberIndices.length > 1
       };
     });
   }, [safeEntries, gameCurrency, players, playerLinks, masterPlayerMap]);
 
-  const toggleGroupExpand = (groupKey) => {
+  const toggleGroupExpand = (key) => {
     setExpandedGroupKeys(prev => {
       const next = new Set(prev);
-      if (next.has(groupKey)) {
-        next.delete(groupKey);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(groupKey);
+        next.add(key);
       }
       return next;
     });
   };
 
+  // Link Management Handlers
   const handleOpenLinkPopover = (index) => {
-    setPopoverIndex(index);
     const entry = safeEntries[index];
-    const info = getLinkedPlayerInfo(entry);
-    setSelectedMasterPlayerId(info.masterPlayer?.id || '');
-    setNewMasterPlayerName('');
+    if (!entry) return;
+    const linkInfo = getLinkedPlayerInfo(entry);
+    setSelectedMasterPlayerId(linkInfo.masterPlayer?.id || '');
+    setNewMasterPlayerName(entry.name || '');
     setIsCreatingNewPlayer(false);
     setPlayerActionError(null);
+    setPopoverIndex(index);
   };
 
   const handleLinkToMaster = async (index, masterId) => {
@@ -385,57 +414,37 @@ function GameEditorInner({
     try {
       const alias = (entry.name || '').trim();
       const extId = (entry.pokerNowId || entry.externalId || entry.player_external_id || entry.external_player_id || '').trim();
-      const primaryKey = extId || alias;
 
       if (supabase) {
-        // Check if there is an existing link matching either external_id or session_name
-        const existingLink = (playerLinks || []).find(l => {
-          const lExt = norm(l.external_id || l.external_player_id);
-          const lAlias = norm(l.session_name);
-          return (extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias)));
-        });
-
-        if (existingLink) {
-          const { error: updErr } = await supabase
-            .from('player_links')
-            .update({ 
-              player_id: masterId,
-              external_id: primaryKey,
-              session_name: alias || null,
-              platform: extId ? 'pokernow' : 'alias'
-            })
-            .eq('id', existingLink.id);
-
-          if (updErr) throw updErr;
-        } else {
-          const { error: insErr } = await supabase
-            .from('player_links')
-            .insert([{
-              player_id: masterId,
-              external_id: primaryKey,
-              session_name: alias || null,
-              platform: extId ? 'pokernow' : 'alias'
-            }]);
-
-          if (insErr) throw insErr;
-        }
-      } else {
-        // Local storage fallback
-        const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
-        const existingIdx = currentLinks.findIndex(l => {
-          const lExt = norm(l.external_id || l.external_player_id);
-          const lAlias = norm(l.session_name);
-          return (extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias)));
-        });
-
-        const newLinkObj = {
-          id: existingIdx >= 0 ? currentLinks[existingIdx].id : `local-link-${Date.now()}`,
+        const linkPayload = {
           player_id: masterId,
-          external_id: primaryKey,
-          session_name: alias || null,
-          platform: extId ? 'pokernow' : 'alias'
+          platform: 'pokernow',
+          external_id: extId || alias || null,
+          external_player_id: extId || alias || null,
+          session_name: alias || null
         };
 
+        const { error: upsertErr } = await supabase
+          .from('player_links')
+          .upsert([linkPayload], { onConflict: 'platform,external_id' });
+
+        if (upsertErr) {
+          await supabase.from('player_links').insert([linkPayload]);
+        }
+      } else {
+        const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+        const newLinkObj = {
+          id: `link-${Date.now()}`,
+          player_id: masterId,
+          platform: 'pokernow',
+          external_id: extId || alias || null,
+          external_player_id: extId || alias || null,
+          session_name: alias || null
+        };
+        const existingIdx = currentLinks.findIndex(l => 
+          (extId && (l.external_id === extId || l.external_player_id === extId)) ||
+          (alias && (l.external_id === alias || l.session_name === alias))
+        );
         if (existingIdx >= 0) {
           currentLinks[existingIdx] = newLinkObj;
         } else {
@@ -452,7 +461,7 @@ function GameEditorInner({
 
       setPopoverIndex(null);
     } catch (err) {
-      console.error("Link player error:", err);
+      console.error("Link error:", err);
       setPlayerActionError(err.message || "Failed to link player.");
     } finally {
       setPlayerActionLoading(false);
@@ -461,13 +470,16 @@ function GameEditorInner({
 
   const handleCreateAndLinkMaster = async (index) => {
     const entry = safeEntries[index];
-    if (!entry || !newMasterPlayerName.trim()) return;
+    const trimmedName = (newMasterPlayerName || entry?.name || '').trim();
+    if (!entry || !trimmedName) {
+      setPlayerActionError("Profile name is required.");
+      return;
+    }
 
     setPlayerActionLoading(true);
     setPlayerActionError(null);
 
     try {
-      const trimmedName = newMasterPlayerName.trim();
       let createdPlayerId = null;
 
       if (supabase) {
@@ -584,6 +596,19 @@ function GameEditorInner({
 
       const merged = mergeSessionEntries(safeEntries, parsedEntries);
       setEntries(sanitizeEntries(merged, gameCurrency));
+
+      // Also compute chart_data and attach to game if hand history exists
+      const rawParsed = parseCumulativeNet(text);
+      if (rawParsed && rawParsed.snapshots?.length > 0) {
+        const reconciled = reconcileCumulativeNet(rawParsed);
+        const cd = toChartData(reconciled, (key) => {
+          const info = resolveEntryIdentity({ name: key, pokerNowId: key }, { players, playerLinks });
+          return info?.playerId || null;
+        });
+        if (game) {
+          game.chart_data = cd;
+        }
+      }
     } catch (err) {
       console.error("Log upload parsing error:", err);
       alert("Failed to parse log file: " + (err.message || "Unknown error"));
@@ -591,6 +616,51 @@ function GameEditorInner({
       setIsParsingLog(false);
       event.target.value = '';
     }
+  };
+
+  const handleEntryChange = (index, field, value) => {
+    setEntries(prev => {
+      const next = [...prev];
+      if (field === 'isBank' && value === true) {
+        const targetCurr = next[index]?.currency || gameCurrency;
+        next.forEach((e, idx) => {
+          if (idx !== index && (e?.currency || gameCurrency) === targetCurr) {
+            next[idx] = { ...e, isBank: false };
+          }
+        });
+      }
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const handleQuickDelta = (index, field, delta) => {
+    setEntries(prev => {
+      const next = [...prev];
+      const currentVal = Number(next[index]?.[field]) || 0;
+      const newVal = Math.max(0, currentVal + delta);
+      next[index] = { ...next[index], [field]: newVal };
+      return next;
+    });
+  };
+
+  const handleAddRow = () => {
+    setEntries(prev => [
+      ...prev,
+      {
+        id: generateId('entry'),
+        name: '',
+        buyIn: 0,
+        buyOut: 0,
+        stack: 0,
+        currency: gameCurrency,
+        isBank: false
+      }
+    ]);
+  };
+
+  const handleDeleteRow = (index) => {
+    setEntries(prev => prev.filter((_, idx) => idx !== index));
   };
 
   return (
@@ -610,25 +680,22 @@ function GameEditorInner({
           )}
 
           <div>
-            <div className="flex items-center gap-2">
-              <input 
-                type="date" 
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="bg-black/80 border border-white/15 px-2.5 py-1 text-xs text-zinc-100 font-mono font-bold outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all cursor-pointer"
-              />
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white uppercase">
+                {formatSessionTitleDate(date)}
+              </h1>
               {saveStatus === 'saving' && (
-                <span className="text-[11px] font-mono text-cyan-400 flex items-center gap-1 animate-pulse">
+                <span className="text-[11px] font-mono text-cyan-400/90 flex items-center gap-1.5 animate-pulse bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-cyan-400" /> Auto-saving...
                 </span>
               )}
               {saveStatus === 'saved' && (
-                <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1">
+                <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 transition-all">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Saved
                 </span>
               )}
               {saveStatus === 'error' && (
-                <span className="text-[11px] font-mono text-rose-400 flex items-center gap-1">
+                <span className="text-[11px] font-mono text-rose-400 flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5">
                   <AlertCircle className="w-3.5 h-3.5" /> {saveError || 'Save Error'}
                 </span>
               )}
@@ -726,6 +793,22 @@ function GameEditorInner({
               Live
             </span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('analytics')}
+            className={`px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
+              activeTab === 'analytics'
+                ? 'bg-zinc-800 text-amber-400 border border-amber-500/40 shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
+            }`}
+          >
+            <Activity className="w-3.5 h-3.5" />
+            <span>Session Analytics & Pulse</span>
+            <span className="text-[9px] uppercase font-mono font-bold tracking-widest px-1.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/30">
+              Data Viz
+            </span>
+          </button>
         </div>
 
         {/* Zero-Sum Balance Indicator */}
@@ -749,22 +832,23 @@ function GameEditorInner({
 
       {/* Main Content Area */}
       {activeTab === 'roster' && (
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl flex flex-col min-w-0">
-          <div className="p-4 border-b border-white/10 bg-black/60 flex flex-wrap items-center justify-between gap-4">
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 shadow-2xl backdrop-blur-xl">
+          <div className="p-4 sm:p-5 border-b border-white/10 flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h3 className="font-bold text-white flex items-center gap-2 font-sans uppercase tracking-wider text-sm">
-                Session Roster & Stacks
-                <InfoTooltip text="Total Buy-Ins must match Total Cash-Outs (Buy-Outs + Ending Stacks) for the ledger to balance." />
-              </h3>
-              <p className="text-xs text-zinc-500 font-mono mt-0.5">
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-white uppercase tracking-wider text-sm font-mono">Session Roster & Stacks</h3>
+                <InfoTooltip text="Manage player buy-ins, buy-outs, and live table stacks. Grouped automatically by master player profile." />
+              </div>
+              <p className="text-xs text-zinc-400 font-mono mt-0.5">
                 {compactMode 
                   ? `Compacted view: Showing ${compactedGroups.length} unique player profiles across ${safeEntries.length} session seats.`
-                  : `Expanded view: Showing all ${safeEntries.length} individual session seats.`}
+                  : `All seats view: Showing ${safeEntries.length} individual session seat rows.`
+                }
               </p>
             </div>
 
-            {/* View Density Toggle */}
-            <div className="flex items-center gap-1.5 bg-black/80 border border-white/10 p-1 text-xs font-mono">
+            {/* Compact / All Seats Toggle */}
+            <div className="flex bg-black/80 border border-white/10 p-0.5 text-xs font-mono">
               <button
                 type="button"
                 onClick={() => setCompactMode(true)}
@@ -773,9 +857,8 @@ function GameEditorInner({
                     ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_6px_rgba(16,185,129,0.3)]'
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
-                title="Consolidate duplicate session seats by player profile"
               >
-                <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                <Layers className="w-3.5 h-3.5" />
                 <span>Compacted ({compactedGroups.length})</span>
               </button>
               <button
@@ -783,88 +866,87 @@ function GameEditorInner({
                 onClick={() => setCompactMode(false)}
                 className={`px-3 py-1 font-bold transition-all flex items-center gap-1.5 ${
                   !compactMode
-                    ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/40 shadow-[0_0_6px_rgba(6,182,212,0.3)]'
+                    ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_6px_rgba(16,185,129,0.3)]'
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
-                title="Display all raw session seats without grouping"
               >
-                <Users className="w-3.5 h-3.5 text-cyan-400" />
+                <Users className="w-3.5 h-3.5" />
                 <span>All Seats ({safeEntries.length})</span>
               </button>
             </div>
           </div>
 
-          <div className="w-full overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs sm:text-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm font-mono border-collapse">
               <thead>
-                <tr className="border-b border-white/10 bg-black/80 text-zinc-400 font-mono font-semibold uppercase tracking-wider text-[11px]">
-                  <th className="p-3 sm:p-3.5">Player Profile / Seat</th>
-                  <th className="p-3 sm:p-3.5 text-center w-24">Currency</th>
-                  <th className="p-3 sm:p-3.5 text-center w-20">Bank</th>
-                  <th className="p-3 sm:p-3.5 text-center">Buy-In</th>
-                  <th className="p-3 sm:p-3.5 text-center">Buy-Out</th>
-                  <th className="p-3 sm:p-3.5 text-center">Stack</th>
-                  <th className="p-3 sm:p-3.5 text-right w-28">Net</th>
-                  <th className="p-3 sm:p-3.5 text-right w-12"></th>
+                <tr className="border-b border-white/10 bg-black/60 text-zinc-400 uppercase text-[10px] tracking-wider">
+                  <th className="p-3 sm:p-3.5 font-medium">Player Profile / Seat</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Currency</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Bank</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Buy-In</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Buy-Out</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Stack</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-right">Net</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-right w-10"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5 font-medium">
+              <tbody className="divide-y divide-white/5">
                 {compactMode ? (
-                  // --- COMPACTED VIEW (GROUPED BY PLAYER PROFILE) ---
+                  // --- COMPACTED ROSTER VIEW ---
                   compactedGroups.map((grp) => {
-                    const primaryIdx = grp.memberIndices[0];
+                    const primaryIdx = grp.primaryIndex;
                     const isExpanded = expandedGroupKeys.has(grp.key);
 
                     return (
                       <Fragment key={grp.key}>
-                        <tr className="hover:bg-white/[0.03] transition-colors group bg-black/20">
+                        <tr className="hover:bg-zinc-900/40 transition-colors group">
                           <td className="p-3 sm:p-3.5">
                             <div className="flex items-center gap-2 max-w-sm">
-                              {grp.hasMultipleSeats ? (
+                              {grp.hasMultipleSeats && (
                                 <button
                                   type="button"
                                   onClick={() => toggleGroupExpand(grp.key)}
-                                  className="p-1 hover:bg-zinc-800 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 transition-all shrink-0 font-mono text-[10px] font-bold uppercase tracking-wider px-1.5"
-                                  title={isExpanded ? "Collapse session seat aliases" : "Expand session seat aliases"}
+                                  className="p-1 text-zinc-400 hover:text-cyan-400 transition-colors flex items-center gap-1"
+                                  title={isExpanded ? "Collapse seat rows" : "Expand seat rows"}
                                 >
                                   {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                                  <span>{grp.seatCount} seats</span>
+                                  <span className="text-[10px] font-mono px-1.5 py-0.2 bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 font-bold">
+                                    {grp.seatCount}
+                                  </span>
                                 </button>
-                              ) : null}
+                              )}
 
-                              {grp.isLinked ? (
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-sans font-bold text-white text-sm truncate">
-                                      {grp.displayName}
-                                    </span>
-                                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 border border-emerald-500/30 shrink-0">
-                                      {grp.hasMultipleSeats ? 'Consolidated Profile' : 'Linked Profile'}
-                                    </span>
-                                  </div>
-                                  {!grp.hasMultipleSeats && safeEntries[primaryIdx]?.name && safeEntries[primaryIdx]?.name.trim().toLowerCase() !== grp.displayName.trim().toLowerCase() && (
-                                    <span className="text-[10px] font-mono text-zinc-500 block truncate mt-0.5">
-                                      Seat: {safeEntries[primaryIdx]?.name}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white text-sm font-sans tracking-tight truncate">
+                                    {grp.displayName}
+                                  </span>
+                                  {grp.isLinked && (
+                                    <span className="text-[9px] uppercase font-mono font-bold tracking-widest px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shrink-0">
+                                      Linked Profile
                                     </span>
                                   )}
                                 </div>
-                              ) : (
-                                <input 
-                                  type="text" 
-                                  value={safeEntries[primaryIdx]?.name || ''}
-                                  onChange={(e) => handleEntryChange(primaryIdx, 'name', e.target.value)}
-                                  placeholder="Player name..."
-                                  className="bg-black border border-white/15 px-3 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-full transition-all font-sans font-semibold text-xs sm:text-sm"
-                                />
-                              )}
+                                {grp.hasMultipleSeats ? (
+                                  <p className="text-[10px] text-zinc-500 font-mono truncate mt-0.5">
+                                    Seats: {grp.rawAliases.join(', ')}
+                                  </p>
+                                ) : (
+                                  grp.rawAliases[0] && grp.rawAliases[0] !== grp.displayName && (
+                                    <p className="text-[10px] text-zinc-500 font-mono truncate mt-0.5">
+                                      Seat: {grp.rawAliases[0]}
+                                    </p>
+                                  )
+                                )}
+                              </div>
 
                               <button
                                 type="button"
                                 onClick={() => handleOpenLinkPopover(primaryIdx)}
                                 className={`p-1.5 border transition-all shrink-0 ${
                                   grp.isLinked
-                                    ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)] hover:bg-emerald-500/25'
-                                    : 'bg-black/60 border-white/10 text-zinc-500 hover:text-zinc-300 hover:border-white/30'
+                                    ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                                    : 'border-white/10 text-zinc-500 hover:text-white hover:border-white/30 bg-black/60'
                                 }`}
                                 title={
                                   grp.isLinked
@@ -877,14 +959,15 @@ function GameEditorInner({
                             </div>
                           </td>
 
+                          {/* Currency Selection */}
                           <td className="p-3 sm:p-3.5 text-center">
                             <select 
-                              value={grp.currency || gameCurrency}
+                              value={grp.currency}
                               onChange={(e) => {
                                 const newCurr = e.target.value;
                                 grp.memberIndices.forEach(idx => handleEntryChange(idx, 'currency', newCurr));
                               }}
-                              className="bg-black border border-white/15 px-2.5 py-1.5 text-zinc-300 text-xs font-mono font-bold outline-none focus:border-cyan-400 transition-colors cursor-pointer"
+                              className="bg-black/80 border border-white/10 px-2 py-1 text-xs text-zinc-200 font-mono outline-none focus:border-cyan-400 transition-colors"
                             >
                               {(Array.isArray(TOP_CURRENCIES) ? TOP_CURRENCIES : ['USD', 'CAD']).map(c => (
                                 <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>
@@ -892,247 +975,161 @@ function GameEditorInner({
                             </select>
                           </td>
 
+                          {/* Bank Designation */}
                           <td className="p-3 sm:p-3.5 text-center">
                             <button
                               type="button"
-                              onClick={() => handleEntryChange(primaryIdx, 'isBank', !grp.isBank)}
+                              onClick={() => {
+                                const nextBankState = !grp.isBank;
+                                grp.memberIndices.forEach((idx, i) => {
+                                  handleEntryChange(idx, 'isBank', i === 0 ? nextBankState : false);
+                                });
+                              }}
                               className={`w-5 h-5 mx-auto border transition-all flex items-center justify-center cursor-pointer ${
-                                grp.isBank
-                                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]'
+                                grp.isBank 
+                                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]' 
                                   : 'bg-black/80 border-white/20 text-transparent hover:border-white/40'
                               }`}
                               title={grp.isBank ? "Designated Bank (Click to toggle off)" : "Click to designate as Bank for this currency"}
                             >
-                              <Check className={`w-3.5 h-3.5 stroke-[3] transition-transform ${grp.isBank ? 'scale-100 text-cyan-400' : 'scale-0'}`} />
+                              {grp.isBank && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                             </button>
                           </td>
 
-                          <td className="p-3 sm:p-3.5">
-                            {!grp.hasMultipleSeats ? (
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button 
-                                  onClick={() => adjustValue(primaryIdx, 'buyIn', -globalIncrement)}
-                                  className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                >
-                                  <Minus className="w-3 h-3" />
-                                </button>
-                                <input 
-                                  type="number" 
-                                  min="0"
-                                  value={safeEntries[primaryIdx]?.buyIn === 0 ? '' : (safeEntries[primaryIdx]?.buyIn ?? '')}
-                                  onChange={(e) => handleEntryChange(primaryIdx, 'buyIn', e.target.value === '' ? 0 : Number(e.target.value))}
-                                  className="w-16 sm:w-20 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs sm:text-sm transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
-                                />
-                                <button 
-                                  onClick={() => adjustValue(primaryIdx, 'buyIn', globalIncrement)}
-                                  className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                >
-                                  <Plus className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="text-center font-mono font-bold text-zinc-200 tabular-nums">
-                                {formatChips(grp.buyIn)}
-                              </div>
-                            )}
+                          {/* Buy-In Input */}
+                          <td className="p-3 sm:p-3.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleQuickDelta(primaryIdx, 'buyIn', -globalIncrement)}
+                                className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input 
+                                type="number" 
+                                min="0"
+                                value={grp.buyIn}
+                                onChange={(e) => handleEntryChange(primaryIdx, 'buyIn', Number(e.target.value) || 0)}
+                                className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1 text-center text-zinc-100 font-mono font-semibold outline-none focus:border-cyan-400 text-xs sm:text-sm"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleQuickDelta(primaryIdx, 'buyIn', globalIncrement)}
+                                className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
                           </td>
 
-                          <td className="p-3 sm:p-3.5">
-                            {!grp.hasMultipleSeats ? (
-                              <div className="flex items-center justify-center gap-1.5">
-                                <button 
-                                  onClick={() => adjustValue(primaryIdx, 'buyOut', -globalIncrement)}
-                                  className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                >
-                                  <Minus className="w-3 h-3" />
-                                </button>
-                                <input 
-                                  type="number" 
-                                  min="0"
-                                  value={safeEntries[primaryIdx]?.buyOut === 0 ? '' : (safeEntries[primaryIdx]?.buyOut ?? '')}
-                                  onChange={(e) => handleEntryChange(primaryIdx, 'buyOut', e.target.value === '' ? 0 : Number(e.target.value))}
-                                  className="w-16 sm:w-20 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs sm:text-sm transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
-                                />
-                                <button 
-                                  onClick={() => adjustValue(primaryIdx, 'buyOut', globalIncrement)}
-                                  className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                >
-                                  <Plus className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="text-center font-mono font-bold text-zinc-200 tabular-nums">
-                                {formatChips(grp.buyOut)}
-                              </div>
-                            )}
+                          {/* Buy-Out Input */}
+                          <td className="p-3 sm:p-3.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleQuickDelta(primaryIdx, 'buyOut', -globalIncrement)}
+                                className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input 
+                                type="number" 
+                                min="0"
+                                value={grp.buyOut}
+                                onChange={(e) => handleEntryChange(primaryIdx, 'buyOut', Number(e.target.value) || 0)}
+                                className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1 text-center text-zinc-100 font-mono font-semibold outline-none focus:border-cyan-400 text-xs sm:text-sm"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleQuickDelta(primaryIdx, 'buyOut', globalIncrement)}
+                                className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
                           </td>
 
-                          <td className="p-3 sm:p-3.5">
-                            {!grp.hasMultipleSeats ? (
-                              <div className="flex justify-center">
-                                <input 
-                                  type="number" 
-                                  min="0"
-                                  value={safeEntries[primaryIdx]?.stack === 0 ? '' : (safeEntries[primaryIdx]?.stack ?? '')}
-                                  onChange={(e) => handleEntryChange(primaryIdx, 'stack', e.target.value === '' ? 0 : Number(e.target.value))}
-                                  className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs sm:text-sm transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
-                                />
-                              </div>
-                            ) : (
-                              <div className="text-center font-mono font-bold text-zinc-200 tabular-nums">
-                                {formatChips(grp.stack)}
-                              </div>
-                            )}
+                          {/* Ending Stack Input */}
+                          <td className="p-3 sm:p-3.5 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleQuickDelta(primaryIdx, 'stack', -globalIncrement)}
+                                className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input 
+                                type="number" 
+                                min="0"
+                                value={grp.stack}
+                                onChange={(e) => handleEntryChange(primaryIdx, 'stack', Number(e.target.value) || 0)}
+                                className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1 text-center text-zinc-100 font-mono font-semibold outline-none focus:border-cyan-400 text-xs sm:text-sm"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleQuickDelta(primaryIdx, 'stack', globalIncrement)}
+                                className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
                           </td>
 
-                          <td className={`p-3 sm:p-3.5 text-right font-mono tabular-nums font-bold ${
-                            grp.net > 0 ? 'text-emerald-400 drop-shadow-[0_0_6px_rgba(34,197,94,0.6)]' :
-                            grp.net < 0 ? 'text-rose-400 drop-shadow-[0_0_6px_rgba(244,63,94,0.6)]' :
-                            'text-zinc-500'
-                          }`}>
-                            {grp.net > 0 ? '+' : ''}{grp.net === 0 ? `0` : formatChips(grp.net)}
+                          {/* Net Profit Column */}
+                          <td className="p-3 sm:p-3.5 text-right font-mono font-bold">
+                            <span className={`tabular-nums ${grp.net > 0 ? 'text-emerald-400' : grp.net < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                              {grp.net > 0 ? `+${formatChips(grp.net)}` : formatChips(grp.net)}
+                            </span>
                           </td>
 
+                          {/* Delete Row Button */}
                           <td className="p-3 sm:p-3.5 text-right">
                             <button 
-                              onClick={() => {
-                                if (grp.hasMultipleSeats) {
-                                  if (window.confirm(`Delete all ${grp.seatCount} seats for ${grp.displayName}?`)) {
-                                    handleRemoveGroup(grp.memberIndices);
-                                  }
-                                } else {
-                                  handleRemoveRow(primaryIdx);
-                                }
-                              }}
-                              className="text-zinc-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                              title={grp.hasMultipleSeats ? `Remove all ${grp.seatCount} seats` : "Remove row"}
+                              onClick={() => handleDeleteRow(primaryIdx)}
+                              className="p-1 text-zinc-600 hover:text-rose-400 transition-colors"
+                              title="Delete Player Row"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </td>
                         </tr>
 
-                        {/* SUB-ROWS FOR MULTI-SEAT DRILL-DOWN */}
-                        {grp.hasMultipleSeats && isExpanded && grp.memberIndices.map((origIdx) => {
-                          const subEntry = safeEntries[origIdx];
+                        {/* Nested Sub-rows for Multi-Seat Aliases */}
+                        {isExpanded && grp.memberIndices.map((idx, subIdx) => {
+                          const subEntry = safeEntries[idx];
                           const subNet = (Number(subEntry?.buyOut) || 0) + (Number(subEntry?.stack) || 0) - (Number(subEntry?.buyIn) || 0);
 
                           return (
-                            <tr key={`sub-${grp.key}-${subEntry?.id || origIdx}`} className="bg-zinc-950/80 hover:bg-zinc-900/80 transition-colors border-l-2 border-emerald-500/40">
-                              <td className="p-2 sm:p-2.5 pl-8 sm:pl-10">
-                                <div className="flex items-center gap-2 max-w-sm">
-                                  <span className="text-zinc-500 font-mono text-xs">↳</span>
+                            <tr key={`sub-${idx}`} className="bg-zinc-950/60 border-l-2 border-cyan-500/40 text-xs">
+                              <td className="p-2.5 pl-8 sm:pl-10">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] text-zinc-500 font-mono">Seat #{subIdx + 1}:</span>
                                   <input 
                                     type="text" 
                                     value={subEntry?.name || ''}
-                                    onChange={(e) => handleEntryChange(origIdx, 'name', e.target.value)}
-                                    placeholder="Seat alias..."
-                                    className="bg-black/90 border border-white/10 px-2.5 py-1 text-zinc-200 outline-none focus:border-cyan-400 w-full transition-all font-mono text-xs"
+                                    onChange={(e) => handleEntryChange(idx, 'name', e.target.value)}
+                                    placeholder="Seat Alias..."
+                                    className="bg-black/60 border border-white/10 px-2 py-1 text-zinc-200 outline-none focus:border-cyan-400 text-xs font-mono w-48"
                                   />
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenLinkPopover(origIdx)}
-                                    className="p-1 border border-white/10 text-zinc-500 hover:text-emerald-400 hover:border-emerald-500/40 bg-black/60 transition-all shrink-0"
-                                    title="View/Change Seat Identity Link"
-                                  >
-                                    <Link className="w-3 h-3" />
-                                  </button>
                                 </div>
                               </td>
-
-                              <td className="p-2 sm:p-2.5 text-center">
-                                <span className="text-xs font-mono text-zinc-500">
-                                  {subEntry?.currency || grp.currency}
+                              <td className="p-2.5 text-center text-zinc-400 font-mono">{subEntry?.currency || gameCurrency}</td>
+                              <td className="p-2.5 text-center text-zinc-500 font-mono">{subEntry?.isBank ? 'Bank' : '-'}</td>
+                              <td className="p-2.5 text-center text-zinc-300 font-mono">{formatChips(subEntry?.buyIn || 0)}</td>
+                              <td className="p-2.5 text-center text-zinc-300 font-mono">{formatChips(subEntry?.buyOut || 0)}</td>
+                              <td className="p-2.5 text-center text-zinc-300 font-mono">{formatChips(subEntry?.stack || 0)}</td>
+                              <td className="p-2.5 text-right font-mono font-bold">
+                                <span className={`tabular-nums ${subNet > 0 ? 'text-emerald-400' : subNet < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                                  {subNet > 0 ? `+${formatChips(subNet)}` : formatChips(subNet)}
                                 </span>
                               </td>
-
-                              <td className="p-2 sm:p-2.5 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => handleEntryChange(origIdx, 'isBank', !subEntry?.isBank)}
-                                  className={`w-4 h-4 mx-auto border transition-all flex items-center justify-center cursor-pointer ${
-                                    subEntry?.isBank
-                                      ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300'
-                                      : 'bg-black/80 border-white/10 text-transparent hover:border-white/30'
-                                  }`}
-                                >
-                                  <Check className={`w-3 h-3 stroke-[3] transition-transform ${subEntry?.isBank ? 'scale-100 text-cyan-400' : 'scale-0'}`} />
-                                </button>
-                              </td>
-
-                              <td className="p-2 sm:p-2.5">
-                                <div className="flex items-center justify-center gap-1">
-                                  <button 
-                                    onClick={() => adjustValue(origIdx, 'buyIn', -globalIncrement)}
-                                    className="p-1 bg-black/60 hover:bg-zinc-800 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                  >
-                                    <Minus className="w-2.5 h-2.5" />
-                                  </button>
-                                  <input 
-                                    type="number" 
-                                    min="0"
-                                    value={subEntry?.buyIn === 0 ? '' : (subEntry?.buyIn ?? '')}
-                                    onChange={(e) => handleEntryChange(origIdx, 'buyIn', e.target.value === '' ? 0 : Number(e.target.value))}
-                                    className="w-16 bg-black border border-white/15 px-1.5 py-1 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs"
-                                  />
-                                  <button 
-                                    onClick={() => adjustValue(origIdx, 'buyIn', globalIncrement)}
-                                    className="p-1 bg-black/60 hover:bg-zinc-800 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                  >
-                                    <Plus className="w-2.5 h-2.5" />
-                                  </button>
-                                </div>
-                              </td>
-
-                              <td className="p-2 sm:p-2.5">
-                                <div className="flex items-center justify-center gap-1">
-                                  <button 
-                                    onClick={() => adjustValue(origIdx, 'buyOut', -globalIncrement)}
-                                    className="p-1 bg-black/60 hover:bg-zinc-800 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                  >
-                                    <Minus className="w-2.5 h-2.5" />
-                                  </button>
-                                  <input 
-                                    type="number" 
-                                    min="0"
-                                    value={subEntry?.buyOut === 0 ? '' : (subEntry?.buyOut ?? '')}
-                                    onChange={(e) => handleEntryChange(origIdx, 'buyOut', e.target.value === '' ? 0 : Number(e.target.value))}
-                                    className="w-16 bg-black border border-white/15 px-1.5 py-1 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs"
-                                  />
-                                  <button 
-                                    onClick={() => adjustValue(origIdx, 'buyOut', globalIncrement)}
-                                    className="p-1 bg-black/60 hover:bg-zinc-800 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
-                                  >
-                                    <Plus className="w-2.5 h-2.5" />
-                                  </button>
-                                </div>
-                              </td>
-
-                              <td className="p-2 sm:p-2.5">
-                                <div className="flex justify-center">
-                                  <input 
-                                    type="number" 
-                                    min="0"
-                                    value={subEntry?.stack === 0 ? '' : (subEntry?.stack ?? '')}
-                                    onChange={(e) => handleEntryChange(origIdx, 'stack', e.target.value === '' ? 0 : Number(e.target.value))}
-                                    className="w-20 bg-black border border-white/15 px-1.5 py-1 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs"
-                                  />
-                                </div>
-                              </td>
-
-                              <td className={`p-2 sm:p-2.5 text-right font-mono tabular-nums text-xs ${
-                                subNet > 0 ? 'text-emerald-400/90' :
-                                subNet < 0 ? 'text-rose-400/90' :
-                                'text-zinc-500'
-                              }`}>
-                                {subNet > 0 ? '+' : ''}{subNet === 0 ? `0` : formatChips(subNet)}
-                              </td>
-
-                              <td className="p-2 sm:p-2.5 text-right">
+                              <td className="p-2.5 text-right">
                                 <button 
-                                  onClick={() => handleRemoveRow(origIdx)}
-                                  className="text-zinc-600 hover:text-rose-400 transition-colors p-1"
-                                  title="Delete seat"
+                                  onClick={() => handleDeleteRow(idx)}
+                                  className="p-1 text-zinc-600 hover:text-rose-400 transition-colors"
+                                  title="Delete Seat Row"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -1144,36 +1141,33 @@ function GameEditorInner({
                     );
                   })
                 ) : (
-                  // --- EXPANDED ALL SEATS VIEW ---
+                  // --- ALL SEATS VIEW ---
                   safeEntries.map((entry, index) => {
                     const net = (Number(entry?.buyOut) || 0) + (Number(entry?.stack) || 0) - (Number(entry?.buyIn) || 0);
                     const linkInfo = getLinkedPlayerInfo(entry);
-                    const masterName = linkInfo.masterPlayer?.display_name || linkInfo.masterPlayer?.name;
 
                     return (
-                      <tr key={entry?.id || index} className="hover:bg-white/[0.03] transition-colors group">
+                      <tr key={entry?.id || index} className="hover:bg-zinc-900/40 transition-colors group">
                         <td className="p-3 sm:p-3.5">
                           <div className="flex items-center gap-2 max-w-sm">
                             <input 
                               type="text" 
                               value={entry?.name || ''}
                               onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
-                              placeholder="Player name..."
-                              className="bg-black border border-white/15 px-3 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-full transition-all font-sans font-semibold text-xs sm:text-sm"
+                              placeholder="Player seat name..."
+                              className="bg-black border border-white/15 px-2.5 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 w-full transition-all font-mono text-xs sm:text-sm"
                             />
                             <button
                               type="button"
                               onClick={() => handleOpenLinkPopover(index)}
                               className={`p-1.5 border transition-all shrink-0 ${
                                 linkInfo.isLinked
-                                  ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)] hover:bg-emerald-500/25'
-                                  : 'bg-black/60 border-white/10 text-zinc-500 hover:text-zinc-300 hover:border-white/30'
+                                  ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                                  : 'border-white/10 text-zinc-500 hover:text-white hover:border-white/30 bg-black/60'
                               }`}
                               title={
                                 linkInfo.isLinked
-                                  ? (linkInfo.matchedBy === 'name'
-                                      ? `Auto-matched by profile name: ${masterName}`
-                                      : `Linked to Master Profile: ${masterName}`)
+                                  ? `Linked Profile: ${linkInfo.masterPlayer?.display_name || linkInfo.masterPlayer?.name}`
                                   : "Link to Master Player Profile"
                               }
                             >
@@ -1186,7 +1180,7 @@ function GameEditorInner({
                           <select 
                             value={entry?.currency || gameCurrency}
                             onChange={(e) => handleEntryChange(index, 'currency', e.target.value)}
-                            className="bg-black border border-white/15 px-2.5 py-1.5 text-zinc-300 text-xs font-mono font-bold outline-none focus:border-cyan-400 transition-colors cursor-pointer"
+                            className="bg-black/80 border border-white/10 px-2 py-1 text-xs text-zinc-200 font-mono outline-none focus:border-cyan-400 transition-colors"
                           >
                             {(Array.isArray(TOP_CURRENCIES) ? TOP_CURRENCIES : ['USD', 'CAD']).map(c => (
                               <option key={c} value={c} className="bg-zinc-950 text-white">{c}</option>
@@ -1199,88 +1193,105 @@ function GameEditorInner({
                             type="button"
                             onClick={() => handleEntryChange(index, 'isBank', !entry?.isBank)}
                             className={`w-5 h-5 mx-auto border transition-all flex items-center justify-center cursor-pointer ${
-                              entry?.isBank
-                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]'
+                              entry?.isBank 
+                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]' 
                                 : 'bg-black/80 border-white/20 text-transparent hover:border-white/40'
                             }`}
                             title={entry?.isBank ? "Designated Bank (Click to toggle off)" : "Click to designate as Bank for this currency"}
                           >
-                            <Check className={`w-3.5 h-3.5 stroke-[3] transition-transform ${entry?.isBank ? 'scale-100 text-cyan-400' : 'scale-0'}`} />
+                            {entry?.isBank && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                           </button>
                         </td>
 
-                        <td className="p-3 sm:p-3.5">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button 
-                              onClick={() => adjustValue(index, 'buyIn', -globalIncrement)}
-                              className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                        <td className="p-3 sm:p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDelta(index, 'buyIn', -globalIncrement)}
+                              className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
                             >
                               <Minus className="w-3 h-3" />
                             </button>
                             <input 
                               type="number" 
                               min="0"
-                              value={entry?.buyIn === 0 ? '' : (entry?.buyIn ?? '')}
-                              onChange={(e) => handleEntryChange(index, 'buyIn', e.target.value === '' ? 0 : Number(e.target.value))}
-                              className="w-16 sm:w-20 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs sm:text-sm transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
+                              value={entry?.buyIn ?? 0}
+                              onChange={(e) => handleEntryChange(index, 'buyIn', Number(e.target.value) || 0)}
+                              className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1 text-center text-zinc-100 font-mono font-semibold outline-none focus:border-cyan-400 text-xs sm:text-sm"
                             />
-                            <button 
-                              onClick={() => adjustValue(index, 'buyIn', globalIncrement)}
-                              className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDelta(index, 'buyIn', globalIncrement)}
+                              className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
                             >
                               <Plus className="w-3 h-3" />
                             </button>
                           </div>
                         </td>
 
-                        <td className="p-3 sm:p-3.5">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button 
-                              onClick={() => adjustValue(index, 'buyOut', -globalIncrement)}
-                              className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                        <td className="p-3 sm:p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDelta(index, 'buyOut', -globalIncrement)}
+                              className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
                             >
                               <Minus className="w-3 h-3" />
                             </button>
                             <input 
                               type="number" 
                               min="0"
-                              value={entry?.buyOut === 0 ? '' : (entry?.buyOut ?? '')}
-                              onChange={(e) => handleEntryChange(index, 'buyOut', e.target.value === '' ? 0 : Number(e.target.value))}
-                              className="w-16 sm:w-20 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs sm:text-sm transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
+                              value={entry?.buyOut ?? 0}
+                              onChange={(e) => handleEntryChange(index, 'buyOut', Number(e.target.value) || 0)}
+                              className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1 text-center text-zinc-100 font-mono font-semibold outline-none focus:border-cyan-400 text-xs sm:text-sm"
                             />
-                            <button 
-                              onClick={() => adjustValue(index, 'buyOut', globalIncrement)}
-                              className="p-1.5 bg-black/60 hover:bg-zinc-900 border border-white/10 text-zinc-400 hover:text-white transition-colors shrink-0"
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDelta(index, 'buyOut', globalIncrement)}
+                              className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
                             >
                               <Plus className="w-3 h-3" />
                             </button>
                           </div>
                         </td>
 
-                        <td className="p-3 sm:p-3.5">
-                          <div className="flex justify-center">
+                        <td className="p-3 sm:p-3.5 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDelta(index, 'stack', -globalIncrement)}
+                              className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                            >
+                              <Minus className="w-3 h-3" />
+                            </button>
                             <input 
                               type="number" 
                               min="0"
-                              value={entry?.stack === 0 ? '' : (entry?.stack ?? '')}
-                              onChange={(e) => handleEntryChange(index, 'stack', e.target.value === '' ? 0 : Number(e.target.value))}
-                              className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1.5 text-zinc-100 font-mono tabular-nums outline-none focus:border-emerald-400 text-center text-xs sm:text-sm transition-all [-moz-appearance:_textfield] [&::-webkit-outer-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-inner-spin-button]:appearance-none"
+                              value={entry?.stack ?? 0}
+                              onChange={(e) => handleEntryChange(index, 'stack', Number(e.target.value) || 0)}
+                              className="w-20 sm:w-24 bg-black border border-white/15 px-2 py-1 text-center text-zinc-100 font-mono font-semibold outline-none focus:border-cyan-400 text-xs sm:text-sm"
                             />
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDelta(index, 'stack', globalIncrement)}
+                              className="w-6 h-6 bg-black/60 hover:bg-zinc-800 text-zinc-400 hover:text-emerald-400 border border-white/10 flex items-center justify-center transition-colors shrink-0"
+                            >
+                              <Plus className="w-3 h-3" />
+                            </button>
                           </div>
                         </td>
 
-                        <td className={`p-3 sm:p-3.5 text-right font-mono tabular-nums font-bold ${
-                          net > 0 ? 'text-emerald-400 drop-shadow-[0_0_6px_rgba(34,197,94,0.6)]' :
-                          net < 0 ? 'text-rose-400 drop-shadow-[0_0_6px_rgba(244,63,94,0.6)]' :
-                          'text-zinc-500'
-                        }`}>
-                          {net > 0 ? '+' : ''}{net === 0 ? `0` : formatChips(net)}
+                        <td className="p-3 sm:p-3.5 text-right font-mono font-bold">
+                          <span className={`tabular-nums ${net > 0 ? 'text-emerald-400' : net < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                            {net > 0 ? `+${formatChips(net)}` : formatChips(net)}
+                          </span>
                         </td>
 
                         <td className="p-3 sm:p-3.5 text-right">
                           <button 
-                            onClick={() => handleRemoveRow(index)}
-                            className="text-zinc-600 hover:text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                            onClick={() => handleDeleteRow(index)}
+                            className="p-1 text-zinc-600 hover:text-rose-400 transition-colors"
+                            title="Delete Player Row"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -1293,7 +1304,7 @@ function GameEditorInner({
             </table>
           </div>
 
-          <div className="p-4 border-t border-white/10 bg-black/60 flex items-center justify-between">
+          <div className="p-4 border-t border-white/10 bg-black/60 flex flex-wrap items-center justify-between gap-4">
             <button 
               onClick={handleAddRow}
               className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 hover:text-cyan-400 flex items-center gap-1.5 transition-colors"
@@ -1301,12 +1312,16 @@ function GameEditorInner({
               <Plus className="w-4 h-4 text-cyan-400" /> Add Player Row
             </button>
 
-            <button
-              onClick={() => setActiveTab('settlement')}
-              className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400 hover:text-cyan-300 flex items-center gap-1.5 transition-colors"
-            >
-              View Settlement Checklist <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            {/* Total Chips & Converted Fiat Telemetry Readout */}
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <span className="text-zinc-500 uppercase tracking-widest text-[10px] font-bold">Total In Play:</span>
+              <span className="text-cyan-400 font-bold tabular-nums">
+                {formatChips(totalBuyIn)}
+              </span>
+              <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 font-bold tabular-nums text-[11px]">
+                [{formatFiat(totalMoneyInGameFiat, globalCurrency || 'USD')}]
+              </span>
+            </div>
           </div>
 
           {(validationErrors?.length ?? 0) > 0 && (
@@ -1361,6 +1376,22 @@ function GameEditorInner({
             }}
             isBalanced={isBalanced}
             totalBuyIn={totalBuyIn}
+          />
+        </div>
+      )}
+
+      {/* Session Analytics & Pulse Data Viz View */}
+      {activeTab === 'analytics' && (
+        <div className="w-full">
+          <SessionAnalyticsPanel
+            game={game}
+            entries={safeEntries}
+            players={players}
+            playerLinks={playerLinks}
+            globalCurrency={globalCurrency}
+            exchangeRates={exchangeRates}
+            chipValue={chipValue}
+            onAttachLog={handleLogFileUpload}
           />
         </div>
       )}
