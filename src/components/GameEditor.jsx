@@ -35,12 +35,37 @@ import SessionSettlementPanel from './SessionSettlementPanel';
 const generateId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 const norm = (v) => String(v || '').trim().toLowerCase();
 
+const formatSessionTitleDate = (dateStr) => {
+  if (!dateStr) return 'SESSION';
+  try {
+    const parts = String(dateStr).trim().split(/[-/T ]/);
+    if (parts.length >= 3) {
+      const year = parts[0].length === 4 ? parts[0] : parts[2];
+      const monthIdx = parts[0].length === 4 ? parseInt(parts[1], 10) - 1 : parseInt(parts[0], 10) - 1;
+      const day = parts[0].length === 4 ? parseInt(parts[2], 10) : parseInt(parts[1], 10);
+      const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      if (monthIdx >= 0 && monthIdx < 12 && !isNaN(day) && year) {
+        return `${months[monthIdx]} ${day} ${year}`;
+      }
+    }
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      const month = d.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+      return `${month} ${d.getUTCDate()} ${d.getUTCFullYear()}`;
+    }
+    return String(dateStr).toUpperCase();
+  } catch {
+    return String(dateStr).toUpperCase();
+  }
+};
+
 export default function GameEditor(props) {
   return <GameEditorInner key={props.game?.id} {...props} />;
 }
 
 function GameEditorInner({ 
   game, 
+  globalCurrency = 'USD',
   globalIncrement = 100, 
   setGlobalIncrement, 
   exchangeRates, 
@@ -118,16 +143,24 @@ function GameEditorInner({
     }
   }, [ratioChips, ratioFiat]);
 
-  // Auto-save debounce
+  // Auto-save debounce with stable change detection
   const isFirstMount = useRef(true);
   const onSaveRef = useRef(onSave);
+  const lastSavedSnapshot = useRef('');
+
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
 
   useEffect(() => {
+    const currentSnapshot = JSON.stringify({ date, gameCurrency, chipValue, entries });
     if (isFirstMount.current) {
       isFirstMount.current = false;
+      lastSavedSnapshot.current = currentSnapshot;
+      return;
+    }
+
+    if (currentSnapshot === lastSavedSnapshot.current) {
       return;
     }
 
@@ -143,17 +176,20 @@ function GameEditorInner({
             entries
           });
         }
+        lastSavedSnapshot.current = currentSnapshot;
         setSaveStatus('saved');
-        setTimeout(() => setSaveStatus('idle'), 2000);
+        setTimeout(() => {
+          setSaveStatus(prev => (prev === 'saved' ? 'idle' : prev));
+        }, 2500);
       } catch (err) {
         console.error("Auto-save failed:", err);
         setSaveStatus('error');
         setSaveError(err.message || 'Save failed');
       }
-    }, 800);
+    }, 1000);
 
     return () => clearTimeout(timer);
-  }, [date, gameCurrency, chipValue, entries, game]);
+  }, [date, gameCurrency, chipValue, entries]);
 
   // Safe checks on entries list
   const safeEntries = useMemo(() => Array.isArray(entries) ? entries : [], [entries]);
@@ -174,6 +210,19 @@ function GameEditorInner({
   const totalOut = totalBuyOut + totalStack;
   const netDifference = totalBuyIn - totalOut;
   const isBalanced = Math.abs(netDifference) < 0.001;
+
+  // Global FX conversion for total money in play
+  const fxRate = (c) => (exchangeRates && exchangeRates[c] ? exchangeRates[c] : 1);
+  const targetFx = fxRate(globalCurrency || 'USD');
+
+  const totalMoneyInGameFiat = useMemo(() => {
+    return safeEntries.reduce((sum, e) => {
+      const eCurr = e.currency || gameCurrency || 'USD';
+      const eFx = fxRate(eCurr);
+      const buyIn = Number(e.buyIn) || 0;
+      return sum + (((buyIn * chipValue) / eFx) * targetFx);
+    }, 0);
+  }, [safeEntries, gameCurrency, chipValue, exchangeRates, globalCurrency, targetFx]);
 
   // Validation
   const validationErrors = useMemo(() => {
@@ -259,44 +308,43 @@ function GameEditorInner({
     const normExtId = norm(entry.pokerNowId || entry.externalId || entry.player_external_id || entry.external_player_id);
     const normName = norm(entry.name);
 
-    // 1. Match via external_id in playerLinks
+    // 1. Check external ID / PokerNow ID match against player_links
     if (normExtId) {
       const link = (playerLinks || []).find(l => {
         const ext = norm(l.external_id || l.external_player_id);
-        return ext === normExtId;
+        return ext && ext === normExtId;
       });
       if (link && masterPlayerMap.has(link.player_id)) {
-        return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'extId' };
+        return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'external_id' };
       }
     }
 
-    // 2. Match via session alias in playerLinks
+    // 2. Check seat-name / alias match against player_links
     if (normName) {
       const link = (playerLinks || []).find(l => {
-        const ext = norm(l.external_id || l.external_player_id || l.session_name);
-        return ext === normName;
+        const ext = norm(l.external_id || l.external_player_id);
+        const alias = norm(l.session_name);
+        return (ext && ext === normName) || (alias && alias === normName);
       });
       if (link && masterPlayerMap.has(link.player_id)) {
         return { isLinked: true, masterPlayer: masterPlayerMap.get(link.player_id), linkRecord: link, matchedBy: 'alias' };
       }
 
-      // 3. Direct display_name match with registered master player profile (auto self-link)
-      const exactMatch = (Array.isArray(players) ? players : []).find(
-        p => p && (norm(p.display_name) === normName || norm(p.name) === normName)
-      );
-      if (exactMatch) {
-        return { isLinked: true, masterPlayer: exactMatch, linkRecord: null, matchedBy: 'name' };
+      // 3. Direct display_name match
+      const exactPlayer = (players || []).find(p => norm(p.display_name) === normName || norm(p.name) === normName);
+      if (exactPlayer) {
+        return { isLinked: true, masterPlayer: exactPlayer, linkRecord: null, matchedBy: 'display_name' };
       }
     }
 
     return { isLinked: false, masterPlayer: null, linkRecord: null, matchedBy: null };
   };
 
-  // Group entries by Master Player Profile (for compacted view)
+  // --- COMPACTED ROSTER GROUPS ---
   const compactedGroups = useMemo(() => {
-    const groupsMap = new Map();
+    const groups = new Map();
 
-    safeEntries.forEach((entry, originalIndex) => {
+    safeEntries.forEach((entry, index) => {
       const linkInfo = getLinkedPlayerInfo(entry);
       let groupKey;
       let displayName;
@@ -304,75 +352,77 @@ function GameEditorInner({
       let masterPlayer = null;
 
       if (linkInfo.isLinked && linkInfo.masterPlayer) {
-        groupKey = `player:${linkInfo.masterPlayer.id}`;
+        groupKey = `master-${linkInfo.masterPlayer.id}`;
         displayName = linkInfo.masterPlayer.display_name || linkInfo.masterPlayer.name;
         isLinked = true;
         masterPlayer = linkInfo.masterPlayer;
       } else {
-        groupKey = `unlinked:${entry?.id || originalIndex}:${(entry?.name || '').trim()}`;
-        displayName = (entry?.name || '').trim() || 'Unnamed';
-        isLinked = false;
-        masterPlayer = null;
+        const fallbackName = (entry?.name || '').trim();
+        groupKey = fallbackName ? `name-${norm(fallbackName)}` : `entry-${entry?.id || index}`;
+        displayName = fallbackName || 'Unnamed Player';
       }
 
-      if (!groupsMap.has(groupKey)) {
-        groupsMap.set(groupKey, {
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
           key: groupKey,
           displayName,
           isLinked,
           masterPlayer,
-          currency: entry?.currency || gameCurrency,
-          isBank: Boolean(entry?.isBank),
-          memberIndices: [originalIndex],
-          memberEntries: [entry],
-          matchedBy: linkInfo.matchedBy
+          primaryIndex: index,
+          memberIndices: [index],
+          currency: entry.currency || gameCurrency,
+          isBank: Boolean(entry.isBank),
+          buyIn: Number(entry.buyIn) || 0,
+          buyOut: Number(entry.buyOut) || 0,
+          stack: Number(entry.stack) || 0,
+          rawAliases: entry.name ? [entry.name] : []
         });
       } else {
-        const grp = groupsMap.get(groupKey);
-        grp.memberIndices.push(originalIndex);
-        grp.memberEntries.push(entry);
-        if (entry?.isBank) grp.isBank = true;
+        const grp = groups.get(groupKey);
+        grp.memberIndices.push(index);
+        grp.buyIn += Number(entry.buyIn) || 0;
+        grp.buyOut += Number(entry.buyOut) || 0;
+        grp.stack += Number(entry.stack) || 0;
+        if (entry.isBank) grp.isBank = true;
+        if (entry.name && !grp.rawAliases.includes(entry.name)) {
+          grp.rawAliases.push(entry.name);
+        }
       }
     });
 
-    return Array.from(groupsMap.values()).map(grp => {
-      const totalBuyIn = grp.memberEntries.reduce((s, e) => s + (Number(e?.buyIn) || 0), 0);
-      const totalBuyOut = grp.memberEntries.reduce((s, e) => s + (Number(e?.buyOut) || 0), 0);
-      const totalStack = grp.memberEntries.reduce((s, e) => s + (Number(e?.stack) || 0), 0);
-      const net = totalBuyOut + totalStack - totalBuyIn;
-
+    return Array.from(groups.values()).map(grp => {
+      const net = grp.buyOut + grp.stack - grp.buyIn;
       return {
         ...grp,
-        buyIn: totalBuyIn,
-        buyOut: totalBuyOut,
-        stack: totalStack,
         net,
-        hasMultipleSeats: grp.memberEntries.length > 1,
-        seatCount: grp.memberEntries.length
+        seatCount: grp.memberIndices.length,
+        hasMultipleSeats: grp.memberIndices.length > 1
       };
     });
   }, [safeEntries, gameCurrency, players, playerLinks, masterPlayerMap]);
 
-  const toggleGroupExpand = (groupKey) => {
+  const toggleGroupExpand = (key) => {
     setExpandedGroupKeys(prev => {
       const next = new Set(prev);
-      if (next.has(groupKey)) {
-        next.delete(groupKey);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        next.add(groupKey);
+        next.add(key);
       }
       return next;
     });
   };
 
+  // Link Management Handlers
   const handleOpenLinkPopover = (index) => {
-    setPopoverIndex(index);
     const entry = safeEntries[index];
-    const info = getLinkedPlayerInfo(entry);
-    setSelectedMasterPlayerId(info.masterPlayer?.id || '');
-    setNewMasterPlayerName('');
+    if (!entry) return;
+    const linkInfo = getLinkedPlayerInfo(entry);
+    setSelectedMasterPlayerId(linkInfo.masterPlayer?.id || '');
+    setNewMasterPlayerName(entry.name || '');
     setIsCreatingNewPlayer(false);
     setPlayerActionError(null);
+    setPopoverIndex(index);
   };
 
   const handleLinkToMaster = async (index, masterId) => {
@@ -385,57 +435,45 @@ function GameEditorInner({
     try {
       const alias = (entry.name || '').trim();
       const extId = (entry.pokerNowId || entry.externalId || entry.player_external_id || entry.external_player_id || '').trim();
-      const primaryKey = extId || alias;
 
       if (supabase) {
-        // Check if there is an existing link matching either external_id or session_name
-        const existingLink = (playerLinks || []).find(l => {
-          const lExt = norm(l.external_id || l.external_player_id);
-          const lAlias = norm(l.session_name);
-          return (extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias)));
-        });
+        // Find existing link for this external_id or alias
+        const { data: existingLinks } = await supabase
+          .from('player_links')
+          .select('id, external_id, session_name')
+          .eq('player_id', masterId);
 
-        if (existingLink) {
-          const { error: updErr } = await supabase
-            .from('player_links')
-            .update({ 
-              player_id: masterId,
-              external_id: primaryKey,
-              session_name: alias || null,
-              platform: extId ? 'pokernow' : 'alias'
-            })
-            .eq('id', existingLink.id);
-
-          if (updErr) throw updErr;
-        } else {
-          const { error: insErr } = await supabase
-            .from('player_links')
-            .insert([{
-              player_id: masterId,
-              external_id: primaryKey,
-              session_name: alias || null,
-              platform: extId ? 'pokernow' : 'alias'
-            }]);
-
-          if (insErr) throw insErr;
-        }
-      } else {
-        // Local storage fallback
-        const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
-        const existingIdx = currentLinks.findIndex(l => {
-          const lExt = norm(l.external_id || l.external_player_id);
-          const lAlias = norm(l.session_name);
-          return (extId && lExt === norm(extId)) || (alias && (lExt === norm(alias) || lAlias === norm(alias)));
-        });
-
-        const newLinkObj = {
-          id: existingIdx >= 0 ? currentLinks[existingIdx].id : `local-link-${Date.now()}`,
+        const linkPayload = {
           player_id: masterId,
-          external_id: primaryKey,
-          session_name: alias || null,
-          platform: extId ? 'pokernow' : 'alias'
+          platform: 'pokernow',
+          external_id: extId || alias || null,
+          external_player_id: extId || alias || null,
+          session_name: alias || null
         };
 
+        const { error: upsertErr } = await supabase
+          .from('player_links')
+          .upsert([linkPayload], { onConflict: 'platform,external_id' });
+
+        if (upsertErr) {
+          // If conflict constraint isn't present, try simple insert
+          await supabase.from('player_links').insert([linkPayload]);
+        }
+      } else {
+        // LocalStorage fallback
+        const currentLinks = JSON.parse(localStorage.getItem('offsuite_player_links') || '[]');
+        const newLinkObj = {
+          id: `link-${Date.now()}`,
+          player_id: masterId,
+          platform: 'pokernow',
+          external_id: extId || alias || null,
+          external_player_id: extId || alias || null,
+          session_name: alias || null
+        };
+        const existingIdx = currentLinks.findIndex(l => 
+          (extId && (l.external_id === extId || l.external_player_id === extId)) ||
+          (alias && (l.external_id === alias || l.session_name === alias))
+        );
         if (existingIdx >= 0) {
           currentLinks[existingIdx] = newLinkObj;
         } else {
@@ -610,25 +648,22 @@ function GameEditorInner({
           )}
 
           <div>
-            <div className="flex items-center gap-2">
-              <input 
-                type="date" 
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="bg-black/80 border border-white/15 px-2.5 py-1 text-xs text-zinc-100 font-mono font-bold outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all cursor-pointer"
-              />
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl sm:text-2xl font-bold font-mono tracking-tight text-white uppercase">
+                {formatSessionTitleDate(date)}
+              </h1>
               {saveStatus === 'saving' && (
-                <span className="text-[11px] font-mono text-cyan-400 flex items-center gap-1 animate-pulse">
+                <span className="text-[11px] font-mono text-cyan-400/90 flex items-center gap-1.5 animate-pulse bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-cyan-400" /> Auto-saving...
                 </span>
               )}
               {saveStatus === 'saved' && (
-                <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1">
+                <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 transition-all">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Saved
                 </span>
               )}
               {saveStatus === 'error' && (
-                <span className="text-[11px] font-mono text-rose-400 flex items-center gap-1">
+                <span className="text-[11px] font-mono text-rose-400 flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5">
                   <AlertCircle className="w-3.5 h-3.5" /> {saveError || 'Save Error'}
                 </span>
               )}
@@ -749,22 +784,23 @@ function GameEditorInner({
 
       {/* Main Content Area */}
       {activeTab === 'roster' && (
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 overflow-hidden shadow-2xl backdrop-blur-xl flex flex-col min-w-0">
-          <div className="p-4 border-b border-white/10 bg-black/60 flex flex-wrap items-center justify-between gap-4">
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 shadow-2xl backdrop-blur-xl">
+          <div className="p-4 sm:p-5 border-b border-white/10 flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h3 className="font-bold text-white flex items-center gap-2 font-sans uppercase tracking-wider text-sm">
-                Session Roster & Stacks
-                <InfoTooltip text="Total Buy-Ins must match Total Cash-Outs (Buy-Outs + Ending Stacks) for the ledger to balance." />
-              </h3>
-              <p className="text-xs text-zinc-500 font-mono mt-0.5">
+              <div className="flex items-center gap-2">
+                <h3 className="font-bold text-white uppercase tracking-wider text-sm font-mono">Session Roster & Stacks</h3>
+                <InfoTooltip text="Manage player buy-ins, buy-outs, and live table stacks. Grouped automatically by master player profile." />
+              </div>
+              <p className="text-xs text-zinc-400 font-mono mt-0.5">
                 {compactMode 
                   ? `Compacted view: Showing ${compactedGroups.length} unique player profiles across ${safeEntries.length} session seats.`
-                  : `Expanded view: Showing all ${safeEntries.length} individual session seats.`}
+                  : `All seats view: Showing ${safeEntries.length} individual session seat rows.`
+                }
               </p>
             </div>
 
-            {/* View Density Toggle */}
-            <div className="flex items-center gap-1.5 bg-black/80 border border-white/10 p-1 text-xs font-mono">
+            {/* Compact / All Seats Toggle */}
+            <div className="flex bg-black/80 border border-white/10 p-0.5 text-xs font-mono">
               <button
                 type="button"
                 onClick={() => setCompactMode(true)}
@@ -773,9 +809,8 @@ function GameEditorInner({
                     ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_6px_rgba(16,185,129,0.3)]'
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
-                title="Consolidate duplicate session seats by player profile"
               >
-                <Layers className="w-3.5 h-3.5 text-emerald-400" />
+                <Layers className="w-3.5 h-3.5" />
                 <span>Compacted ({compactedGroups.length})</span>
               </button>
               <button
@@ -783,88 +818,87 @@ function GameEditorInner({
                 onClick={() => setCompactMode(false)}
                 className={`px-3 py-1 font-bold transition-all flex items-center gap-1.5 ${
                   !compactMode
-                    ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/40 shadow-[0_0_6px_rgba(6,182,212,0.3)]'
+                    ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_6px_rgba(16,185,129,0.3)]'
                     : 'text-zinc-400 hover:text-zinc-200'
                 }`}
-                title="Display all raw session seats without grouping"
               >
-                <Users className="w-3.5 h-3.5 text-cyan-400" />
+                <Users className="w-3.5 h-3.5" />
                 <span>All Seats ({safeEntries.length})</span>
               </button>
             </div>
           </div>
 
-          <div className="w-full overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs sm:text-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm font-mono border-collapse">
               <thead>
-                <tr className="border-b border-white/10 bg-black/80 text-zinc-400 font-mono font-semibold uppercase tracking-wider text-[11px]">
-                  <th className="p-3 sm:p-3.5">Player Profile / Seat</th>
-                  <th className="p-3 sm:p-3.5 text-center w-24">Currency</th>
-                  <th className="p-3 sm:p-3.5 text-center w-20">Bank</th>
-                  <th className="p-3 sm:p-3.5 text-center">Buy-In</th>
-                  <th className="p-3 sm:p-3.5 text-center">Buy-Out</th>
-                  <th className="p-3 sm:p-3.5 text-center">Stack</th>
-                  <th className="p-3 sm:p-3.5 text-right w-28">Net</th>
-                  <th className="p-3 sm:p-3.5 text-right w-12"></th>
+                <tr className="border-b border-white/10 bg-black/60 text-zinc-400 uppercase text-[10px] tracking-wider">
+                  <th className="p-3 sm:p-3.5 font-medium">Player Profile / Seat</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Currency</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Bank</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Buy-In</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Buy-Out</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-center">Stack</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-right">Net</th>
+                  <th className="p-3 sm:p-3.5 font-medium text-right w-10"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5 font-medium">
+              <tbody className="divide-y divide-white/5">
                 {compactMode ? (
-                  // --- COMPACTED VIEW (GROUPED BY PLAYER PROFILE) ---
+                  // --- COMPACTED ROSTER VIEW ---
                   compactedGroups.map((grp) => {
-                    const primaryIdx = grp.memberIndices[0];
+                    const primaryIdx = grp.primaryIndex;
                     const isExpanded = expandedGroupKeys.has(grp.key);
 
                     return (
                       <Fragment key={grp.key}>
-                        <tr className="hover:bg-white/[0.03] transition-colors group bg-black/20">
+                        <tr className="hover:bg-zinc-900/40 transition-colors group">
                           <td className="p-3 sm:p-3.5">
                             <div className="flex items-center gap-2 max-w-sm">
-                              {grp.hasMultipleSeats ? (
+                              {grp.hasMultipleSeats && (
                                 <button
                                   type="button"
                                   onClick={() => toggleGroupExpand(grp.key)}
-                                  className="p-1 hover:bg-zinc-800 text-emerald-400 border border-emerald-500/30 flex items-center gap-1 transition-all shrink-0 font-mono text-[10px] font-bold uppercase tracking-wider px-1.5"
-                                  title={isExpanded ? "Collapse session seat aliases" : "Expand session seat aliases"}
+                                  className="p-1 text-zinc-400 hover:text-cyan-400 transition-colors flex items-center gap-1"
+                                  title={isExpanded ? "Collapse seat rows" : "Expand seat rows"}
                                 >
                                   {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                                  <span>{grp.seatCount} seats</span>
+                                  <span className="text-[10px] font-mono px-1.5 py-0.2 bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 font-bold">
+                                    {grp.seatCount}
+                                  </span>
                                 </button>
-                              ) : null}
+                              )}
 
-                              {grp.isLinked ? (
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-sans font-bold text-white text-sm truncate">
-                                      {grp.displayName}
-                                    </span>
-                                    <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 border border-emerald-500/30 shrink-0">
-                                      {grp.hasMultipleSeats ? 'Consolidated Profile' : 'Linked Profile'}
-                                    </span>
-                                  </div>
-                                  {!grp.hasMultipleSeats && safeEntries[primaryIdx]?.name && safeEntries[primaryIdx]?.name.trim().toLowerCase() !== grp.displayName.trim().toLowerCase() && (
-                                    <span className="text-[10px] font-mono text-zinc-500 block truncate mt-0.5">
-                                      Seat: {safeEntries[primaryIdx]?.name}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white text-sm font-sans tracking-tight truncate">
+                                    {grp.displayName}
+                                  </span>
+                                  {grp.isLinked && (
+                                    <span className="text-[9px] uppercase font-mono font-bold tracking-widest px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shrink-0">
+                                      Linked Profile
                                     </span>
                                   )}
                                 </div>
-                              ) : (
-                                <input 
-                                  type="text" 
-                                  value={safeEntries[primaryIdx]?.name || ''}
-                                  onChange={(e) => handleEntryChange(primaryIdx, 'name', e.target.value)}
-                                  placeholder="Player name..."
-                                  className="bg-black border border-white/15 px-3 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-full transition-all font-sans font-semibold text-xs sm:text-sm"
-                                />
-                              )}
+                                {grp.hasMultipleSeats ? (
+                                  <p className="text-[10px] text-zinc-500 font-mono truncate mt-0.5">
+                                    Seats: {grp.rawAliases.join(', ')}
+                                  </p>
+                                ) : (
+                                  grp.rawAliases[0] && grp.rawAliases[0] !== grp.displayName && (
+                                    <p className="text-[10px] text-zinc-500 font-mono truncate mt-0.5">
+                                      Seat: {grp.rawAliases[0]}
+                                    </p>
+                                  )
+                                )}
+                              </div>
 
                               <button
                                 type="button"
                                 onClick={() => handleOpenLinkPopover(primaryIdx)}
                                 className={`p-1.5 border transition-all shrink-0 ${
                                   grp.isLinked
-                                    ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)] hover:bg-emerald-500/25'
-                                    : 'bg-black/60 border-white/10 text-zinc-500 hover:text-zinc-300 hover:border-white/30'
+                                    ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                                    : 'border-white/10 text-zinc-500 hover:text-white hover:border-white/30 bg-black/60'
                                 }`}
                                 title={
                                   grp.isLinked
@@ -1148,32 +1182,29 @@ function GameEditorInner({
                   safeEntries.map((entry, index) => {
                     const net = (Number(entry?.buyOut) || 0) + (Number(entry?.stack) || 0) - (Number(entry?.buyIn) || 0);
                     const linkInfo = getLinkedPlayerInfo(entry);
-                    const masterName = linkInfo.masterPlayer?.display_name || linkInfo.masterPlayer?.name;
 
                     return (
-                      <tr key={entry?.id || index} className="hover:bg-white/[0.03] transition-colors group">
+                      <tr key={entry?.id || index} className="hover:bg-zinc-900/40 transition-colors group">
                         <td className="p-3 sm:p-3.5">
                           <div className="flex items-center gap-2 max-w-sm">
                             <input 
                               type="text" 
                               value={entry?.name || ''}
                               onChange={(e) => handleEntryChange(index, 'name', e.target.value)}
-                              placeholder="Player name..."
-                              className="bg-black border border-white/15 px-3 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 focus:shadow-[0_0_8px_rgba(6,182,212,0.4)] w-full transition-all font-sans font-semibold text-xs sm:text-sm"
+                              placeholder="Player seat name..."
+                              className="bg-black border border-white/15 px-2.5 py-1.5 text-zinc-100 outline-none focus:border-cyan-400 w-full transition-all font-mono text-xs sm:text-sm"
                             />
                             <button
                               type="button"
                               onClick={() => handleOpenLinkPopover(index)}
                               className={`p-1.5 border transition-all shrink-0 ${
                                 linkInfo.isLinked
-                                  ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.5)] hover:bg-emerald-500/25'
-                                  : 'bg-black/60 border-white/10 text-zinc-500 hover:text-zinc-300 hover:border-white/30'
+                                  ? 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                                  : 'border-white/10 text-zinc-500 hover:text-white hover:border-white/30 bg-black/60'
                               }`}
                               title={
                                 linkInfo.isLinked
-                                  ? (linkInfo.matchedBy === 'name'
-                                      ? `Auto-matched by profile name: ${masterName}`
-                                      : `Linked to Master Profile: ${masterName}`)
+                                  ? `Linked Profile: ${linkInfo.masterPlayer?.display_name || linkInfo.masterPlayer?.name}`
                                   : "Link to Master Player Profile"
                               }
                             >
@@ -1199,8 +1230,8 @@ function GameEditorInner({
                             type="button"
                             onClick={() => handleEntryChange(index, 'isBank', !entry?.isBank)}
                             className={`w-5 h-5 mx-auto border transition-all flex items-center justify-center cursor-pointer ${
-                              entry?.isBank
-                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]'
+                              entry?.isBank 
+                                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.6)]' 
                                 : 'bg-black/80 border-white/20 text-transparent hover:border-white/40'
                             }`}
                             title={entry?.isBank ? "Designated Bank (Click to toggle off)" : "Click to designate as Bank for this currency"}
@@ -1293,7 +1324,7 @@ function GameEditorInner({
             </table>
           </div>
 
-          <div className="p-4 border-t border-white/10 bg-black/60 flex items-center justify-between">
+          <div className="p-4 border-t border-white/10 bg-black/60 flex flex-wrap items-center justify-between gap-4">
             <button 
               onClick={handleAddRow}
               className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 hover:text-cyan-400 flex items-center gap-1.5 transition-colors"
@@ -1301,12 +1332,16 @@ function GameEditorInner({
               <Plus className="w-4 h-4 text-cyan-400" /> Add Player Row
             </button>
 
-            <button
-              onClick={() => setActiveTab('settlement')}
-              className="text-xs font-mono font-bold uppercase tracking-wider text-cyan-400 hover:text-cyan-300 flex items-center gap-1.5 transition-colors"
-            >
-              View Settlement Checklist <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            {/* Total Chips & Converted Fiat Telemetry Readout */}
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <span className="text-zinc-500 uppercase tracking-widest text-[10px] font-bold">Total In Play:</span>
+              <span className="text-cyan-400 font-bold tabular-nums">
+                {formatChips(totalBuyIn)}
+              </span>
+              <span className="text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 font-bold tabular-nums text-[11px]">
+                [{formatFiat(totalMoneyInGameFiat, globalCurrency || 'USD')}]
+              </span>
+            </div>
           </div>
 
           {(validationErrors?.length ?? 0) > 0 && (
