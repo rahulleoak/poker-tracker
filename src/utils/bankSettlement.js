@@ -1,4 +1,4 @@
-import { country, DEFAULT_COUNTRY } from './countries.js';
+import { country, countryFromCurrency, DEFAULT_COUNTRY } from './countries.js';
 
 const EPS = 0.005; // half a cent — below this, treat as settled
 
@@ -46,21 +46,37 @@ function greedyMatch(nodes) {
  *
  * Canonical amounts (`amount`, `net`) are CAD (chips ÷ chipsPerCad). Each
  * country also settles in its own currency: `*Local` fields convert CAD at
- * `cadToUsd` for USD countries (1:1 for CAD). `from` pays `to`.
+ * `cadToUsd` / `exchangeRates` for each country (1:1 for CAD). `from` pays `to`.
  *
- * @param {{ entries: Array<Object>, countryByKey?: Record<string,string>, bankByCountry?: Record<string,string>, chipsPerCad?: number, cadToUsd?: number }} args
+ * @param {{ entries: Array<Object>, countryByKey?: Record<string,string>, bankByCountry?: Record<string,string>, chipsPerCad?: number, cadToUsd?: number, exchangeRates?: Record<string,number> }} args
  */
-export function computeBankSettlement({ entries = [], countryByKey = {}, bankByCountry = {}, chipsPerCad = 100, cadToUsd = 1 }) {
+export function computeBankSettlement({ 
+  entries = [], 
+  countryByKey = {}, 
+  bankByCountry = {}, 
+  chipsPerCad = 100, 
+  cadToUsd = 1,
+  exchangeRates = null 
+}) {
   const rate = Number(chipsPerCad) > 0 ? Number(chipsPerCad) : 100;
   const usdRate = Number(cadToUsd) > 0 ? Number(cadToUsd) : 1;
-  const currencyRate = (code) => (country(code).currency === 'USD' ? usdRate : 1);
+
+  const currencyRate = (code) => {
+    const cur = country(code).currency;
+    if (exchangeRates && typeof exchangeRates === 'object') {
+      const cadBase = exchangeRates.CAD || 1.35;
+      const targetRate = exchangeRates[cur] || (cur === 'USD' ? 1 : cur === 'CAD' ? cadBase : 1);
+      return targetRate / cadBase;
+    }
+    return cur === 'USD' ? usdRate : 1;
+  };
 
   const units = (Array.isArray(entries) ? entries : [])
     .filter((e) => e && (e.name || '').trim() !== '')
     .map((e) => {
       const key = keyOfEntry(e);
       const netChips = (Number(e.buyOut) || 0) + (Number(e.stack) || 0) - (Number(e.buyIn) || 0);
-      const inferredCountry = (e.currency === 'USD' || e.currency === 'US') ? 'US' : (e.currency === 'CAD' || e.currency === 'CA') ? 'CA' : DEFAULT_COUNTRY;
+      const inferredCountry = countryFromCurrency(e.currency || e.preferred_currency || DEFAULT_COUNTRY);
       const c = countryByKey[key] || countryByKey[e.pokerNowId] || countryByKey[e.externalId] || countryByKey[e.name] || inferredCountry;
       return {
         key,
