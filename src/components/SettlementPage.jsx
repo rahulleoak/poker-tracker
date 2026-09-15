@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   Landmark,
@@ -57,6 +57,9 @@ function SettlementPageContent({ embedded = false }) {
     return (routeCountry || 'CA').toUpperCase();
   });
 
+  const [countryDropdownOpen, setCountryDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
   const [legs, setLegs] = useState([]);
   const [marks, setMarks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,6 +74,16 @@ function SettlementPageContent({ embedded = false }) {
     if (typeof resolve === 'function') return resolve;
     return makeNameResolver(players);
   }, [resolve, players]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setCountryDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     if (routeCountry) {
@@ -306,26 +319,63 @@ function SettlementPageContent({ embedded = false }) {
             </p>
           </div>
 
-          {/* Country Selector Tabs */}
-          <div className="flex gap-2 bg-black/60 border border-white/10 p-1 self-start md:self-auto flex-wrap">
-            {activeCountriesList.map((c) => {
-              const active = c.code === activeCountry;
-              return (
-                <button
-                  key={c.code}
-                  onClick={() => handleCountrySelect(c.code)}
-                  className={`px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider transition-all flex items-center gap-2 ${
-                    active
-                      ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
-                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/60'
-                  }`}
-                >
-                  <span className="text-base">{c.flag}</span>
-                  <span>{c.name}</span>
-                  <span className="text-[10px] text-zinc-500">({c.currency})</span>
-                </button>
-              );
-            })}
+          {/* Regional Ledger Dropdown Selector */}
+          <div className="relative self-start md:self-auto" ref={dropdownRef}>
+            <div className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+              <Landmark className="w-3 h-3 text-emerald-400" />
+              <span>Regional Ledger</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCountryDropdownOpen((prev) => !prev)}
+              className="bg-black/90 hover:bg-zinc-900/90 border border-white/20 hover:border-emerald-500/50 text-white font-mono text-xs sm:text-sm font-bold px-3 py-2 flex items-center justify-between gap-3 min-w-[220px] transition-all shadow-lg focus:outline-none focus:border-emerald-400 focus:shadow-[0_0_10px_rgba(16,185,129,0.3)]"
+            >
+              <div className="flex items-center gap-2 truncate">
+                <span className="text-base leading-none">{currentCountryConfig.flag}</span>
+                <span className="font-sans font-bold text-zinc-100 truncate">{currentCountryConfig.name}</span>
+                <span className="text-emerald-400 text-xs font-mono">({currentCountryConfig.currency})</span>
+              </div>
+              <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 shrink-0 ${countryDropdownOpen ? 'rotate-180 text-emerald-400' : ''}`} />
+            </button>
+
+            {countryDropdownOpen && (
+              <div className="absolute right-0 mt-1.5 w-64 bg-zinc-950/95 border border-white/20 shadow-2xl backdrop-blur-xl z-50 divide-y divide-white/5 animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-3 py-2 text-[10px] font-mono text-zinc-500 uppercase tracking-widest bg-black/60">
+                  Select Active Bank Ledger
+                </div>
+                <div className="max-h-60 overflow-y-auto py-1">
+                  {activeCountriesList.map((c) => {
+                    const isSelected = c.code === activeCountry;
+                    return (
+                      <button
+                        key={c.code}
+                        type="button"
+                        onClick={() => {
+                          handleCountrySelect(c.code);
+                          setCountryDropdownOpen(false);
+                        }}
+                        className={`w-full px-3 py-2 text-left text-xs font-mono flex items-center justify-between transition-colors ${
+                          isSelected
+                            ? 'bg-emerald-500/15 text-emerald-300 font-bold'
+                            : 'text-zinc-300 hover:bg-white/5 hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="text-base">{c.flag}</span>
+                          <span className="font-sans truncate">{c.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] text-zinc-400 font-bold px-1.5 py-0.5 bg-black/60 border border-white/10">
+                            {c.currency}
+                          </span>
+                          {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
