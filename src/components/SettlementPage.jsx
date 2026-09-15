@@ -14,7 +14,7 @@ import {
 import { useIdentityGraph, makeNameResolver } from '../hooks/useIdentityGraph';
 import { sessionApi } from '../utils/sessionApi';
 import { buildCountrySettlement, legsFromSession } from '../utils/settlementLedger';
-import { country, COUNTRIES } from '../utils/countries';
+import { country, countryFromCurrency, COUNTRIES } from '../utils/countries';
 import { loadGamesFromStorage } from '../utils/storage';
 import { ErrorBoundary } from './ErrorBoundary';
 import CountryFlag from './CountryFlag';
@@ -144,10 +144,28 @@ function SettlementPageContent({ embedded = false }) {
     (legs || []).forEach((l) => {
       if (l?.country) presentCodes.add(l.country.toUpperCase());
       if (l?.counter_country) presentCodes.add(l.counter_country.toUpperCase());
+      if (l?.currency) presentCodes.add(countryFromCurrency(l.currency));
     });
     (players || []).forEach((p) => {
       if (p?.country) presentCodes.add(p.country.toUpperCase());
+      if (p?.preferred_currency) presentCodes.add(countryFromCurrency(p.preferred_currency));
+      if (p?.currency) presentCodes.add(countryFromCurrency(p.currency));
     });
+    try {
+      const stored = loadGamesFromStorage();
+      (stored || []).forEach((g) => {
+        if (g?.currency) presentCodes.add(countryFromCurrency(g.currency));
+        (g?.entries || []).forEach((e) => {
+          if (e?.currency) presentCodes.add(countryFromCurrency(e.currency));
+          if (e?.preferred_currency) presentCodes.add(countryFromCurrency(e.preferred_currency));
+        });
+        if (g?.settlement?.bankByCountry) {
+          Object.keys(g.settlement.bankByCountry).forEach((c) => presentCodes.add(c.toUpperCase()));
+        }
+      });
+    } catch {
+      // ignore
+    }
     if (activeCountry) presentCodes.add(activeCountry.toUpperCase());
 
     return Array.from(presentCodes).map((cCode) => country(cCode));
@@ -300,7 +318,7 @@ function SettlementPageContent({ embedded = false }) {
 
   return (
     <div className="space-y-6 font-sans">
-      {/* Top Header Card with relative z-30 so dropdown menu floats above lower cards */}
+      {/* Top Header Card with relative z-30 so dropdown menu floats cleanly above lower cards */}
       <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-6 shadow-xl backdrop-blur-xl relative z-30">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -340,8 +358,8 @@ function SettlementPageContent({ embedded = false }) {
             </button>
 
             {countryDropdownOpen && (
-              <div className="absolute right-0 mt-1.5 w-64 bg-zinc-950/98 border border-white/20 shadow-2xl backdrop-blur-xl z-50 divide-y divide-white/5 animate-in fade-in zoom-in-95 duration-150">
-                <div className="px-3 py-2 text-[10px] font-mono text-zinc-500 uppercase tracking-widest bg-black/60">
+              <div className="absolute right-0 mt-1 w-64 bg-zinc-950/98 shadow-2xl shadow-black/90 backdrop-blur-2xl z-50 rounded-sm overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-3 py-2 text-[10px] font-mono text-zinc-500 uppercase tracking-widest bg-black/70">
                   Select Active Bank Ledger
                 </div>
                 <div className="max-h-60 overflow-y-auto py-1">
@@ -355,7 +373,7 @@ function SettlementPageContent({ embedded = false }) {
                           handleCountrySelect(c.code);
                           setCountryDropdownOpen(false);
                         }}
-                        className={`w-full px-3 py-2 text-left text-xs font-mono flex items-center justify-between transition-colors ${
+                        className={`w-full px-3 py-2.5 text-left text-xs font-mono flex items-center justify-between transition-colors ${
                           isSelected
                             ? 'bg-emerald-500/15 text-emerald-300 font-bold'
                             : 'text-zinc-300 hover:bg-white/5 hover:text-white'
@@ -366,7 +384,7 @@ function SettlementPageContent({ embedded = false }) {
                           <span className="font-sans truncate">{c.name}</span>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[10px] text-zinc-400 font-bold px-1.5 py-0.5 bg-black/60 border border-white/10">
+                          <span className="text-[10px] text-zinc-400 font-bold px-1.5 py-0.5 bg-black/60 border border-white/5">
                             {c.currency}
                           </span>
                           {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400" />}

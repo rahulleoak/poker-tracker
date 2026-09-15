@@ -48,7 +48,7 @@ function greedyMatch(nodes) {
  * country also settles in its own currency: `*Local` fields convert CAD at
  * `cadToUsd` / `exchangeRates` for each country (1:1 for CAD). `from` pays `to`.
  *
- * @param {{ entries: Array<Object>, countryByKey?: Record<string,string>, bankByCountry?: Record<string,string>, chipsPerCad?: number, cadToUsd?: number, exchangeRates?: Record<string,number> }} args
+ * @param {{ entries: Array<Object>, countryByKey?: Record<string,string>, bankByCountry?: Record<string,string>, chipsPerCad?: number, cadToUsd?: number, gameCurrency?: string, exchangeRates?: Record<string,number> }} args
  */
 export function computeBankSettlement({ 
   entries = [], 
@@ -56,6 +56,7 @@ export function computeBankSettlement({
   bankByCountry = {}, 
   chipsPerCad = 100, 
   cadToUsd = 1,
+  gameCurrency = null,
   exchangeRates = null 
 }) {
   const rate = Number(chipsPerCad) > 0 ? Number(chipsPerCad) : 100;
@@ -76,7 +77,7 @@ export function computeBankSettlement({
     .map((e) => {
       const key = keyOfEntry(e);
       const netChips = (Number(e.buyOut) || 0) + (Number(e.stack) || 0) - (Number(e.buyIn) || 0);
-      const inferredCountry = countryFromCurrency(e.currency || e.preferred_currency || DEFAULT_COUNTRY);
+      const inferredCountry = countryFromCurrency(e.currency || e.preferred_currency || gameCurrency || DEFAULT_COUNTRY);
       const c = countryByKey[key] || countryByKey[e.pokerNowId] || countryByKey[e.externalId] || countryByKey[e.name] || inferredCountry;
       return {
         key,
@@ -119,10 +120,11 @@ export function computeBankSettlement({
       name: meta.name,
       flag: meta.flag,
       currency: meta.currency,
-      fxFromCad: fx,
       bankKey,
       bankName: bankUnit ? bankUnit.name : null,
+      fxFromCad: fx,
       net: countryNet,
+      netCad: countryNet,
       netLocal: countryNet * fx,
       members: members.map((m) => ({
         key: m.key,
@@ -134,18 +136,22 @@ export function computeBankSettlement({
     });
 
     if (bankUnit) {
+      // Intra-country: non-bank players settle their entire net with the bank
       for (const m of members) {
         if (m.key === bankKey) continue;
+        if (Math.abs(m.netCad) <= EPS) continue;
+
         const common = {
           scope: 'player',
           legId: `player:${m.key}`,
-          partyKey: m.key,
-          partyName: m.name,
+          country: code,
+          currency: meta.currency,
           bankKey,
           bankName: bankUnit.name,
-          currency: meta.currency,
-          country: code
+          partyKey: m.key,
+          partyName: m.name
         };
+
         if (m.netCad > EPS) {
           // player is up on the session — the bank owes them
           playerTransfers.push({ ...common, direction: 'from_bank', fromKey: bankKey, from: bankUnit.name, toKey: m.key, to: m.name, amount: m.netCad, amountLocal: m.netCad * fx });
@@ -154,14 +160,41 @@ export function computeBankSettlement({
           playerTransfers.push({ ...common, direction: 'to_bank', fromKey: m.key, from: m.name, toKey: bankKey, to: bankUnit.name, amount: -m.netCad, amountLocal: -m.netCad * fx });
         }
       }
-      interNodes.push({ key: bankKey, name: bankUnit.name, amount: countryNet, country: code });
+
+      // Bank enters the inter-country pool with the country's aggregate net
+      if (Math.abs(countryNet) > EPS) {
+        interNodes.push({
+          key: bankKey,
+          name: bankUnit.name,
+          country: code,
+          amount: countryNet
+        });
+      }
     } else {
-      for (const m of members) interNodes.push({ key: m.key, name: m.name, amount: m.netCad, country: code });
+      // No bank for this country: every player enters the inter-country pool as an individual
+      for (const m of members) {
+        if (Math.abs(m.netCad) > EPS) {
+          interNodes.push({
+            key: m.key,
+            name: m.name,
+            country: code,
+            amount: m.netCad
+          });
+        }
+      }
     }
   }
 
+  // Inter-country / inter-bank transfers
   const bankTransfers = greedyMatch(interNodes);
   const balanced = Math.abs(units.reduce((s, m) => s + m.netCad, 0)) < 0.01;
 
-  return { chipsPerCad: rate, cadToUsd: usdRate, countries, playerTransfers, bankTransfers, balanced };
+  return {
+    chipsPerCad: rate,
+    cadToUsd: usdRate,
+    countries,
+    playerTransfers,
+    bankTransfers,
+    balanced
+  };
 }
