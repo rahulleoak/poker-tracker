@@ -78,7 +78,9 @@ export function computeBankSettlement({
       const key = keyOfEntry(e);
       const netChips = (Number(e.buyOut) || 0) + (Number(e.stack) || 0) - (Number(e.buyIn) || 0);
       const inferredCountry = countryFromCurrency(e.currency || e.preferred_currency || gameCurrency || DEFAULT_COUNTRY);
-      const c = countryByKey[key] || countryByKey[e.pokerNowId] || countryByKey[e.externalId] || countryByKey[e.name] || inferredCountry;
+      const rawC = countryByKey[key] || countryByKey[e.pokerNowId] || countryByKey[e.externalId] || countryByKey[e.name];
+      // If rawC is legacy CA default but inferredCountry is explicitly non-CA, prefer inferredCountry
+      const c = (rawC && (rawC !== 'CA' || inferredCountry === 'CA')) ? rawC : (inferredCountry || rawC || DEFAULT_COUNTRY);
       return {
         key,
         name: (e.name || '').trim(),
@@ -104,6 +106,21 @@ export function computeBankSettlement({
     let bankKey = bankByCountry[code] || null;
     let normBankKey = bankKey ? String(bankKey).trim().toLowerCase() : null;
     let bankUnit = normBankKey ? members.find((m) => m.key === normBankKey) : null;
+    
+    // Check if any configured bank belongs to this country's members
+    if (!bankUnit && bankByCountry && typeof bankByCountry === 'object') {
+      for (const bKey of Object.values(bankByCountry)) {
+        if (!bKey) continue;
+        const normB = String(bKey).trim().toLowerCase();
+        const found = members.find((m) => m.key === normB);
+        if (found) {
+          bankUnit = found;
+          bankKey = found.key;
+          break;
+        }
+      }
+    }
+
     if (!bankUnit) {
       bankUnit = members.find((m) => m.isBank) || null;
     }

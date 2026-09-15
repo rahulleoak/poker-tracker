@@ -28,14 +28,19 @@ const signOf = (direction) => (direction === 'from_bank' ? 1 : -1);
  * nickname changes), else the raw `keyOfEntry` token. Names are frozen only as a
  * display fallback — they're resolved live at render.
  *
- * @param {{ id: string, date?: string, entries?: Array, settlement?: Object }} session
+ * @param {{ id: string, date?: string, entries?: Array, settlement?: Object, currency?: string, exchangeRates?: Object }} session
  * @returns {Array<Object>} leg rows
  */
 export function legsFromSession(session) {
   if (!session || !session.id) return [];
   const entries = Array.isArray(session.entries) ? session.entries : [];
   const config = session.settlement && typeof session.settlement === 'object' ? session.settlement : {};
-  const r = computeBankSettlement({ entries, ...config });
+  const r = computeBankSettlement({
+    entries,
+    gameCurrency: session.currency || config.gameCurrency,
+    exchangeRates: session.exchangeRates || config.exchangeRates,
+    ...config
+  });
 
   const pid = new Map(entries.map((e) => [keyOfEntry(e), e.playerId || null]));
   const pidOr = (key) => pid.get(key) || key;
@@ -150,6 +155,7 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
     g.lines.push({
       sessionId: l.session_id,
       date: l.session_date || null,
+      sessionDate: l.session_date || null,
       legId: l.leg_id,
       direction: l.direction,
       bankName: nameFor(l.bank_key, l.bank_name),
@@ -180,6 +186,9 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
         settledCount: lines.length - outstanding.length,
         outstandingCad,
         outstandingLocal,
+        netLocal: outstandingLocal,
+        netCad: outstandingCad,
+        settled: outstanding.length === 0,
         direction:
           outstandingLocal > 0.005 ? 'bank_owes' : outstandingLocal < -0.005 ? 'owes_bank' : 'even'
       };
@@ -191,6 +200,7 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
     .map((l) => ({
       sessionId: l.session_id,
       date: l.session_date || null,
+      sessionDate: l.session_date || null,
       legId: l.leg_id,
       from: nameFor(l.party_key, l.party_name),
       fromPartyKey: l.party_key,
@@ -236,6 +246,15 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
     collectCount,
     payCount,
     netOutstandingLocal,
-    recentMarks
+    summary: {
+      bankName: bankName || null,
+      bankKey: newest?.bank_key || null,
+      bankNetCad: -players.reduce((s, p) => s + p.outstandingCad, 0),
+      bankNetLocal: -players.reduce((s, p) => s + p.outstandingLocal, 0),
+      totalPlayers: players.length,
+      openPlayersCount: activePlayers.length
+    },
+    recentMarks,
+    recentActivity: recentMarks
   };
 }

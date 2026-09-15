@@ -112,17 +112,24 @@ function SettlementPageContent({ embedded = false }) {
         sessionApi.listMarks()
       ]);
 
-      let finalLegs = Array.isArray(legsRes) ? legsRes : [];
-      // Fallback: derive legs from stored sessions if admin_session_legs has no records yet
-      if (finalLegs.length === 0) {
-        try {
-          const storedGames = loadGamesFromStorage();
-          if (Array.isArray(storedGames) && storedGames.length > 0) {
-            finalLegs = storedGames.flatMap(legsFromSession);
+      let finalLegs = Array.isArray(legsRes) ? [...legsRes] : [];
+      try {
+        const storedGames = loadGamesFromStorage();
+        if (Array.isArray(storedGames) && storedGames.length > 0) {
+          const localLegs = storedGames.flatMap(legsFromSession);
+          if (finalLegs.length === 0) {
+            finalLegs = localLegs;
+          } else {
+            const coveredSessionIds = new Set(finalLegs.map((l) => l.session_id || l.sessionId));
+            for (const leg of localLegs) {
+              if (!coveredSessionIds.has(leg.session_id || leg.sessionId)) {
+                finalLegs.push(leg);
+              }
+            }
           }
-        } catch (e) {
-          console.warn('Fallback games load error:', e);
         }
+      } catch (e) {
+        console.warn('Fallback games load error:', e);
       }
 
       setLegs(finalLegs);

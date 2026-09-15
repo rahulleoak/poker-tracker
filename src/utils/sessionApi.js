@@ -206,10 +206,13 @@ async function ensureLegs() {
   if (!supabase) return 0;
   try {
     const [sessRes, legRes] = await Promise.all([
-      supabase.from('admin_sessions').select('id, date, currency, entries, settlement, exchange_rates'),
+      supabase.from('admin_sessions').select('id, date, currency, entries, settlement'),
       supabase.from('admin_session_legs').select('session_id, country, currency')
     ]);
-    if (sessRes.error || !sessRes.data || sessRes.data.length === 0) return 0;
+    if (sessRes.error || !sessRes.data || sessRes.data.length === 0) {
+      if (sessRes.error) console.warn('sessionApi.ensureLegs query error:', sessRes.error);
+      return 0;
+    }
 
     const existingLegs = legRes.data || [];
     const covered = new Set(existingLegs.map((r) => r.session_id));
@@ -220,11 +223,11 @@ async function ensureLegs() {
       if (!covered.has(s.id)) return false;
       const sLegs = existingLegs.filter((l) => l.session_id === s.id);
       if (sLegs.length === 0) return true;
-      const settlement = s.settlement && typeof s.settlement === 'object' ? s.settlement : {};
-      const bankByCountry = settlement.bankByCountry || {};
-      const bankCountries = Object.keys(bankByCountry);
-      // If session had non-CA banks (like SG) but legs table only has CA
-      if (bankCountries.some((c) => c !== 'CA') && sLegs.every((l) => l.country === 'CA')) {
+      const entries = Array.isArray(s.entries) ? s.entries : [];
+      const sCur = s.currency || 'CAD';
+      const hasNonCad = sCur !== 'CAD' || entries.some((e) => e.currency && e.currency !== 'CAD');
+      // If session has non-CAD currency or entries but legs table only has CA
+      if (hasNonCad && sLegs.every((l) => l.country === 'CA')) {
         return true;
       }
       return false;
