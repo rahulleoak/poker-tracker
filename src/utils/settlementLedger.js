@@ -85,7 +85,7 @@ export function legsFromSession(session) {
 }
 
 /**
- * Supports both object signature ({ legs, marks, countryCode, nameOf })
+ * Supports both object signature ({ legs, marks, countryCode, nameOf, resolveId })
  * and positional signature (countryCode, legsOrSessions, marks, nameOf).
  */
 export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybeMarks = [], maybeNameOf = null) {
@@ -93,6 +93,7 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
   let marks = [];
   let countryCode = 'CA';
   let nameOf = null;
+  let resolvePartyId = null;
 
   if (typeof optsOrCountry === 'string') {
     countryCode = optsOrCountry;
@@ -114,6 +115,7 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
     marks = Array.isArray(optsOrCountry.marks) ? optsOrCountry.marks : [];
     countryCode = optsOrCountry.countryCode || 'CA';
     nameOf = typeof optsOrCountry.nameOf === 'function' ? optsOrCountry.nameOf : null;
+    resolvePartyId = typeof optsOrCountry.resolveId === 'function' ? optsOrCountry.resolveId : null;
   }
 
   const resolveName = typeof nameOf === 'function' ? nameOf : () => null;
@@ -124,7 +126,7 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
   );
 
   const meta = countryMeta(countryCode);
-  const nameFor = (key, fallback) => resolveName(key) || fallback || key;
+  const nameFor = (key, fallback) => resolveName(key) || resolveName(fallback) || fallback || key;
 
   // Newest first: the first leg seen per party sets the display name + the
   // "current" bank / currency for the country.
@@ -141,17 +143,24 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
 
   const byParty = new Map();
   for (const l of playerLegs) {
-    if (!byParty.has(l.party_key)) {
-      byParty.set(l.party_key, { partyKey: l.party_key, playerId: null, name: null, lines: [] });
+    const liveName = resolveName(l.party_key) || resolveName(l.party_name);
+    const liveId = resolvePartyId ? (resolvePartyId(l.party_key) || resolvePartyId(l.party_name)) : null;
+    const finalPartyKey = liveId || (liveName ? `profile:${liveName.toLowerCase()}` : l.party_key);
+    const finalDisplayName = liveName || l.party_name || l.party_key;
+    const finalPlayerId = liveId || l.party_key || null;
+
+    if (!byParty.has(finalPartyKey)) {
+      byParty.set(finalPartyKey, {
+        partyKey: finalPartyKey,
+        playerId: finalPlayerId,
+        name: finalDisplayName,
+        lines: []
+      });
     }
-    const g = byParty.get(l.party_key);
-    const live = resolveName(l.party_key);
-    if (live) {
-      g.playerId = l.party_key;
-      g.name = live;
-    } else if (!g.name) {
-      g.name = l.party_name;
-    }
+    const g = byParty.get(finalPartyKey);
+    if (liveName) g.name = liveName;
+    if (finalPlayerId) g.playerId = finalPlayerId;
+
     g.lines.push({
       sessionId: l.session_id,
       date: l.session_date || null,
@@ -227,9 +236,9 @@ export function buildCountrySettlement(optsOrCountry = {}, maybeLegs = [], maybe
   const payCount = activePlayers.filter((p) => p.direction === 'bank_owes').length;
   const netOutstandingLocal = collectLocal - payLocal;
 
-  const recentMarks = (marks || []).filter(
-    (m) => m && (!m.country || m.country === meta.code) && !m.undone_at
-  );
+  const recentMarks = (marks || [])
+    .filter((m) => m && (!m.country || m.country === meta.code) && !m.undone_at)
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
 
   return {
     countryCode: meta.code,

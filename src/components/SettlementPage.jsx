@@ -11,7 +11,7 @@ import {
   ChevronUp,
   Check
 } from 'lucide-react';
-import { useIdentityGraph, makeNameResolver } from '../hooks/useIdentityGraph';
+import { useIdentityGraph, makeNameResolver, makeIdResolver } from '../hooks/useIdentityGraph';
 import { sessionApi } from '../utils/sessionApi';
 import { buildCountrySettlement, legsFromSession } from '../utils/settlementLedger';
 import { country, countryFromCurrency, COUNTRIES } from '../utils/countries';
@@ -69,12 +69,17 @@ function SettlementPageContent({ embedded = false }) {
   const [search, setSearch] = useState('');
   const [undoToast, setUndoToast] = useState(null);
 
-  const { players, resolve } = useIdentityGraph();
+  const { players, playerLinks, resolve, resolveId } = useIdentityGraph();
 
   const nameOf = useMemo(() => {
     if (typeof resolve === 'function') return resolve;
-    return makeNameResolver(players);
-  }, [resolve, players]);
+    return makeNameResolver(players, playerLinks);
+  }, [resolve, players, playerLinks]);
+
+  const idOf = useMemo(() => {
+    if (typeof resolveId === 'function') return resolveId;
+    return makeIdResolver(players, playerLinks);
+  }, [resolveId, players, playerLinks]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -188,9 +193,10 @@ function SettlementPageContent({ embedded = false }) {
       legs,
       marks,
       countryCode: activeCountry,
-      nameOf
+      nameOf,
+      resolveId: idOf
     });
-  }, [activeCountry, legs, marks, nameOf]);
+  }, [activeCountry, legs, marks, nameOf, idOf]);
 
   const trackedSessionCount = useMemo(() => {
     const sessionIds = new Set(legs.map((l) => l.session_id || l.sessionId).filter(Boolean));

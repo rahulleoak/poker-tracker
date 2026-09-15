@@ -55,9 +55,33 @@ export function resolveEntryIdentity(entry, { players = [], playerLinks = [] } =
 /**
  * `(playerId) => display_name | null` over the given profile list. Safe on null.
  */
-export function makeNameResolver(players = []) {
-  const byId = new Map(players.map((p) => [p.id, p.display_name]));
-  return (playerId) => (playerId ? byId.get(playerId) || null : null);
+export function makeNameResolver(players = [], playerLinks = []) {
+  const byId = new Map(players.map((p) => [p.id, p.display_name || p.name || null]));
+  const byExternal = new Map();
+  const byName = new Map();
+
+  for (const p of players || []) {
+    if (!p) continue;
+    const name = p.display_name || p.name;
+    if (name) byName.set(norm(name), name);
+  }
+
+  for (const l of playerLinks || []) {
+    if (!l || !l.external_id) continue;
+    const pName = byId.get(l.player_id);
+    if (pName) {
+      byExternal.set(norm(l.external_id), pName);
+    }
+  }
+
+  return (key) => {
+    if (!key) return null;
+    if (byId.has(key)) return byId.get(key);
+    const k = norm(key);
+    if (byExternal.has(k)) return byExternal.get(k);
+    if (byName.has(k)) return byName.get(k);
+    return null;
+  };
 }
 
 /**
@@ -100,38 +124,34 @@ export async function ensureProfile(displayName, { players = [] } = {}) {
  * DB unique constraint is required and the main app's writes are unaffected.
  *
  * @param {string} playerId
- * @param {Iterable<string>} tokens
+ * @param {Array<string>} tokens - raw PokerNow player ids or seat names
  * @param {{ playerLinks?: Array<{player_id: string, external_id: string}> }} ctx
- * @returns {Promise<number>} how many new links were written
+ * @returns {Promise<number>} count of newly created links
  */
 export async function linkTokens(playerId, tokens = [], { playerLinks = [] } = {}) {
   if (!playerId) return 0;
-  const { supabase } = await import('./supabase.js');
-  if (!supabase) return 0;
+  const cleaned = Array.from(new Set((tokens || []).map((t) => String(t || '').trim()).filter(Boolean)));
+  if (cleaned.length === 0) return 0;
 
-  const already = new Set(
-    playerLinks
+  const linkedToThis = new Set(
+    (playerLinks || [])
       .filter((l) => l.player_id === playerId)
       .map((l) => norm(l.external_id))
   );
 
-  const rows = [];
-  for (const raw of tokens) {
-    const token = String(raw || '').trim();
-    if (!token || already.has(norm(token))) continue;
-    already.add(norm(token));
-    rows.push({
-      player_id: playerId,
-      platform: looksLikePokerNowId(token) ? 'pokernow' : 'alias',
-      external_id: token
-    });
-  }
-  if (rows.length === 0) return 0;
+  const needed = cleaned.filter((t) => !linkedToThis.has(norm(t)));
+  if (needed.length === 0) return 0;
 
-  const { error } = await supabase.from('player_links').insert(rows);
-  if (error) {
-    console.warn('adminIdentity.linkTokens: some links not written:', error.message);
-    return 0;
-  }
-  return rows.length;
+  const { supabase } = await import('./supabase.js');
+  if (!supabase) return 0;
+
+  const rows = needed.map((token) => ({
+    player_id: playerId,
+    platform: looksLikePokerNowId(token) ? 'pokernow' : 'alias',
+    external_id: token
+  }));
+
+  const { data, error } = await supabase.from('player_links').insert(rows).select('id');
+  if (error) throw error;
+  return data?.length || 0;
 }
