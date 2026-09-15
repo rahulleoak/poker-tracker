@@ -1,68 +1,69 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   TrendingUp, 
-  TrendingDown, 
-  Crown, 
   Award, 
-  Zap, 
-  Shield, 
   Flame, 
-  Compass, 
-  Activity, 
-  BarChart3, 
+  Zap, 
+  Crown, 
+  Target, 
+  Shield, 
+  Skull, 
   Sparkles, 
+  BarChart2, 
+  Layers, 
   Upload, 
-  RefreshCw,
-  Info,
-  Layers,
-  ArrowUpRight,
-  ArrowDownRight,
-  Target,
-  Skull
+  Eye, 
+  EyeOff, 
+  Crosshair, 
+  Filter,
+  CheckCircle2,
+  AlertCircle
 } from 'lucide-react';
-import { fromChartData, toChartData } from '../utils/chartData';
-import { 
-  parseCumulativeNet, 
-  groupCumulativeNet, 
-  reconcileCumulativeNet 
-} from '../utils/pokernow-utils/parseHandLog';
-import { sessionApi } from '../utils/sessionApi';
-import { makeNameResolver } from '../utils/adminIdentity';
 import { formatChips, formatFiat } from '../utils/formatters';
+import { makeNameResolver } from '../utils/adminIdentity';
+import { fromChartData, toChartData } from '../utils/chartData';
+import { sessionApi } from '../utils/sessionApi';
 
 const SERIES_COLORS = [
-  '#38bdf8', // sky/blue
-  '#f97316', // orange
-  '#34d399', // emerald/aqua
-  '#fbbf24', // amber/yellow
-  '#ec4899', // pink/magenta
-  '#a855f7', // purple/violet
-  '#22d3ee', // cyan
-  '#f43f5e', // rose/red
-  '#10b981', // green
-  '#eab308'  // lime/yellow
+  '#38bdf8', // sky-400
+  '#34d399', // emerald-400
+  '#f59e0b', // amber-500
+  '#f43f5e', // rose-500
+  '#a855f7', // purple-500
+  '#06b6d4', // cyan-500
+  '#fb923c', // orange-400
+  '#ec4899', // pink-500
+  '#84cc16', // lime-500
+  '#eab308', // yellow-500
+  '#6366f1', // indigo-500
+  '#14b8a6', // teal-500
+  '#f87171', // red-400
+  '#a3e635', // lime-400
+  '#67e8f9', // cyan-300
+  '#c084fc', // purple-400
 ];
 
-const CHART_W = 900;
-const CHART_H = 420;
-const MARGIN = { top: 20, right: 30, bottom: 35, left: 60 };
+const CHART_W = 1000;
+const CHART_H = 460;
+const MARGIN = { top: 30, right: 30, bottom: 40, left: 60 };
 const PLOT_W = CHART_W - MARGIN.left - MARGIN.right;
 const PLOT_H = CHART_H - MARGIN.top - MARGIN.bottom;
 
-function niceStep(rough) {
-  const pow10 = Math.pow(10, Math.floor(Math.log10(Math.max(1, rough))));
-  const frac = rough / pow10;
-  const step = frac < 1.5 ? 1 : frac < 3 ? 2 : frac < 7 ? 5 : 10;
-  return step * pow10;
-}
-
 function niceTicks(min, max, count = 5) {
   if (min === max) return [min];
-  const step = niceStep((max - min) / count);
+  const span = max - min;
+  const rawStep = span / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep || 1)));
+  const norm = rawStep / mag;
+  let step = mag;
+  if (norm > 5) step = 10 * mag;
+  else if (norm > 2) step = 5 * mag;
+  else if (norm > 1) step = 2 * mag;
+
   const start = Math.ceil(min / step) * step;
   const ticks = [];
-  for (let v = start; v <= max; v += step) {
-    ticks.push(Math.round(v * 100) / 100);
+  for (let t = start; t <= max; t += step) {
+    ticks.push(t);
   }
   return ticks;
 }
@@ -77,15 +78,23 @@ export default function SessionAnalyticsPanel({
   chipValue = 1,
   onAttachLog
 }) {
-  const [loadingDbChart, setLoadingDbChart] = useState(false);
-  const [rawChartBlob, setRawChartBlob] = useState(game?.chart_data || null);
-  const [hoverIndex, setHoverIndex] = useState(null);
   const [hiddenIds, setHiddenIds] = useState(() => new Set());
-  const [selectedMetricView, setSelectedMetricView] = useState('trajectory'); // 'trajectory' | 'playstyle' | 'distribution'
+  const [hoverIndex, setHoverIndex] = useState(null);
+  const [rawChartBlob, setRawChartBlob] = useState(game?.chart_data || null);
+  const [loadingDbChart, setLoadingDbChart] = useState(false);
   const svgRef = useRef(null);
 
-  // Identity Resolver: Maps any playerId or seat alias to the Master Player Profile name
-  const nameOf = useMemo(() => makeNameResolver(players, playerLinks), [players, playerLinks]);
+  // Identity Resolver mapping any session name/ID to the Master Profile display name
+  const nameOf = useMemo(() => {
+    return makeNameResolver(players, playerLinks);
+  }, [players, playerLinks]);
+
+  // Sync if game.chart_data updates
+  useEffect(() => {
+    if (game?.chart_data) {
+      setRawChartBlob(game.chart_data);
+    }
+  }, [game?.chart_data]);
 
   // If chart_data wasn't passed directly on game, attempt a lightweight fetch from admin_sessions
   useEffect(() => {
@@ -248,7 +257,7 @@ export default function SessionAnalyticsPanel({
     const profileMap = new Map();
 
     safeEntriesList.forEach(e => {
-      const pName = nameOf(e.playerId) || nameOf(e.externalId || e.pokerNowId) || nameOf(e.name) || e.name || 'Unknown';
+      const pName = nameOf(e.playerId) || nameOf(e.externalId || e.pokerNowId || e.external_player_id) || nameOf(e.name || e.player_name) || e.name || e.player_name || 'Unknown';
       if (!profileMap.has(pName)) {
         profileMap.set(pName, {
           name: pName,
@@ -268,15 +277,15 @@ export default function SessionAnalyticsPanel({
         });
       }
       const p = profileMap.get(pName);
-      p.buyIn += Number(e.buyIn) || 0;
-      p.buyOut += Number(e.buyOut) || 0;
-      p.stack += Number(e.stack) || 0;
+      p.buyIn += Number(e.buyIn ?? e.buy_in ?? 0);
+      p.buyOut += Number(e.buyOut ?? e.buy_out ?? 0);
+      p.stack += Number(e.stack ?? e.cash_out ?? 0);
       p.net = p.buyOut + p.stack - p.buyIn;
-      p.handsPlayed += Number(e.handsPlayed) || 0;
-      p.vpipHands += Number(e.vpipHands) || 0;
-      p.pfrHands += Number(e.pfrHands) || 0;
-      p.threeBetHands += Number(e.threeBetHands) || 0;
-      p.threeBetOpps += Number(e.threeBetOpps) || 0;
+      p.handsPlayed += Number(e.handsPlayed ?? e.hands_played ?? 0);
+      p.vpipHands += Number(e.vpipHands ?? e.vpip_hands ?? 0);
+      p.pfrHands += Number(e.pfrHands ?? e.pfr_hands ?? 0);
+      p.threeBetHands += Number(e.threeBetHands ?? e.three_bet_hands ?? 0);
+      p.threeBetOpps += Number(e.threeBetOpps ?? e.three_bet_opps ?? 0);
     });
 
     // If we have hand-by-hand snapshots, compute exact peak, trough, comeback, swing, and bad-beat drop
@@ -379,9 +388,9 @@ export default function SessionAnalyticsPanel({
 
     // Award 4: VPIP Chieftain (Highest action rate)
     const vpipCandidate = [...profiles]
-      .filter(p => p.handsPlayed >= 10)
+      .filter(p => p.handsPlayed >= 3)
       .sort((a, b) => (b.vpipHands / b.handsPlayed) - (a.vpipHands / a.handsPlayed))[0];
-    if (vpipCandidate && (vpipCandidate.vpipHands / vpipCandidate.handsPlayed) > 0.35) {
+    if (vpipCandidate && (vpipCandidate.vpipHands / vpipCandidate.handsPlayed) >= 0.25) {
       const vpipPct = Math.round((vpipCandidate.vpipHands / vpipCandidate.handsPlayed) * 100);
       list.push({
         id: 'vpip_king',
@@ -397,9 +406,9 @@ export default function SessionAnalyticsPanel({
 
     // Award 5: Pre-Flop Bully (Highest PFR aggression)
     const pfrCandidate = [...profiles]
-      .filter(p => p.handsPlayed >= 10)
+      .filter(p => p.handsPlayed >= 3)
       .sort((a, b) => (b.pfrHands / b.handsPlayed) - (a.pfrHands / a.handsPlayed))[0];
-    if (pfrCandidate && (pfrCandidate.pfrHands / pfrCandidate.handsPlayed) > 0.2) {
+    if (pfrCandidate && (pfrCandidate.pfrHands / pfrCandidate.handsPlayed) >= 0.15) {
       const pfrPct = Math.round((pfrCandidate.pfrHands / pfrCandidate.handsPlayed) * 100);
       list.push({
         id: 'pfr_bully',
@@ -415,9 +424,9 @@ export default function SessionAnalyticsPanel({
 
     // Award 6: The Rock of Gibraltar (Lowest VPIP with positive profit)
     const nitCandidate = [...profiles]
-      .filter(p => p.handsPlayed >= 10 && p.net > 0)
+      .filter(p => p.handsPlayed >= 3 && p.net > 0)
       .sort((a, b) => (a.vpipHands / a.handsPlayed) - (b.vpipHands / b.handsPlayed))[0];
-    if (nitCandidate && (nitCandidate.vpipHands / nitCandidate.handsPlayed) < 0.25) {
+    if (nitCandidate && (nitCandidate.vpipHands / nitCandidate.handsPlayed) <= 0.35) {
       const nitPct = Math.round((nitCandidate.vpipHands / nitCandidate.handsPlayed) * 100);
       list.push({
         id: 'rock',
@@ -464,13 +473,13 @@ export default function SessionAnalyticsPanel({
     return list;
   }, [entries, snapshots, playerIds, displayNameById, nameOf]);
 
-  // Playstyle Matrix Points (VPIP vs PFR)
-  const playstylePoints = useMemo(() => {
+  // Playstyle Matrix Analysis (VPIP vs PFR)
+  const playstyleMatrix = useMemo(() => {
     const safeEntriesList = Array.isArray(entries) ? entries : [];
     const profileMap = new Map();
 
     safeEntriesList.forEach(e => {
-      const pName = nameOf(e.playerId) || nameOf(e.externalId || e.pokerNowId) || nameOf(e.name) || e.name || 'Unknown';
+      const pName = nameOf(e.playerId) || nameOf(e.externalId || e.pokerNowId || e.external_player_id) || nameOf(e.name || e.player_name) || e.name || e.player_name || 'Unknown';
       if (!profileMap.has(pName)) {
         profileMap.set(pName, {
           name: pName,
@@ -481,14 +490,14 @@ export default function SessionAnalyticsPanel({
         });
       }
       const p = profileMap.get(pName);
-      p.handsPlayed += Number(e.handsPlayed) || 0;
-      p.vpipHands += Number(e.vpipHands) || 0;
-      p.pfrHands += Number(e.pfrHands) || 0;
-      p.net += (Number(e.buyOut) || 0) + (Number(e.stack) || 0) - (Number(e.buyIn) || 0);
+      p.handsPlayed += Number(e.handsPlayed ?? e.hands_played ?? 0);
+      p.vpipHands += Number(e.vpipHands ?? e.vpip_hands ?? 0);
+      p.pfrHands += Number(e.pfrHands ?? e.pfr_hands ?? 0);
+      p.net += (Number(e.buyOut ?? e.buy_out ?? 0)) + (Number(e.stack ?? e.cash_out ?? 0)) - (Number(e.buyIn ?? e.buy_in ?? 0));
     });
 
     return Array.from(profileMap.values())
-      .filter(p => p.handsPlayed >= 5)
+      .filter(p => p.handsPlayed >= 3)
       .map(p => {
         const vpip = Math.min(100, Math.round((p.vpipHands / p.handsPlayed) * 100));
         const pfr = Math.min(100, Math.round((p.pfrHands / p.handsPlayed) * 100));
@@ -512,13 +521,13 @@ export default function SessionAnalyticsPanel({
   // Chip Distribution Summary
   const chipDistribution = useMemo(() => {
     const safeEntriesList = Array.isArray(entries) ? entries : [];
-    const totalStack = safeEntriesList.reduce((sum, e) => sum + (Number(e.stack) || 0), 0);
+    const totalStack = safeEntriesList.reduce((sum, e) => sum + (Number(e.stack ?? e.cash_out ?? 0)), 0);
     if (totalStack === 0) return [];
 
     const map = new Map();
     safeEntriesList.forEach(e => {
-      const pName = nameOf(e.playerId) || nameOf(e.externalId || e.pokerNowId) || nameOf(e.name) || e.name || 'Unknown';
-      map.set(pName, (map.get(pName) || 0) + (Number(e.stack) || 0));
+      const pName = nameOf(e.playerId) || nameOf(e.externalId || e.pokerNowId || e.external_player_id) || nameOf(e.name || e.player_name) || e.name || e.player_name || 'Unknown';
+      map.set(pName, (map.get(pName) || 0) + (Number(e.stack ?? e.cash_out ?? 0)));
     });
 
     return Array.from(map.entries())
@@ -548,104 +557,55 @@ export default function SessionAnalyticsPanel({
         .sort((a, b) => b.net - a.net)
     : [];
 
-  const tooltipX = hoverIndex !== null ? xScale(hoverIndex) : null;
-  const tooltipOnRight = tooltipX !== null && tooltipX > CHART_W * 0.6;
-
   return (
-    <div className="space-y-6">
-      {/* Top Sub-Nav & Metric Filter */}
-      <div className="flex flex-wrap items-center justify-between gap-4 bg-black/60 p-4 border border-white/10">
-        <div>
-          <h2 className="text-base font-bold font-mono uppercase tracking-wider text-white flex items-center gap-2">
-            <Activity className="w-4 h-4 text-cyan-400" />
-            Session Analytics & Pulse
-          </h2>
-          <p className="text-xs text-zinc-400 font-mono mt-0.5">
-            Real-time hand trajectory, playstyle quadrant, and nightly poker accolades.
-          </p>
-        </div>
-
-        <div className="flex bg-black/80 border border-white/10 p-0.5 text-xs font-mono">
-          <button
-            type="button"
-            onClick={() => setSelectedMetricView('trajectory')}
-            className={`px-3 py-1.5 font-bold transition-all flex items-center gap-1.5 ${
-              selectedMetricView === 'trajectory'
-                ? 'bg-zinc-800 text-cyan-400 border border-cyan-500/40 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <TrendingUp className="w-3.5 h-3.5" />
-            <span>Chip Trajectory</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedMetricView('playstyle')}
-            className={`px-3 py-1.5 font-bold transition-all flex items-center gap-1.5 ${
-              selectedMetricView === 'playstyle'
-                ? 'bg-zinc-800 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <Compass className="w-3.5 h-3.5" />
-            <span>Playstyle Matrix</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedMetricView('distribution')}
-            className={`px-3 py-1.5 font-bold transition-all flex items-center gap-1.5 ${
-              selectedMetricView === 'distribution'
-                ? 'bg-zinc-800 text-amber-400 border border-amber-500/40 shadow-[0_0_8px_rgba(245,158,11,0.3)]'
-                : 'text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <BarChart3 className="w-3.5 h-3.5" />
-            <span>Chip Share</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Accolades Showcase Carousel / Grid */}
+    <div className="space-y-6 font-sans">
+      {/* SECTION 1: Superlative Accolades & Badges */}
       {awards.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <h3 className="text-xs font-bold font-mono uppercase tracking-widest text-zinc-300">
-              Nightly Session Accolades & Badges
-            </h3>
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <div className="flex items-center gap-2">
+              <Award className="w-4 h-4 text-amber-400" />
+              <h4 className="font-bold text-white uppercase tracking-wider text-xs font-mono">
+                Nightly Superlatives & Badges
+              </h4>
+            </div>
+            <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+              {awards.length} Badges Awarded
+            </span>
           </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {awards.map((award) => {
-              const IconComponent = award.icon;
+            {awards.map(award => {
+              const Icon = award.icon;
               return (
                 <div 
                   key={award.id}
-                  className="bg-hud-card/90 border border-white/10 p-3.5 flex flex-col justify-between space-y-2 hover:border-white/20 transition-all group"
+                  className="bg-black/60 border border-white/10 p-3.5 flex flex-col justify-between space-y-2 hover:border-white/25 transition-all group"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="space-y-0.5">
-                      <span className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 block">
+                      <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 block">
                         {award.subtitle}
                       </span>
-                      <h4 className="text-sm font-bold font-mono text-white group-hover:text-cyan-300 transition-colors">
+                      <h5 className="font-bold text-sm text-zinc-100 font-sans group-hover:text-amber-300 transition-colors">
                         {award.title}
-                      </h4>
+                      </h5>
                     </div>
-                    <div className={`p-2 border ${award.badgeColor}`}>
-                      <IconComponent className="w-4 h-4" />
+                    <div className={`p-1.5 border shrink-0 ${award.badgeColor}`}>
+                      <Icon className="w-4 h-4" />
                     </div>
                   </div>
 
                   <div className="pt-2 border-t border-white/5 space-y-1">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-sans font-bold text-zinc-200">
+                      <span className="text-xs font-bold text-white truncate font-sans">
                         {award.recipient}
                       </span>
-                      <span className="text-xs font-mono font-bold text-amber-400">
+                      <span className="text-[11px] font-mono font-bold text-amber-400 shrink-0">
                         {award.stat}
                       </span>
                     </div>
-                    <p className="text-[11px] text-zinc-500 font-mono leading-tight">
+                    <p className="text-[10px] text-zinc-400 font-mono line-clamp-2">
                       {award.desc}
                     </p>
                   </div>
@@ -656,423 +616,359 @@ export default function SessionAnalyticsPanel({
         </div>
       )}
 
-      {/* VIEW 1: Interactive Trajectory Graph */}
-      {selectedMetricView === 'trajectory' && (
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
-            <div>
-              <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-white flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-cyan-400" />
-                Hand-by-Hand Cumulative Chip Flow
-              </h3>
-              <p className="text-xs text-zinc-400 font-mono mt-0.5">
-                {snapshots.length > 0 
-                  ? `Tracking ${playerIds.length} player profiles across ${snapshots.length} table hands.`
-                  : 'Cumulative chip tracking requires a PokerNow Hand History log.'}
-              </p>
-            </div>
+      {/* SECTION 2: Interactive SVG Multi-Series Trajectory Line Graph */}
+      <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 shadow-2xl backdrop-blur-xl p-4 sm:p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-cyan-400" />
+            <h4 className="font-bold text-white uppercase tracking-wider text-sm font-mono">
+              Player Chip Trajectory Over Time
+            </h4>
+          </div>
 
-            {snapshots.length > 0 && (
-              <div className="flex items-center gap-2 text-xs font-mono">
-                <span className="text-zinc-500">Visible Profiles:</span>
-                <span className="text-cyan-400 font-bold">{visibleIds.length}/{playerIds.length}</span>
-                {hiddenIds.size > 0 && (
+          <div className="flex items-center gap-2 text-xs font-mono">
+            {playerIds.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={showAllPlayers}
+                  className="px-2.5 py-1 bg-black/60 hover:bg-zinc-800 border border-white/10 text-zinc-300 hover:text-white transition-all text-[11px]"
+                >
+                  Show All ({playerIds.length})
+                </button>
+                <span className="text-zinc-600">|</span>
+              </>
+            )}
+            <span className="text-zinc-400 text-[11px]">
+              {nSnapshots > 0 ? `${nSnapshots} Hands Charted` : 'No Timeline Data'}
+            </span>
+          </div>
+        </div>
+
+        {/* Player Filters Bar */}
+        {playerIds.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 bg-black/60 border border-white/10 p-2 text-xs font-mono">
+            <span className="text-zinc-500 uppercase tracking-widest text-[10px] mr-1 flex items-center gap-1">
+              <Filter className="w-3 h-3" /> Filter:
+            </span>
+            {playerIds.map(id => {
+              const name = displayNameById.get(id) || id;
+              const color = colorById.get(id) || '#38bdf8';
+              const isHidden = hiddenIds.has(id);
+
+              return (
+                <div
+                  key={id}
+                  className={`flex items-center gap-1 px-2 py-0.5 border text-[11px] transition-all ${
+                    isHidden
+                      ? 'bg-zinc-950/60 border-white/5 text-zinc-600 line-through'
+                      : 'bg-zinc-900 border-white/20 text-zinc-200 shadow-sm'
+                  }`}
+                >
                   <button
                     type="button"
-                    onClick={showAllPlayers}
-                    className="text-xs text-emerald-400 hover:text-emerald-300 ml-2 underline underline-offset-2"
+                    onClick={() => toggleHidden(id)}
+                    className="flex items-center gap-1.5 hover:text-white transition-colors"
                   >
-                    Reset Filter
+                    <span 
+                      className="w-2 h-2 rounded-full inline-block shrink-0" 
+                      style={{ backgroundColor: isHidden ? '#52525b' : color }} 
+                    />
+                    <span className="truncate max-w-[120px]">{name}</span>
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => isolatePlayer(id)}
+                    className="text-[9px] uppercase tracking-wider text-cyan-400/80 hover:text-cyan-300 ml-1 pl-1 border-l border-white/10"
+                    title={`Isolate ${name}`}
+                  >
+                    only
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* SVG Chart Area */}
+        {nSnapshots > 0 ? (
+          <div className="relative overflow-hidden bg-black/80 border border-white/10 p-2 sm:p-4">
+            <svg
+              ref={svgRef}
+              viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+              className="w-full h-auto select-none cursor-crosshair"
+              onPointerMove={handlePointerMove}
+              onPointerLeave={() => setHoverIndex(null)}
+            >
+              {/* Grid Lines */}
+              {yTicks.map(val => {
+                const y = yScale(val);
+                return (
+                  <g key={`ytick-${val}`}>
+                    <line
+                      x1={MARGIN.left}
+                      x2={CHART_W - MARGIN.right}
+                      y1={y}
+                      y2={y}
+                      stroke="rgba(255, 255, 255, 0.07)"
+                      strokeDasharray="3 3"
+                    />
+                    <text
+                      x={MARGIN.left - 8}
+                      y={y + 3.5}
+                      textAnchor="end"
+                      fill="#71717a"
+                      fontSize="10"
+                      fontFamily="monospace"
+                    >
+                      {val > 0 ? `+${val}` : val}
+                    </text>
+                  </g>
+                );
+              })}
+
+              {/* Zero Equilibrium Line */}
+              <line
+                x1={MARGIN.left}
+                x2={CHART_W - MARGIN.right}
+                y1={zeroY}
+                y2={zeroY}
+                stroke="#06b6d4"
+                strokeWidth="1.5"
+                strokeDasharray="4 4"
+                opacity="0.6"
+              />
+              <text
+                x={MARGIN.left - 8}
+                y={zeroY + 3.5}
+                textAnchor="end"
+                fill="#06b6d4"
+                fontSize="10"
+                fontWeight="bold"
+                fontFamily="monospace"
+              >
+                0
+              </text>
+
+              {/* Hand Axis Ticks */}
+              {xTickIndices.map(idx => {
+                const x = xScale(idx);
+                const handNum = snapshots[idx]?.handNumber;
+                return (
+                  <g key={`xtick-${idx}`}>
+                    <line
+                      x1={x}
+                      x2={x}
+                      y1={MARGIN.top}
+                      y2={CHART_H - MARGIN.bottom}
+                      stroke="rgba(255, 255, 255, 0.05)"
+                      strokeDasharray="2 2"
+                    />
+                    <text
+                      x={x}
+                      y={CHART_H - MARGIN.bottom + 16}
+                      textAnchor="middle"
+                      fill="#71717a"
+                      fontSize="9"
+                      fontFamily="monospace"
+                    >
+                      {handNum !== null ? `#${handNum}` : `H${idx + 1}`}
+                    </text>
+                  </g>
+                );
+              })}
+
+              {/* Trajectory Series Polylines */}
+              {chartLines.map(line => (
+                <path
+                  key={line.id}
+                  d={line.pathD}
+                  fill="none"
+                  stroke={line.color}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="transition-opacity duration-150"
+                  opacity={hoverIndex !== null ? 0.85 : 1}
+                />
+              ))}
+
+              {/* Hover Crosshair & Anchor Dots */}
+              {hoverIndex !== null && (
+                <>
+                  <line
+                    x1={xScale(hoverIndex)}
+                    x2={xScale(hoverIndex)}
+                    y1={MARGIN.top}
+                    y2={CHART_H - MARGIN.bottom}
+                    stroke="rgba(255, 255, 255, 0.4)"
+                    strokeWidth="1"
+                    strokeDasharray="2 2"
+                  />
+                  {chartLines.map(line => {
+                    const pt = line.pts[hoverIndex];
+                    if (!pt) return null;
+                    return (
+                      <circle
+                        key={`dot-${line.id}`}
+                        cx={pt.x}
+                        cy={pt.y}
+                        r="4"
+                        fill={line.color}
+                        stroke="#000"
+                        strokeWidth="1.5"
+                      />
+                    );
+                  })}
+                </>
+              )}
+            </svg>
+
+            {/* Hover Tooltip Overlay */}
+            {hoverSnapshot && hoverRows.length > 0 && (
+              <div 
+                className="absolute top-4 right-4 bg-zinc-950/95 border border-white/20 p-3 shadow-2xl backdrop-blur-md pointer-events-none text-xs font-mono max-w-xs space-y-2 z-10"
+              >
+                <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
+                  <span className="font-bold text-white">
+                    {hoverSnapshot.handNumber !== null ? `Hand #${hoverSnapshot.handNumber}` : `Hand Index ${hoverIndex + 1}`}
+                  </span>
+                  {hoverSnapshot.timestamp && (
+                    <span className="text-[10px] text-zinc-500">
+                      {new Date(hoverSnapshot.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+
+                <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                  {hoverRows.map(row => (
+                    <div key={row.id} className="flex items-center justify-between gap-3 text-[11px]">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: row.color }} />
+                        <span className="text-zinc-300 truncate">{row.name}</span>
+                      </div>
+                      <span className={`font-bold tabular-nums shrink-0 ${row.net > 0 ? 'text-emerald-400' : row.net < 0 ? 'text-rose-400' : 'text-zinc-500'}`}>
+                        {row.net > 0 ? `+${formatChips(row.net)}` : formatChips(row.net)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
-
-          {loadingDbChart ? (
-            <div className="py-20 flex flex-col items-center justify-center space-y-3 text-zinc-400 font-mono text-xs">
-              <RefreshCw className="w-6 h-6 animate-spin text-cyan-400" />
-              <span>Loading session chart telemetry...</span>
-            </div>
-          ) : snapshots.length > 0 ? (
-            <div className="space-y-4">
-              <div className="relative w-full overflow-hidden bg-black/40 border border-white/5 p-2">
-                <svg
-                  ref={svgRef}
-                  viewBox={`0 0 ${CHART_W} ${CHART_H}`}
-                  className="w-full h-auto touch-none select-none"
-                  onPointerMove={visibleIds.length > 0 ? handlePointerMove : undefined}
-                  onPointerLeave={() => setHoverIndex(null)}
-                >
-                  {/* Gridlines */}
-                  {yTicks.map(t => (
-                    <g key={t}>
-                      <line
-                        x1={MARGIN.left}
-                        x2={CHART_W - MARGIN.right}
-                        y1={yScale(t)}
-                        y2={yScale(t)}
-                        stroke="#27272a"
-                        strokeWidth="1"
-                        strokeDasharray="2 2"
-                      />
-                      <text
-                        x={MARGIN.left - 10}
-                        y={yScale(t)}
-                        textAnchor="end"
-                        dominantBaseline="middle"
-                        fontSize="10"
-                        fontFamily="monospace"
-                        fill="#71717a"
-                      >
-                        {t > 0 ? `+${t}` : t}
-                      </text>
-                    </g>
-                  ))}
-
-                  {/* Zero Baseline */}
-                  <line
-                    x1={MARGIN.left}
-                    x2={CHART_W - MARGIN.right}
-                    y1={zeroY}
-                    y2={zeroY}
-                    stroke="#52525b"
-                    strokeWidth="1.5"
-                  />
-                  <text
-                    x={MARGIN.left - 10}
-                    y={zeroY}
-                    textAnchor="end"
-                    dominantBaseline="middle"
-                    fontSize="10"
-                    fontFamily="monospace"
-                    fontWeight="bold"
-                    fill="#a1a1aa"
-                  >
-                    0
-                  </text>
-
-                  {/* X Axis Hand Marks */}
-                  {xTickIndices.map(i => (
-                    <text
-                      key={i}
-                      x={xScale(i)}
-                      y={CHART_H - MARGIN.bottom + 18}
-                      textAnchor="middle"
-                      fontSize="10"
-                      fontFamily="monospace"
-                      fill="#71717a"
-                    >
-                      {i === nSnapshots - 1 ? 'Final' : `H#${snapshots[i].handNumber ?? i}`}
-                    </text>
-                  ))}
-
-                  {/* Player Paths */}
-                  {chartLines.map(line => (
-                    <path
-                      key={line.id}
-                      d={line.pathD}
-                      fill="none"
-                      stroke={line.color}
-                      strokeWidth="2.5"
-                      strokeLinejoin="round"
-                      strokeLinecap="round"
-                      className="transition-all duration-150"
-                    />
-                  ))}
-
-                  {/* End Dot Markers */}
-                  {chartLines.map(line => {
-                    const endPt = line.pts[line.pts.length - 1];
-                    if (!endPt) return null;
-                    return (
-                      <circle
-                        key={line.id}
-                        cx={endPt.x}
-                        cy={endPt.y}
-                        r="4.5"
-                        fill={line.color}
-                        stroke="#09090b"
-                        strokeWidth="2"
-                      />
-                    );
-                  })}
-
-                  {/* Hover Crosshair */}
-                  {tooltipX !== null && visibleIds.length > 0 && (
-                    <line
-                      x1={tooltipX}
-                      x2={tooltipX}
-                      y1={MARGIN.top}
-                      y2={CHART_H - MARGIN.bottom}
-                      stroke="#06b6d4"
-                      strokeWidth="1.5"
-                      strokeDasharray="3 3"
-                    />
-                  )}
-                </svg>
-
-                {/* Tooltip Overlay */}
-                {hoverSnapshot && hoverRows.length > 0 && (
-                  <div
-                    className="absolute top-4 bg-zinc-950/95 border border-cyan-500/40 p-3 shadow-2xl pointer-events-none min-w-[170px] backdrop-blur-md"
-                    style={{
-                      left: tooltipOnRight ? undefined : `${(tooltipX / CHART_W) * 100}%`,
-                      right: tooltipOnRight ? `${100 - (tooltipX / CHART_W) * 100}%` : undefined,
-                      marginLeft: tooltipOnRight ? undefined : '12px',
-                      marginRight: tooltipOnRight ? '12px' : undefined,
-                    }}
-                  >
-                    <div className="text-zinc-400 font-mono text-[11px] pb-1.5 border-b border-white/10 flex items-center justify-between">
-                      <span className="font-bold text-cyan-300">
-                        {hoverSnapshot.handNumber != null ? `Hand #${hoverSnapshot.handNumber}` : 'Final'}
-                      </span>
-                      {hoverSnapshot.timestamp && (
-                        <span className="text-[9px] text-zinc-500">
-                          {new Date(hoverSnapshot.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      )}
-                    </div>
-                    <div className="space-y-1.5 mt-2">
-                      {hoverRows.map(row => (
-                        <div key={row.id} className="flex items-center justify-between gap-3 text-xs font-mono">
-                          <span className="flex items-center gap-1.5 text-zinc-200 truncate max-w-[110px]">
-                            <span className="inline-block w-2.5 h-1 shrink-0" style={{ backgroundColor: row.color }} />
-                            <span className="truncate">{row.name}</span>
-                          </span>
-                          <span className={`font-bold tabular-nums ${row.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {row.net >= 0 ? `+${formatChips(row.net)}` : formatChips(row.net)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Legend & Player Filters */}
-              <div className="flex flex-wrap items-center gap-2 p-3 bg-black/50 border border-white/5">
-                {playerIds.map(id => {
-                  const hidden = hiddenIds.has(id);
-                  const color = colorById.get(id);
-                  const name = displayNameById.get(id) || id;
-
-                  return (
-                    <div key={id} className="flex items-center bg-zinc-900 border border-white/10 px-2 py-1 text-xs font-mono">
-                      <button
-                        type="button"
-                        onClick={() => toggleHidden(id)}
-                        className="flex items-center gap-1.5 text-zinc-300 hover:text-white transition-colors"
-                        title={hidden ? 'Show player on chart' : 'Hide player from chart'}
-                      >
-                        <span
-                          className="w-2.5 h-2.5 shrink-0"
-                          style={{ backgroundColor: color, opacity: hidden ? 0.3 : 1 }}
-                        />
-                        <span className={hidden ? 'line-through text-zinc-600' : ''}>
-                          {name}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => isolatePlayer(id)}
-                        className="text-[10px] uppercase font-bold text-zinc-500 hover:text-cyan-400 ml-2 pl-1.5 border-l border-white/10"
-                        title={`Isolate ${name}`}
-                      >
-                        only
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div className="py-12 px-4 border border-dashed border-white/15 bg-black/40 flex flex-col items-center justify-center text-center space-y-3">
-              <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
-                <Upload className="w-6 h-6" />
-              </div>
-              <div className="space-y-1 max-w-md">
-                <h4 className="text-sm font-bold font-mono text-white uppercase">
-                  Hand-by-Hand Log Not Attached
-                </h4>
-                <p className="text-xs text-zinc-400 font-mono">
-                  Upload the full PokerNow game log CSV to generate the real-time chip movement timeline, single-hand drop metrics, and comeback charts.
-                </p>
-              </div>
-              {onAttachLog && (
-                <label className="px-4 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 font-mono text-xs font-bold uppercase tracking-wider cursor-pointer transition-all flex items-center gap-2">
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={onAttachLog}
-                    className="hidden"
-                  />
-                  <Upload className="w-3.5 h-3.5" /> Attach Log CSV
-                </label>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* VIEW 2: Playstyle Matrix (VPIP vs PFR) */}
-      {selectedMetricView === 'playstyle' && (
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-6">
-          <div className="border-b border-white/10 pb-3 flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-white flex items-center gap-2">
-                <Compass className="w-4 h-4 text-emerald-400" />
-                Player Archetype Matrix (VPIP vs. PFR)
-              </h3>
-              <p className="text-xs text-zinc-400 font-mono mt-0.5">
-                Classifies each player into tactical quadrants based on action voluntary participation (VPIP%) and pre-flop aggression (PFR%).
+        ) : (
+          <div className="bg-black/60 border border-white/10 p-8 text-center space-y-4 font-mono">
+            <div className="max-w-md mx-auto space-y-2">
+              <BarChart2 className="w-8 h-8 text-zinc-600 mx-auto" />
+              <h5 className="font-bold text-zinc-300 text-sm">No Hand Log Attached</h5>
+              <p className="text-xs text-zinc-500">
+                To unlock hand-by-hand chip trajectory graphs, comeback badges, and bad beat metrics, attach a PokerNow game log CSV.
               </p>
             </div>
+
+            {onAttachLog && (
+              <label className="inline-flex items-center gap-2 px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-cyan-500/40 text-cyan-400 hover:text-cyan-300 font-bold text-xs uppercase tracking-wider cursor-pointer transition-all shadow-[0_0_10px_rgba(6,182,212,0.2)]">
+                <input 
+                  type="file" 
+                  accept=".csv" 
+                  onChange={onAttachLog} 
+                  className="hidden" 
+                />
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload PokerNow Log CSV</span>
+              </label>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* SECTION 3: Playstyle Matrix & Ending Chip Dominance Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Playstyle Matrix (VPIP vs PFR) */}
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 shadow-2xl backdrop-blur-xl p-4 sm:p-5 space-y-4">
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <div className="flex items-center gap-2">
+              <Crosshair className="w-4 h-4 text-purple-400" />
+              <h4 className="font-bold text-white uppercase tracking-wider text-xs font-mono">
+                Player Archetypes & Playstyle Matrix
+              </h4>
+            </div>
+            <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+              VPIP vs PFR
+            </span>
           </div>
 
-          {playstylePoints.length > 0 ? (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Quadrant Visual Map */}
-              <div className="lg:col-span-2 relative bg-black/60 border border-white/10 aspect-[4/3] p-6 flex flex-col justify-between font-mono text-xs">
-                {/* Quadrant Background Zones */}
-                <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 pointer-events-none opacity-20">
-                  <div className="border-r border-b border-cyan-500/40 bg-cyan-950/20 p-2 flex flex-col justify-between">
-                    <span className="text-[10px] text-cyan-400 font-bold uppercase">🦈 TAG (Tight-Aggressive)</span>
-                  </div>
-                  <div className="border-b border-purple-500/40 bg-purple-950/20 p-2 flex flex-col justify-between">
-                    <span className="text-[10px] text-purple-400 font-bold uppercase">⚡ LAG / Maniac</span>
-                  </div>
-                  <div className="border-r border-blue-500/40 bg-blue-950/20 p-2 flex flex-col justify-between">
-                    <span className="text-[10px] text-blue-400 font-bold uppercase">🪨 Nit / Rock</span>
-                  </div>
-                  <div className="border-rose-500/40 bg-rose-950/20 p-2 flex flex-col justify-between">
-                    <span className="text-[10px] text-rose-400 font-bold uppercase">🐟 Calling Station</span>
-                  </div>
-                </div>
-
-                {/* Scatter Dots */}
-                <div className="absolute inset-8 relative">
-                  {playstylePoints.map((pt, i) => {
-                    const xPct = Math.max(5, Math.min(95, pt.vpip));
-                    const yPct = Math.max(5, Math.min(95, 100 - pt.pfr * 1.5));
-                    const color = SERIES_COLORS[i % SERIES_COLORS.length];
-
-                    return (
-                      <div
-                        key={pt.name}
-                        className="absolute group -translate-x-1/2 -translate-y-1/2 cursor-pointer"
-                        style={{ left: `${xPct}%`, top: `${yPct}%` }}
-                      >
-                        <div 
-                          className="w-4 h-4 rounded-full border-2 border-black flex items-center justify-center shadow-lg transition-transform group-hover:scale-150"
-                          style={{ backgroundColor: color }}
-                        />
-                        <div className="absolute left-1/2 -translate-x-1/2 top-5 hidden group-hover:block z-30 bg-zinc-950 border border-white/20 p-2 text-center whitespace-nowrap shadow-2xl backdrop-blur-md">
-                          <p className="font-bold text-white font-sans text-xs">{pt.name}</p>
-                          <p className="text-[10px] text-zinc-400 font-mono">
-                            VPIP: {pt.vpip}% | PFR: {pt.pfr}%
-                          </p>
-                          <p className={`text-[10px] font-mono font-bold ${pt.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                            {pt.net >= 0 ? `+${formatChips(pt.net)}` : formatChips(pt.net)}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Coordinate Labels */}
-                <div className="flex justify-between text-[10px] text-zinc-500 z-10 pt-2 border-t border-white/10">
-                  <span>Tight (&lt;20% VPIP)</span>
-                  <span className="text-zinc-300 font-bold uppercase tracking-widest">Voluntary Put In Pot (VPIP %)</span>
-                  <span>Loose (&gt;50% VPIP)</span>
-                </div>
-              </div>
-
-              {/* Roster Archetype List */}
-              <div className="space-y-3">
-                <h4 className="text-xs font-bold font-mono uppercase tracking-wider text-zinc-300">
-                  Tactical Profiles
-                </h4>
-                <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
-                  {playstylePoints.map((p, idx) => (
-                    <div 
-                      key={p.name}
-                      className="p-2.5 bg-black/40 border border-white/10 flex items-center justify-between text-xs font-mono"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span 
-                          className="w-2.5 h-2.5 shrink-0" 
-                          style={{ backgroundColor: SERIES_COLORS[idx % SERIES_COLORS.length] }} 
-                        />
-                        <div>
-                          <span className="font-bold font-sans text-white block">{p.name}</span>
-                          <span className="text-[10px] text-zinc-500">
-                            {p.style} · {p.hands} hands
-                          </span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-zinc-300 font-bold block">{p.vpip}% / {p.pfr}%</span>
-                        <span className={`text-[10px] font-bold ${p.net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                          {p.net >= 0 ? `+${formatChips(p.net)}` : formatChips(p.net)}
-                        </span>
-                      </div>
+          {playstyleMatrix.length > 0 ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {playstyleMatrix.map(p => (
+                  <div 
+                    key={p.name}
+                    className="bg-black/60 border border-white/10 p-2.5 flex items-center justify-between gap-2 text-xs font-mono"
+                  >
+                    <div>
+                      <span className="font-bold text-zinc-200 block truncate max-w-[140px]">{p.name}</span>
+                      <span className="text-[10px] text-zinc-500">
+                        {p.vpip}% VPIP · {p.pfr}% PFR ({p.hands} hands)
+                      </span>
                     </div>
-                  ))}
-                </div>
+                    <span className={`px-2 py-0.5 border text-[10px] uppercase font-bold tracking-wider ${
+                      p.style === 'TAG' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+                      p.style === 'LAG' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
+                      p.style === 'Maniac' ? 'bg-rose-500/10 border-rose-500/30 text-rose-400' :
+                      p.style === 'Calling Station' ? 'bg-purple-500/10 border-purple-500/30 text-purple-400' :
+                      'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                    }`}>
+                      {p.style}
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
           ) : (
-            <div className="py-12 text-center text-zinc-500 font-mono text-xs">
-              No pre-flop action statistics recorded for this session yet.
+            <div className="p-6 text-center text-xs font-mono text-zinc-500 bg-black/40 border border-white/5">
+              No pre-flop action data available for this session.
             </div>
           )}
         </div>
-      )}
 
-      {/* VIEW 3: Table Dominance & Chip Distribution */}
-      {selectedMetricView === 'distribution' && (
-        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 p-4 sm:p-6 shadow-2xl backdrop-blur-xl space-y-6">
-          <div className="border-b border-white/10 pb-3">
-            <h3 className="text-sm font-bold font-mono uppercase tracking-wider text-white flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-amber-400" />
-              Final Table Chip Dominance
-            </h3>
-            <p className="text-xs text-zinc-400 font-mono mt-0.5">
-              Proportion of ending table chips held by each player profile.
-            </p>
+        {/* Final Table Chip Dominance */}
+        <div className="hud-corner-reticle bg-hud-card/90 border border-white/10 shadow-2xl backdrop-blur-xl p-4 sm:p-5 space-y-4">
+          <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-cyan-400" />
+              <h4 className="font-bold text-white uppercase tracking-wider text-xs font-mono">
+                Ending Table Chip Dominance
+              </h4>
+            </div>
+            <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+              Stack Distribution
+            </span>
           </div>
 
           {chipDistribution.length > 0 ? (
-            <div className="space-y-6">
-              {/* Stack Distribution Stacked Bar */}
-              <div className="w-full h-7 bg-zinc-900 border border-white/10 flex overflow-hidden">
+            <div className="space-y-3">
+              {/* Stacked Percentage Bar */}
+              <div className="h-3 w-full bg-black/80 flex overflow-hidden border border-white/10">
                 {chipDistribution.map(item => (
                   <div
                     key={item.name}
                     style={{ width: `${item.percentage}%`, backgroundColor: item.color }}
-                    className="h-full relative group transition-all"
-                    title={`${item.name}: ${formatChips(item.stack)} (${item.percentage}%)`}
+                    className="h-full transition-all duration-300 relative group"
+                    title={`${item.name}: ${item.percentage}% (${formatChips(item.stack)})`}
                   />
                 ))}
               </div>
 
-              {/* Detailed Breakdown Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {/* Legend List */}
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                 {chipDistribution.map(item => (
-                  <div 
-                    key={item.name}
-                    className="p-3 bg-black/40 border border-white/10 flex items-center justify-between text-xs font-mono"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="w-3 h-3 shrink-0" style={{ backgroundColor: item.color }} />
-                      <div>
-                        <span className="font-bold text-white font-sans block">{item.name}</span>
-                        <span className="text-[11px] text-zinc-400">{formatChips(item.stack)} chips</span>
-                      </div>
+                  <div key={item.name} className="flex items-center justify-between bg-black/40 border border-white/5 px-2.5 py-1.5">
+                    <div className="flex items-center gap-1.5 truncate">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+                      <span className="text-zinc-300 truncate text-[11px]">{item.name}</span>
                     </div>
-                    <span className="text-sm font-bold text-amber-400">
+                    <span className="text-zinc-400 font-bold text-[11px] tabular-nums shrink-0">
                       {item.percentage}%
                     </span>
                   </div>
@@ -1080,12 +976,12 @@ export default function SessionAnalyticsPanel({
               </div>
             </div>
           ) : (
-            <div className="py-12 text-center text-zinc-500 font-mono text-xs">
-              No active cash-out stacks recorded for this session.
+            <div className="p-6 text-center text-xs font-mono text-zinc-500 bg-black/40 border border-white/5">
+              No ending stacks recorded.
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
